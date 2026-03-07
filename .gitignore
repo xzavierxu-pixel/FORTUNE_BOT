@@ -1,0 +1,44 @@
+# Data directories
+polymarket_rule_engine/data/
+
+# Python ignore patterns
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Environment files
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Machine learning models
+*.pkl
+*.h5
+*.model
+*.weights
+
+# OS generated files
+.DS_Store
+Thumbs.db
