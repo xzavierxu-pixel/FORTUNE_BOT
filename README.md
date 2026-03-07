@@ -1,1 +1,0 @@
-# FORTUNE_BOT

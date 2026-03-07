@@ -1,55 +1,61 @@
-from pathlib import Path
+from __future__ import annotations
+
+import argparse
+import os
+import sys
 
 import numpy as np
 import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = BASE_DIR / "data"
-PREDICTIONS_PATH = DATA_DIR / "predictions" / "snapshots_with_predictions.csv"
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from rule_baseline.utils.research_context import build_artifact_paths
 
 
-def main():
-    if not PREDICTIONS_PATH.exists():
-        print(f"[ERROR] File not found: {PREDICTIONS_PATH}")
-        return
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Analyze q-model calibration on strict OOS predictions.")
+    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    return parser.parse_args()
 
-    print(f"[INFO] Loading predictions from {PREDICTIONS_PATH} ...")
-    df = pd.read_csv(PREDICTIONS_PATH)
-    df["y"] = df["y"].astype(int)
-    df["price"] = df["price"].astype(float)
-    df["q_pred"] = df["q_pred"].astype(float)
 
-    df = df[(df["price"] > 0.0) & (df["price"] < 1.0)]
-    df = df[(df["q_pred"] > 0.0) & (df["q_pred"] < 1.0)]
-    print(f"[INFO] Valid rows: {len(df)}")
+def compute_metrics(df: pd.DataFrame) -> dict[str, float]:
+    y = df["y"].astype(int).values
+    p = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
+    q = df["q_pred"].astype(float).clip(1e-6, 1 - 1e-6).values
+
+    metrics = {
+        "rows": float(len(df)),
+        "logloss_price": float(log_loss(y, p)),
+        "logloss_model": float(log_loss(y, q)),
+        "brier_price": float(brier_score_loss(y, p)),
+        "brier_model": float(brier_score_loss(y, q)),
+        "auc_price": float(roc_auc_score(y, p)) if df["y"].nunique() > 1 else np.nan,
+        "auc_model": float(roc_auc_score(y, q)) if df["y"].nunique() > 1 else np.nan,
+    }
+    metrics["logloss_delta"] = metrics["logloss_model"] - metrics["logloss_price"]
+    metrics["brier_delta"] = metrics["brier_model"] - metrics["brier_price"]
+    metrics["auc_delta"] = metrics["auc_model"] - metrics["auc_price"] if np.isfinite(metrics["auc_model"]) else np.nan
+    return metrics
+
+
+def main() -> None:
+    args = parse_args()
+    artifact_paths = build_artifact_paths(args.artifact_mode)
+    predictions_path = artifact_paths.predictions_path
+    if not predictions_path.exists():
+        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
+
+    df = pd.read_csv(predictions_path)
+    df = df[(df["price"] > 0.0) & (df["price"] < 1.0)].copy()
+    df = df[(df["q_pred"] > 0.0) & (df["q_pred"] < 1.0)].copy()
     if df.empty:
-        print("[WARN] No valid rows available.")
-        return
+        raise RuntimeError("No valid prediction rows available.")
 
-    y = df["y"].values
-    p = df["price"].values
-    q = df["q_pred"].values
+    metrics = compute_metrics(df)
+    metrics_df = pd.DataFrame([metrics])
 
-    print("\n=== Global metrics ===")
-    logloss_p = log_loss(y, p)
-    brier_p = brier_score_loss(y, p)
-    auc_p = roc_auc_score(y, p)
-
-    logloss_q = log_loss(y, q)
-    brier_q = brier_score_loss(y, q)
-    auc_q = roc_auc_score(y, q)
-
-    print(f"Baseline (price)   - logloss={logloss_p:.4f}, brier={brier_p:.4f}, AUC={auc_p:.4f}")
-    print(f"Model (q_pred)     - logloss={logloss_q:.4f}, brier={brier_q:.4f}, AUC={auc_q:.4f}")
-    print(
-        f"Delta (pred-price) - logloss={logloss_q - logloss_p:+.4f}, "
-        f"brier={brier_q - brier_p:+.4f}, AUC={auc_q - auc_p:+.4f}"
-    )
-
-    print("\n=== Reliability by q_pred deciles ===")
     df["q_bucket"] = pd.qcut(df["q_pred"], 10, duplicates="drop")
-    rel = (
+    reliability = (
         df.groupby("q_bucket", observed=False)
         .agg(
             n=("y", "size"),
@@ -59,15 +65,11 @@ def main():
         )
         .reset_index()
     )
-    rel["edge_true"] = rel["y_rate"] - rel["p_mean"]
-    rel["edge_model"] = rel["q_mean"] - rel["p_mean"]
-    print(rel.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    reliability["edge_true"] = reliability["y_rate"] - reliability["p_mean"]
+    reliability["edge_model"] = reliability["q_mean"] - reliability["p_mean"]
 
     df["edge_true"] = df["y"] - df["price"]
     df["edge_model"] = df["q_pred"] - df["price"]
-    corr = np.corrcoef(df["edge_true"], df["edge_model"])[0, 1]
-    print(f"\nCorrelation(edge_true, edge_model) = {corr:.4f}")
-
     df["abs_edge_bucket"] = pd.qcut(df["edge_model"].abs(), 5, duplicates="drop")
     edge_table = (
         df.groupby("abs_edge_bucket", observed=False)
@@ -78,7 +80,16 @@ def main():
         )
         .reset_index()
     )
-    print("\n=== True edge vs model edge magnitude buckets ===")
+
+    artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
+    metrics_df.to_csv(artifact_paths.analysis_dir / "calibration_metrics.csv", index=False)
+    reliability.to_csv(artifact_paths.analysis_dir / "calibration_reliability.csv", index=False)
+    edge_table.to_csv(artifact_paths.analysis_dir / "calibration_edge_buckets.csv", index=False)
+
+    print(metrics_df.to_string(index=False))
+    print("\n[INFO] Reliability table:")
+    print(reliability.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
+    print("\n[INFO] Edge bucket table:")
     print(edge_table.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
 
 

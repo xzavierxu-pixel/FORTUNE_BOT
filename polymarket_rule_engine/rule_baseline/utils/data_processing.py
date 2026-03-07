@@ -18,9 +18,15 @@ def load_snapshots(path: Path | None = None) -> pd.DataFrame:
     print(f"[INFO] Loading snapshots from {target}...")
     df = pd.read_csv(target, low_memory=False)
 
-    df["scheduled_end"] = pd.to_datetime(df["scheduled_end"], utc=True, format="mixed")
-    df["resolve_time"] = pd.to_datetime(df["resolve_time"], utc=True, format="mixed")
-    df["snapshot_time"] = df["scheduled_end"] - pd.to_timedelta(df["horizon_hours"], unit="h")
+    if "scheduled_end" in df.columns:
+        df["scheduled_end"] = pd.to_datetime(df["scheduled_end"], utc=True, format="mixed", errors="coerce")
+    if "closedTime" in df.columns:
+        df["closedTime"] = pd.to_datetime(df["closedTime"], utc=True, format="mixed", errors="coerce")
+    else:
+        raise ValueError(f"Snapshots file at {target} is missing required 'closedTime' column.")
+
+    df["snapshot_time"] = df["closedTime"] - pd.to_timedelta(df["horizon_hours"], unit="h")
+    df["snapshot_target_ts"] = (df["snapshot_time"].astype("int64") // 10**9).astype("int64")
     df["snapshot_date"] = df["snapshot_time"].dt.date
     df["market_id"] = df["market_id"].astype(str)
     df["y"] = df["y"].astype(int)
@@ -77,17 +83,30 @@ def build_market_feature_cache(
         "liquidity",
         "volume24hr",
         "volume1wk",
+        "volume24hrClob",
+        "volume1wkClob",
         "sportsMarketType",
         "marketType",
         "orderPriceMinTickSize",
         "negRisk",
         "rewardsMinSize",
         "rewardsMaxSpread",
+        "bestBid",
+        "bestAsk",
+        "spread",
+        "lastTradePrice",
+        "line",
+        "oneHourPriceChange",
+        "oneDayPriceChange",
+        "oneWeekPriceChange",
+        "liquidityAmm",
+        "liquidityClob",
         "groupItemTitle",
         "gameId",
         "marketMakerAddress",
         "startDate",
         "endDate",
+        "closedTime",
     ]
     base_cols = [column for column in base_cols if column in raw.columns]
     cache = raw[base_cols].copy()
@@ -118,15 +137,35 @@ def build_market_feature_cache(
     if "outcome_pattern" not in cache.columns:
         cache["outcome_pattern"] = "UNKNOWN"
 
-    numeric_static = ["orderPriceMinTickSize", "rewardsMinSize", "rewardsMaxSpread"]
+    numeric_static = [
+        "orderPriceMinTickSize",
+        "rewardsMinSize",
+        "rewardsMaxSpread",
+        "volume",
+        "liquidity",
+        "volume24hr",
+        "volume1wk",
+        "volume24hrClob",
+        "volume1wkClob",
+        "bestBid",
+        "bestAsk",
+        "spread",
+        "lastTradePrice",
+        "line",
+        "oneHourPriceChange",
+        "oneDayPriceChange",
+        "oneWeekPriceChange",
+        "liquidityAmm",
+        "liquidityClob",
+    ]
     for column in numeric_static:
         if column in cache.columns:
             cache[column] = pd.to_numeric(cache[column], errors="coerce").fillna(0.0)
 
-    if "startDate" in cache.columns and "endDate" in cache.columns:
+    if "startDate" in cache.columns and "closedTime" in cache.columns:
         start = pd.to_datetime(cache["startDate"], utc=True, errors="coerce")
-        end = pd.to_datetime(cache["endDate"], utc=True, errors="coerce")
-        cache["market_duration_hours"] = (end - start).dt.total_seconds() / 3600.0
+        closed = pd.to_datetime(cache["closedTime"], utc=True, errors="coerce")
+        cache["market_duration_hours"] = (closed - start).dt.total_seconds() / 3600.0
         cache["market_duration_hours"] = cache["market_duration_hours"].fillna(0.0)
     else:
         cache["market_duration_hours"] = 0.0
@@ -198,6 +237,35 @@ def preprocess_features(
     else:
         out_df["rule_score"] = 0.0
 
+    numeric_cols = [
+        "volume",
+        "liquidity",
+        "volume24hr",
+        "volume1wk",
+        "volume24hrClob",
+        "volume1wkClob",
+        "bestBid",
+        "bestAsk",
+        "spread",
+        "lastTradePrice",
+        "line",
+        "oneHourPriceChange",
+        "oneDayPriceChange",
+        "oneWeekPriceChange",
+        "liquidityAmm",
+        "liquidityClob",
+        "selected_quote_offset_sec",
+        "selected_quote_points_in_window",
+        "selected_quote_left_gap_sec",
+        "selected_quote_right_gap_sec",
+        "selected_quote_local_gap_sec",
+        "snapshot_target_ts",
+        "selected_quote_ts",
+    ]
+    for column in numeric_cols:
+        if column in out_df.columns:
+            out_df[column] = pd.to_numeric(out_df[column], errors="coerce").fillna(0.0)
+
     categorical_cols = [
         "domain",
         "category",
@@ -211,6 +279,11 @@ def preprocess_features(
         "groupItemTitle",
         "gameId",
         "marketMakerAddress",
+        "source_host",
+        "primary_outcome",
+        "secondary_outcome",
+        "winning_outcome_label",
+        "selected_quote_side",
     ]
     for column in categorical_cols:
         if column not in out_df.columns:
@@ -223,7 +296,7 @@ def preprocess_features(
     return out_df
 
 
-def compute_temporal_split(df: pd.DataFrame, date_col: str = "resolve_time") -> tuple[pd.Timestamp, pd.Timestamp]:
+def compute_temporal_split(df: pd.DataFrame, date_col: str = "closedTime") -> tuple[pd.Timestamp, pd.Timestamp]:
     if date_col not in df.columns:
         raise ValueError(f"Dataframe is missing required date column '{date_col}'.")
 

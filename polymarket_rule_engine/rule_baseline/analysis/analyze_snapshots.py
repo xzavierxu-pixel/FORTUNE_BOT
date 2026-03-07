@@ -63,7 +63,7 @@ def analyze_data_quality(file_path):
             print("All prices are within [0, 1].")
 
     # Check timestamps
-    date_cols = ['scheduled_end', 'resolve_time']
+    date_cols = ['scheduled_end', 'closedTime']
     for col in date_cols:
         if col in df.columns:
             try:
@@ -77,21 +77,16 @@ def analyze_data_quality(file_path):
             except Exception as e:
                 print(f"Error parsing {col}: {e}")
 
-    if 'resolve_time' in df.columns and 'scheduled_end' in df.columns:
-         # Check if resolve time is roughly around scheduled end or after?
-         # Actually, let's just check if we have data where resolve_time < scheduled_end which might be interesting (early resolution)
-         early_resolution = df[df['resolve_time'] < df['scheduled_end']]
-         print(f"\nRows where resolve_time < scheduled_end: {len(early_resolution)}")
-         
-         # Check delta_hours consistency if applicable
-         # It seems delta_hours is in the file, let's see if it matches resolve - scheduled?
-         # Or maybe it's something else. We'll just print correlation if possible.
-         
+    if 'closedTime' in df.columns and 'scheduled_end' in df.columns:
+         closed_before_sched = df[df['closedTime'] < df['scheduled_end']]
+         closed_after_sched = df[df['closedTime'] > df['scheduled_end']]
+         print(f"\nRows where closedTime < scheduled_end: {len(closed_before_sched)}")
+         print(f"Rows where closedTime > scheduled_end: {len(closed_after_sched)}")
+
          print("\n--- Date Distribution Analysis (Binned by Month) ---")
-         for col in ['scheduled_end', 'resolve_time']:
+         for col in ['scheduled_end', 'closedTime']:
              if col in df.columns:
                  print(f"\nDistribution for {col}:")
-                 # Create a temporary column for month period
                  month_counts = df[col].dt.to_period('M').value_counts().sort_index()
                  print(month_counts)
 

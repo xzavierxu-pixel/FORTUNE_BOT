@@ -1,26 +1,25 @@
+from __future__ import annotations
+
+import argparse
 import os
 import sys
-import argparse
 
 import joblib
+import numpy as np
 import pandas as pd
+from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import (
-    build_market_feature_cache,
-    compute_temporal_split,
-    load_domain_features,
-    load_raw_markets,
-    load_snapshots,
-    preprocess_features,
-)
-from rule_baseline.utils.modeling import fit_model_payload, predict_probabilities
+from rule_baseline.utils.data_processing import build_market_feature_cache, load_domain_features, load_raw_markets, preprocess_features
+from rule_baseline.utils.modeling import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
 from rule_baseline.utils.raw_batches import rebuild_canonical_merged
+from rule_baseline.utils.research_context import assign_dataset_split, build_artifact_paths, compute_temporal_split, write_json
+from rule_baseline.utils.research_data import load_research_snapshots
 
 DROP_COLS = {
     "y",
-    "resolve_time",
+    "closedTime",
     "market_id",
     "snapshot_time",
     "scheduled_end",
@@ -36,9 +35,12 @@ DROP_COLS = {
     "price_bin",
     "horizon_bin",
     "r_std",
+    "e_sample",
     "delta_hours",
     "domain_market",
     "market_type_market",
+    "domain_domain",
+    "market_type_domain",
     "sub_domain",
     "outcome_pattern",
     "groupItemTitle",
@@ -46,27 +48,73 @@ DROP_COLS = {
     "marketMakerAddress",
     "startDate",
     "endDate",
+    "dataset_split",
+    "quality_pass",
+    "delta_hours_exceeded_flag",
 }
 
 
-def load_rules(path=None) -> pd.DataFrame:
-    target = path or config.RULES_OUTPUT_PATH
-    if not target.exists():
-        raise FileNotFoundError(f"Rules file not found at {target}. Run train_rules_naive_output_rule.py first.")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train the snapshot ensemble model with strict split isolation.")
+    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    parser.add_argument(
+        "--calibration-mode",
+        choices=[
+            "valid_isotonic",
+            "valid_sigmoid",
+            "domain_valid_isotonic",
+            "horizon_valid_isotonic",
+            "cv_isotonic",
+            "cv_sigmoid",
+            "none",
+        ],
+        default="valid_isotonic",
+        help="Calibration strategy for probability outputs.",
+    )
+    parser.add_argument(
+        "--target-mode",
+        choices=["q", "residual_q", "expected_pnl", "expected_roi"],
+        default="q",
+        help="Training target for the main snapshot model.",
+    )
+    parser.add_argument("--max-rows", type=int, default=None)
+    parser.add_argument("--recent-days", type=int, default=None)
+    return parser.parse_args()
 
-    rules = pd.read_csv(target)
-    required = ["domain", "category", "market_type", "price_min", "price_max", "h_min", "h_max", "q_smooth", "rule_score"]
+
+def load_rules(path) -> pd.DataFrame:
+    if not path.exists():
+        raise FileNotFoundError(f"Rules file not found at {path}. Run train_rules_naive_output_rule.py first.")
+
+    rules = pd.read_csv(path)
+    required = [
+        "domain",
+        "category",
+        "market_type",
+        "price_min",
+        "price_max",
+        "h_min",
+        "h_max",
+        "q_smooth",
+        "rule_score",
+        "direction",
+        "leaf_id",
+        "group_key",
+    ]
     missing = [column for column in required if column not in rules.columns]
     if missing:
         raise ValueError(f"Rules file is missing required columns: {missing}")
 
-    rules["domain"] = rules["domain"].fillna("UNKNOWN").astype(str)
-    rules["category"] = rules["category"].fillna("UNKNOWN").astype(str)
-    rules["market_type"] = rules["market_type"].fillna("UNKNOWN").astype(str)
+    for column in ["domain", "category", "market_type"]:
+        rules[column] = rules[column].fillna("UNKNOWN").astype(str)
     return rules
 
 
-def match_snapshots_to_rules(snapshots: pd.DataFrame, domain_features: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
+def match_snapshots_to_rules(
+    snapshots: pd.DataFrame,
+    domain_features: pd.DataFrame,
+    rules: pd.DataFrame,
+) -> pd.DataFrame:
     context = snapshots.merge(
         domain_features[["market_id", "domain", "category", "market_type"]],
         on="market_id",
@@ -101,9 +149,7 @@ def match_snapshots_to_rules(snapshots: pd.DataFrame, domain_features: pd.DataFr
         on=["domain", "category", "market_type"],
         how="inner",
     )
-
     if merged.empty:
-        print("[WARN] No snapshots matched rules on domain/category/market_type.")
         return pd.DataFrame()
 
     mask = (
@@ -114,16 +160,13 @@ def match_snapshots_to_rules(snapshots: pd.DataFrame, domain_features: pd.DataFr
     )
     matched = merged[mask].copy()
     if matched.empty:
-        print("[WARN] No snapshots matched rule bounds after domain/category/market_type join.")
         return pd.DataFrame()
 
     matched = matched.sort_values(
         ["market_id", "snapshot_time", "rule_score"],
         ascending=[True, True, False],
     )
-    matched = matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
-    print(f"[INFO] Matched {len(matched)} snapshots to rules.")
-    return matched
+    return matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
 
 
 def build_feature_table(
@@ -138,90 +181,224 @@ def build_feature_table(
     return preprocess_features(matched, market_feature_cache)
 
 
-def split_train_valid(df_feat: pd.DataFrame):
-    train_end, valid_start = compute_temporal_split(df_feat)
-    print(f"[INFO] Rolling split: train <= {train_end}, valid >= {valid_start}")
-    df_train = df_feat[df_feat["resolve_time"] <= train_end].copy()
-    df_valid = df_feat[df_feat["resolve_time"] >= valid_start].copy()
-    return df_train, df_valid
+def probability_metrics(df: pd.DataFrame) -> dict[str, float | int | None]:
+    if df.empty:
+        return {"rows": 0, "logloss_price": None, "logloss_model": None, "brier_price": None, "brier_model": None, "auc_price": None, "auc_model": None}
+
+    y = df["y"].astype(int).values
+    p = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
+    q = df["q_pred"].astype(float).clip(1e-6, 1 - 1e-6).values
+
+    metrics = {
+        "rows": int(len(df)),
+        "logloss_price": float(log_loss(y, p)),
+        "logloss_model": float(log_loss(y, q)),
+        "brier_price": float(brier_score_loss(y, p)),
+        "brier_model": float(brier_score_loss(y, q)),
+        "auc_price": None,
+        "auc_model": None,
+    }
+    if df["y"].nunique() > 1:
+        metrics["auc_price"] = float(roc_auc_score(y, p))
+        metrics["auc_model"] = float(roc_auc_score(y, q))
+    return metrics
 
 
-def save_model(payload: dict) -> None:
-    config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(payload, config.MODEL_PATH)
-    print(f"[INFO] Saved ensemble payload to {config.MODEL_PATH}")
+def trade_value_metrics(df: pd.DataFrame) -> dict[str, float | int | None]:
+    if df.empty or "trade_value_pred" not in df.columns or "trade_value_true" not in df.columns:
+        return {"rows": 0, "mae_trade_value": None, "rmse_trade_value": None, "sign_accuracy": None}
+
+    prediction = df["trade_value_pred"].astype(float)
+    truth = df["trade_value_true"].astype(float)
+    residual = prediction - truth
+    return {
+        "rows": int(len(df)),
+        "mae_trade_value": float(np.abs(residual).mean()),
+        "rmse_trade_value": float(np.sqrt(np.mean(np.square(residual)))),
+        "sign_accuracy": float((np.sign(prediction) == np.sign(truth)).mean()),
+    }
 
 
-def export_predictions(payload: dict, df_feat: pd.DataFrame) -> None:
-    print("[INFO] Generating unified predictions export...")
-    q_pred = predict_probabilities(payload, df_feat)
-
-    out = df_feat[
-        [
-            "market_id",
-            "snapshot_time",
-            "snapshot_date",
-            "resolve_time",
-            "scheduled_end",
-            "horizon_hours",
-            "price",
-            "y",
-            "domain",
-            "category",
-            "market_type",
-            "leaf_id",
-            "direction",
-            "group_key",
-            "q_smooth",
-            "rule_score",
-        ]
-    ].copy()
-    out["q_pred"] = q_pred
-    out["edge_prob"] = out["q_pred"] - out["price"]
-    out.to_csv(config.PREDICTIONS_PATH, index=False)
-    print(f"[INFO] Saved predictions to {config.PREDICTIONS_PATH}")
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train the snapshot ensemble model.")
-    parser.add_argument(
-        "--calibration-mode",
-        choices=["valid_isotonic", "cv_isotonic", "none"],
-        default="cv_isotonic",
-        help="Calibration strategy for probability outputs.",
+def compute_trade_value_from_q(df: pd.DataFrame, q_pred: pd.Series | pd.Index | np.ndarray) -> np.ndarray:
+    direction = df["direction"].astype(int).values
+    price = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
+    q_value = np.asarray(q_pred, dtype=float).clip(1e-6, 1 - 1e-6)
+    trade_value = np.where(
+        direction > 0,
+        q_value / price - 1.0 - config.FEE_RATE,
+        (price - q_value) / np.maximum(1.0 - price, 1e-6) - config.FEE_RATE,
     )
-    return parser.parse_args()
+    return trade_value
 
 
-def main():
+def infer_q_from_trade_value(df: pd.DataFrame, trade_value_pred: np.ndarray) -> np.ndarray:
+    direction = df["direction"].astype(int).values
+    price = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
+    q_pred = np.where(
+        direction > 0,
+        price * (trade_value_pred + 1.0 + config.FEE_RATE),
+        price - (1.0 - price) * (trade_value_pred + config.FEE_RATE),
+    )
+    return np.clip(q_pred, 0.0, 1.0)
+
+
+def add_training_targets(df_feat: pd.DataFrame) -> pd.DataFrame:
+    out = df_feat.copy()
+    price = out["price"].astype(float).clip(1e-6, 1 - 1e-6)
+    direction = out["direction"].astype(int)
+    out["trade_value_true"] = np.where(
+        direction > 0,
+        out["y"].astype(float) / price - 1.0 - config.FEE_RATE,
+        (price - out["y"].astype(float)) / np.maximum(1.0 - price, 1e-6) - config.FEE_RATE,
+    )
+    out["expected_pnl_target"] = out["trade_value_true"]
+    out["expected_roi_target"] = out["trade_value_true"]
+    out["residual_q_target"] = out["y"].astype(float) - out["price"].astype(float)
+    return out
+
+
+def save_model(payload: dict, model_path) -> None:
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(payload, model_path)
+    print(f"[INFO] Saved ensemble payload to {model_path}")
+
+
+def export_predictions(payload: dict, df_feat: pd.DataFrame, artifact_paths, artifact_mode: str) -> dict:
+    target_mode = payload.get("target_mode", "q")
+    if target_mode == "q":
+        q_pred = predict_probabilities(payload, df_feat)
+        trade_value_pred = compute_trade_value_from_q(df_feat, q_pred)
+    elif target_mode == "residual_q":
+        residual_pred = predict_regression(payload, df_feat)
+        q_pred = np.clip(df_feat["price"].astype(float).values + residual_pred, 0.0, 1.0)
+        trade_value_pred = compute_trade_value_from_q(df_feat, q_pred)
+    else:
+        trade_value_pred = predict_regression(payload, df_feat)
+        q_pred = infer_q_from_trade_value(df_feat, trade_value_pred)
+
+    export_columns = [
+        "market_id",
+        "snapshot_time",
+        "snapshot_date",
+        "closedTime",
+        "scheduled_end",
+        "horizon_hours",
+        "price",
+        "y",
+        "domain",
+        "category",
+        "market_type",
+        "leaf_id",
+        "direction",
+        "group_key",
+        "q_smooth",
+        "rule_score",
+        "dataset_split",
+        "quality_pass",
+        "delta_hours_exceeded_flag",
+    ]
+    export_columns = [column for column in export_columns if column in df_feat.columns]
+    out = df_feat[export_columns].copy()
+    out["q_pred"] = q_pred
+    out["trade_value_true"] = df_feat["trade_value_true"].astype(float).values
+    out["trade_value_pred"] = trade_value_pred
+    out["edge_prob"] = out["q_pred"] - out["price"]
+    out.to_csv(artifact_paths.predictions_full_path, index=False)
+
+    if artifact_mode == "offline":
+        publish_df = out[out["dataset_split"] == "test"].copy()
+    else:
+        publish_df = out.copy()
+    publish_df.to_csv(artifact_paths.predictions_path, index=False)
+
+    metrics_by_split = {
+        split_name: {
+            **probability_metrics(split_df),
+            **trade_value_metrics(split_df),
+        }
+        for split_name, split_df in out.groupby("dataset_split", observed=False)
+        if split_name in {"train", "valid", "test"}
+    }
+    metrics_by_split["published"] = {**probability_metrics(publish_df), **trade_value_metrics(publish_df)}
+    return metrics_by_split
+
+
+def main() -> None:
     args = parse_args()
+    artifact_paths = build_artifact_paths(args.artifact_mode)
+
     rebuild_canonical_merged()
-    snapshots = load_snapshots(config.SNAPSHOTS_PATH)
+    snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
+    snapshots = snapshots[snapshots["quality_pass"]].copy()
+    split = compute_temporal_split(snapshots)
+    snapshots = assign_dataset_split(snapshots, split)
+    snapshots = snapshots[snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
+
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
     market_feature_cache = build_market_feature_cache(raw_markets, domain_features)
-    rules = load_rules(config.RULES_OUTPUT_PATH)
+    rules = load_rules(artifact_paths.rules_path)
 
     df_feat = build_feature_table(snapshots, market_feature_cache, domain_features, rules)
     if df_feat.empty:
-        print("[ERROR] No feature rows available after rule matching.")
-        return
-
-    df_train, df_valid = split_train_valid(df_feat)
-    if df_train.empty:
-        print("[ERROR] Empty training split.")
-        return
+        raise RuntimeError("No feature rows available after rule matching.")
+    df_feat = add_training_targets(df_feat)
 
     feature_columns = [column for column in df_feat.columns if column not in DROP_COLS]
-    payload = fit_model_payload(
-        df_train,
-        df_valid,
-        feature_columns=feature_columns,
-        target_column="y",
-        calibration_mode=args.calibration_mode,
+    if args.artifact_mode == "offline":
+        df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
+        df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
+    else:
+        df_train = df_feat.copy()
+        df_valid = pd.DataFrame(columns=df_feat.columns)
+
+    if df_train.empty:
+        raise RuntimeError("Empty training split.")
+
+    if args.target_mode == "q":
+        payload = fit_model_payload(
+            df_train,
+            df_valid,
+            feature_columns=feature_columns,
+            target_column="y",
+            calibration_mode=args.calibration_mode,
+        )
+    elif args.target_mode == "residual_q":
+        payload = fit_regression_payload(
+            df_train,
+            feature_columns=feature_columns,
+            target_column="residual_q_target",
+        )
+    else:
+        target_column = "expected_pnl_target" if args.target_mode == "expected_pnl" else "expected_roi_target"
+        payload = fit_regression_payload(
+            df_train,
+            feature_columns=feature_columns,
+            target_column=target_column,
+        )
+    payload["artifact_mode"] = args.artifact_mode
+    payload["target_mode"] = args.target_mode
+    payload["split_boundaries"] = split.to_dict()
+    save_model(payload, artifact_paths.model_path)
+
+    metrics_by_split = export_predictions(payload, df_feat, artifact_paths, args.artifact_mode)
+    write_json(
+        artifact_paths.model_training_summary_path,
+        {
+            "artifact_mode": args.artifact_mode,
+            "calibration_mode": args.calibration_mode,
+            "target_mode": args.target_mode,
+            "feature_count": len(feature_columns),
+            "rows_by_split": df_feat["dataset_split"].value_counts().to_dict(),
+            "metrics_by_split": metrics_by_split,
+            "boundaries": split.to_dict(),
+            "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+        },
     )
-    save_model(payload)
-    export_predictions(payload, df_feat)
+
+    print(f"[INFO] Saved published predictions to {artifact_paths.predictions_path}")
+    print(f"[INFO] Saved full diagnostic predictions to {artifact_paths.predictions_full_path}")
+    print(f"[INFO] Saved training summary to {artifact_paths.model_training_summary_path}")
 
 
 if __name__ == "__main__":

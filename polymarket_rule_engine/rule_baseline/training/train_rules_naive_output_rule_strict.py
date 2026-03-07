@@ -5,26 +5,27 @@ import hashlib
 import json
 import os
 import sys
-from math import sqrt
+from math import erf, sqrt
 
 import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from rule_baseline.utils import config
 from rule_baseline.utils.research_context import build_artifact_paths, write_json
 from rule_baseline.utils.research_data import prepare_rule_training_frame
 
 MIN_GROUP_ROWS = 30
 MIN_TRAIN_ROWS = 15
 MIN_VALID_N = 8
+EDGE_AB_THRESHOLD = 0.02
+EDGE_STD_THRESHOLD = 0.02
 
 GROUP_COLUMNS = ["domain", "category", "market_type", "price_bin", "horizon_bin"]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Train naive rule buckets with a simple raw-frequency estimator."
-    )
+    parser = argparse.ArgumentParser(description="Train naive rule buckets with strict split isolation.")
     parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
     parser.add_argument("--max-rows", type=int, default=None, help="Optional tail-sample row cap for fast debugging.")
     parser.add_argument(
@@ -69,7 +70,7 @@ def aggregate_rule_stats(df: pd.DataFrame) -> pd.DataFrame:
         "edge_raw_mean": ("e_sample", "mean"),
         "edge_std_mean": ("r_std", "mean"),
     }
-    return df.groupby(GROUP_COLUMNS, observed=True).agg(**agg_spec)
+    return df.groupby(GROUP_COLUMNS, observed=False).agg(**agg_spec)
 
 
 def rename_stats(stats: pd.DataFrame, suffix: str) -> pd.DataFrame:
@@ -78,6 +79,13 @@ def rename_stats(stats: pd.DataFrame, suffix: str) -> pd.DataFrame:
 
 def get_metric(row: pd.Series, suffix: str, metric: str) -> float:
     return float(row.get(f"{metric}_{suffix}", np.nan))
+
+
+def normal_two_sided_pvalue(z_score: float) -> float:
+    if not np.isfinite(z_score):
+        return 1.0
+    cdf = 0.5 * (1.0 + erf(abs(z_score) / sqrt(2.0)))
+    return float(max(0.0, min(1.0, 2.0 * (1.0 - cdf))))
 
 
 def wilson_interval(successes: float, n_obs: float, z_value: float = 1.96) -> tuple[float, float]:
@@ -89,6 +97,61 @@ def wilson_interval(successes: float, n_obs: float, z_value: float = 1.96) -> tu
     center = (p_hat + z_value**2 / (2.0 * n_obs)) / denom
     radius = z_value * sqrt((p_hat * (1.0 - p_hat) + z_value**2 / (4.0 * n_obs)) / n_obs) / denom
     return max(0.0, center - radius), min(1.0, center + radius)
+
+
+def benjamini_hochberg(p_values: list[float]) -> list[float]:
+    if not p_values:
+        return []
+    ranked = sorted(enumerate(p_values), key=lambda item: item[1])
+    adjusted = [1.0] * len(p_values)
+    running = 1.0
+    total = len(p_values)
+    for reverse_rank, (original_index, p_value) in enumerate(reversed(ranked), start=1):
+        rank = total - reverse_rank + 1
+        running = min(running, p_value * total / rank)
+        adjusted[original_index] = float(min(1.0, running))
+    return adjusted
+
+
+def compute_prior_maps(df: pd.DataFrame) -> dict[str, object]:
+    if df.empty:
+        return {
+            "global": 0.5,
+            "domain_category": {},
+            "domain": {},
+            "category": {},
+            "market_type": {},
+        }
+
+    return {
+        "global": float(df["y"].mean()),
+        "domain_category": df.groupby(["domain", "category"], observed=False)["y"].mean().to_dict(),
+        "domain": df.groupby("domain", observed=False)["y"].mean().to_dict(),
+        "category": df.groupby("category", observed=False)["y"].mean().to_dict(),
+        "market_type": df.groupby("market_type", observed=False)["y"].mean().to_dict(),
+    }
+
+
+def resolve_prior_mean(row: pd.Series, prior_maps: dict[str, object]) -> float:
+    prior_candidates = [
+        prior_maps["domain_category"].get((row["domain"], row["category"])),
+        prior_maps["domain"].get(row["domain"]),
+        prior_maps["category"].get(row["category"]),
+        prior_maps["market_type"].get(row["market_type"]),
+        prior_maps["global"],
+    ]
+    valid = [float(value) for value in prior_candidates if value is not None and np.isfinite(value)]
+    if not valid:
+        return 0.5
+    return float(np.mean(valid))
+
+
+def shrink_probability(wins: float, n_obs: float, prior_mean: float, strength: float = config.BETA_PRIOR_STRENGTH) -> float:
+    if not np.isfinite(n_obs) or n_obs <= 0:
+        return float(prior_mean)
+    alpha = max(prior_mean, 1e-6) * strength
+    beta = max(1.0 - prior_mean, 1e-6) * strength
+    return float((wins + alpha) / (n_obs + alpha + beta))
 
 
 def summarize_directional_metrics(q_value: float, p_mean: float, edge_raw: float, edge_std: float, direction: int) -> dict[str, float]:
@@ -117,13 +180,6 @@ def summarize_directional_metrics(q_value: float, p_mean: float, edge_raw: float
     }
 
 
-def lower_bound_sortino(edge_lower_bound: float, q_trade_lower: float, p_trade: float, eps: float = 1e-6) -> float:
-    q_trade_lower = float(np.clip(q_trade_lower, 0.0, 1.0))
-    p_trade = float(np.clip(p_trade, 0.0, 1.0))
-    downside_std = max(p_trade, eps) * sqrt(max(1.0 - q_trade_lower, 0.0))
-    return float(edge_lower_bound / max(downside_std, eps))
-
-
 def build_rule_grid(df: pd.DataFrame) -> pd.DataFrame:
     split_frames = {
         "all": df,
@@ -138,7 +194,7 @@ def build_rule_grid(df: pd.DataFrame) -> pd.DataFrame:
     return grid.reset_index()
 
 
-def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, str]:
+def evaluate_rule_candidate(row: pd.Series, artifact_mode: str, prior_mean: float) -> tuple[dict, str]:
     n_train = get_metric(row, "train", "n")
     n_valid = get_metric(row, "valid", "n")
     n_all = get_metric(row, "all", "n")
@@ -153,10 +209,10 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
     wins_train = get_metric(row, "train", "wins")
     wins_valid = get_metric(row, "valid", "wins")
     wins_all = get_metric(row, "all", "wins")
-
-    q_train = wins_train / n_train
+    q_train_raw = wins_train / n_train
     p_train = get_metric(row, "train", "p_mean")
-    edge_train = q_train - p_train
+    q_train = shrink_probability(wins_train, n_train, prior_mean)
+    edge_train = q_train_raw - p_train
 
     q_valid = wins_valid / n_valid
     p_valid = get_metric(row, "valid", "p_mean")
@@ -170,6 +226,10 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         return {}, "ambiguous_direction"
     if sign_train != sign_valid:
         return {}, "train_valid_direction_mismatch"
+    if abs(edge_raw_valid) < EDGE_AB_THRESHOLD:
+        return {}, "valid_edge_too_small"
+    if abs(edge_std_valid) < EDGE_STD_THRESHOLD:
+        return {}, "valid_std_edge_too_small"
 
     q_test = np.nan
     edge_test = np.nan
@@ -182,12 +242,12 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
     estimation_suffix = "all" if artifact_mode == "online" else "train"
     wins_est = wins_all if estimation_suffix == "all" else wins_train
     n_est = n_all if estimation_suffix == "all" else n_train
-    q_est = wins_est / n_est
+    q_est_raw = wins_est / n_est
+    q_est = shrink_probability(wins_est, n_est, prior_mean)
     p_est = get_metric(row, estimation_suffix, "p_mean")
     edge_est = q_est - p_est
     edge_raw_est = get_metric(row, estimation_suffix, "edge_raw_mean")
     edge_std_est = get_metric(row, estimation_suffix, "edge_std_mean")
-
     price_label = str(row["price_bin"])
     horizon_label = str(row["horizon_bin"])
     group_key = f"{row['domain']}|{row['category']}|{row['market_type']}"
@@ -208,24 +268,20 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         edge_std=edge_std_valid,
         direction=direction,
     )
-
     q_valid_lower, q_valid_upper = wilson_interval(wins_valid, n_valid)
     if direction >= 0:
         edge_lower_bound_valid = q_valid_lower - p_valid
-        q_trade_lower_valid = q_valid_lower
     else:
         edge_lower_bound_valid = p_valid - q_valid_upper
-        q_trade_lower_valid = 1.0 - q_valid_upper
 
-    if edge_lower_bound_valid <= 0:
-        return {}, "nonpositive_edge_lower_bound_valid"
+    z_score_valid = edge_std_valid * sqrt(max(float(n_valid), 1.0))
+    p_value_valid = normal_two_sided_pvalue(z_score_valid)
 
-    # Score rules with the conservative Wilson lower-bound edge and binary-contract Sortino.
-    rule_score = lower_bound_sortino(
-        edge_lower_bound=edge_lower_bound_valid,
-        q_trade_lower=q_trade_lower_valid,
-        p_trade=directional_valid["p_trade"],
+    rule_score = max(edge_lower_bound_valid, 0.0) * np.sqrt(max(n_valid, 1.0)) * max(
+        abs(directional_valid["edge_std_trade"]), 0.1
     )
+    if edge_lower_bound_valid < config.MIN_EDGE_LOWER_BOUND:
+        return {}, "valid_edge_lower_bound_below_zero"
 
     rule = {
         "group_key": group_key,
@@ -253,15 +309,15 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         "n_test": int(n_test) if np.isfinite(n_test) else 0,
         "n_full": int(n_all),
         "q_smooth": float(q_est),
-        "q_raw_est": float(q_est),
-        "prior_mean": np.nan,
+        "q_raw_est": float(q_est_raw),
+        "prior_mean": float(prior_mean),
         "p_mean": float(p_est),
         "edge_net": float(edge_est),
         "edge_sample": float(edge_raw_est),
         "edge_std": float(edge_std_est),
         "roi": float(directional["roi_trade"]),
         "q_train": float(q_train),
-        "q_train_raw": float(q_train),
+        "q_train_raw": float(q_train_raw),
         "p_train": float(p_train),
         "edge_train": float(edge_train),
         "q_valid": float(q_valid),
@@ -270,8 +326,8 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         "edge_raw_valid": float(edge_raw_valid),
         "edge_std_valid": float(edge_std_valid),
         "edge_lower_bound_valid": float(edge_lower_bound_valid),
-        "p_value_valid": np.nan,
-        "p_value_valid_adj": np.nan,
+        "z_score_valid": float(z_score_valid),
+        "p_value_valid": float(p_value_valid),
         "q_test": float(q_test) if np.isfinite(q_test) else np.nan,
         "edge_test": float(edge_test) if np.isfinite(edge_test) else np.nan,
         "rule_score": float(rule_score),
@@ -285,16 +341,17 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
 
 def build_rules(df: pd.DataFrame, artifact_mode: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     grid = build_rule_grid(df)
+    prior_frame = df if artifact_mode == "online" else df[df["dataset_split"] == "train"].copy()
+    prior_maps = compute_prior_maps(prior_frame)
     selected_rules: list[dict] = []
     full_report: list[dict] = []
 
     for _, row in grid.iterrows():
-        rule_candidate, status = evaluate_rule_candidate(row, artifact_mode)
+        prior_mean = resolve_prior_mean(row, prior_maps)
+        rule_candidate, status = evaluate_rule_candidate(row, artifact_mode, prior_mean)
         report_row = row.to_dict()
         report_row["selection_status"] = status
-        report_row["prior_mean"] = np.nan
-        report_row["p_value_valid"] = np.nan
-        report_row["p_value_valid_adj"] = np.nan
+        report_row["prior_mean"] = float(prior_mean)
 
         if rule_candidate:
             report_row.update(rule_candidate)
@@ -306,48 +363,30 @@ def build_rules(df: pd.DataFrame, artifact_mode: str) -> tuple[pd.DataFrame, pd.
     rules_df = pd.DataFrame(selected_rules)
     if not rules_df.empty:
         rules_df = rules_df.sort_values("rule_score", ascending=False).reset_index(drop=True)
+        rules_df["p_value_valid_adj"] = benjamini_hochberg(rules_df["p_value_valid"].astype(float).tolist())
+        rules_df["selection_status"] = np.where(
+            rules_df["p_value_valid_adj"] <= config.FDR_ALPHA,
+            "selected",
+            "rejected_fdr",
+        )
+        rules_df = rules_df[rules_df["selection_status"] == "selected"].copy().reset_index(drop=True)
+        rules_df = rules_df.sort_values("rule_score", ascending=False).reset_index(drop=True)
 
     if not report_df.empty:
+        if "p_value_valid" in report_df.columns:
+            candidate_mask = report_df["selection_status"] == "selected"
+            adjusted = benjamini_hochberg(report_df.loc[candidate_mask, "p_value_valid"].astype(float).tolist())
+            report_df["p_value_valid_adj"] = np.nan
+            report_df.loc[candidate_mask, "p_value_valid_adj"] = adjusted
+            report_df.loc[
+                candidate_mask & (report_df["p_value_valid_adj"] > config.FDR_ALPHA),
+                "selection_status",
+            ] = "rejected_fdr"
         report_df = report_df.sort_values(
             ["selection_status", "n_all", "n_train"],
             ascending=[True, False, False],
         ).reset_index(drop=True)
-
     return rules_df, report_df
-
-
-def empty_rules_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=[
-            "group_key",
-            "domain",
-            "category",
-            "market_type",
-            "leaf_id",
-            "price_min",
-            "price_max",
-            "h_min",
-            "h_max",
-            "n_train",
-            "n_valid",
-            "n_test",
-            "n_full",
-            "q_smooth",
-            "prior_mean",
-            "p_mean",
-            "edge_net",
-            "edge_sample_trade",
-            "edge_std_trade",
-            "edge_raw_valid",
-            "edge_std_valid",
-            "edge_lower_bound_valid",
-            "p_value_valid",
-            "p_value_valid_adj",
-            "rule_score",
-            "direction",
-            "rule_bounds",
-        ]
-    )
 
 
 def main() -> None:
@@ -358,7 +397,37 @@ def main() -> None:
     rules_df, report_df = build_rules(df, args.artifact_mode)
 
     if rules_df.empty:
-        rules_df = empty_rules_frame()
+        rules_df = pd.DataFrame(
+            columns=[
+                "group_key",
+                "domain",
+                "category",
+                "market_type",
+                "leaf_id",
+                "price_min",
+                "price_max",
+                "h_min",
+                "h_max",
+                "n_train",
+                "n_valid",
+                "n_test",
+                "n_full",
+                "q_smooth",
+                "prior_mean",
+                "p_mean",
+                "edge_net",
+                "edge_sample_trade",
+                "edge_std_trade",
+                "edge_raw_valid",
+                "edge_std_valid",
+                "edge_lower_bound_valid",
+                "p_value_valid",
+                "p_value_valid_adj",
+                "rule_score",
+                "direction",
+                "rule_bounds",
+            ]
+        )
 
     rules_df.to_csv(artifact_paths.rules_path, index=False)
     rules_df.to_csv(artifact_paths.naive_rules_dir / "naive_trading_rules.csv", index=False)
@@ -383,12 +452,6 @@ def main() -> None:
             "selection_status_counts": report_df["selection_status"].value_counts().to_dict() if not report_df.empty else {},
             "boundaries": split.to_dict(),
             "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
-            "method": {
-                "estimator": "raw_frequency",
-                "bayesian_smoothing": False,
-                "prior_mean": False,
-                "benjamini_hochberg": False,
-            },
         },
     )
 

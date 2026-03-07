@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from datetime import datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from rule_baseline.utils import config
 
 CATEGORIES = {
     "sports": [
@@ -192,6 +196,8 @@ OUTCOME_NEG = [
     "never",
 ]
 
+THRESHOLD_PATTERN = re.compile(r"([-+]?\d+(?:\.\d+)?)")
+
 
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -215,11 +221,43 @@ def _parse_tokens(value: Any) -> list[Any]:
     return []
 
 
+def _hash_text_embedding(text: str, dim: int) -> dict[str, float]:
+    bucket = np.zeros(dim, dtype=float)
+    for token in text.split():
+        digest = hashlib.sha1(token.encode("utf-8")).digest()
+        index = int.from_bytes(digest[:4], "big") % dim
+        sign = 1.0 if digest[4] % 2 == 0 else -1.0
+        bucket[index] += sign
+    norm = float(np.linalg.norm(bucket))
+    if norm > 0:
+        bucket = bucket / norm
+    return {f"text_embed_{idx:02d}": float(value) for idx, value in enumerate(bucket)}
+
+
+def _extract_numeric_thresholds(text: str) -> tuple[float, float]:
+    matches = [float(match) for match in THRESHOLD_PATTERN.findall(text)]
+    if not matches:
+        return 0.0, 0.0
+    return float(max(matches)), float(min(matches))
+
+
 def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     vol = _to_float(market.get("volume", market.get("volumeNum", 0.0)))
     liq = _to_float(market.get("liquidity", market.get("liquidityNum", 0.0)))
     v24 = _to_float(market.get("volume24hr", 0.0))
     v1w = _to_float(market.get("volume1wk", 0.0))
+    best_bid = _to_float(market.get("bestBid", 0.0))
+    best_ask = _to_float(market.get("bestAsk", 0.0))
+    spread = _to_float(market.get("spread", 0.0))
+    last_trade = _to_float(market.get("lastTradePrice", 0.0))
+    liquidity_clob = _to_float(market.get("liquidityClob", 0.0))
+    liquidity_amm = _to_float(market.get("liquidityAmm", 0.0))
+    volume24_clob = _to_float(market.get("volume24hrClob", 0.0))
+    volume1w_clob = _to_float(market.get("volume1wkClob", 0.0))
+    price_change_1h = _to_float(market.get("oneHourPriceChange", 0.0))
+    price_change_1d = _to_float(market.get("oneDayPriceChange", 0.0))
+    price_change_1w = _to_float(market.get("oneWeekPriceChange", 0.0))
+    line_value = _to_float(market.get("line", 0.0))
 
     question = str(market.get("question", market.get("title", "")) or "").lower()
     description = str(market.get("description", "") or "").lower()
@@ -243,6 +281,23 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["activity"] = min(1.0, np.log1p(vol) / 17.0)
     features["engagement"] = (features["vol_ratio_24"] + features["vol_ratio_1w"]) / 2.0
     features["momentum"] = features["vol_ratio_24"] - features["vol_ratio_1w"] / 7.0
+    features["best_bid"] = best_bid
+    features["best_ask"] = best_ask
+    features["mid_price"] = (best_bid + best_ask) / 2.0 if best_bid > 0 and best_ask > 0 else last_trade
+    features["quoted_spread"] = spread if spread > 0 else max(best_ask - best_bid, 0.0)
+    features["quoted_spread_pct"] = features["quoted_spread"] / max(features["mid_price"], 1e-6)
+    features["book_imbalance"] = (liq - vol) / max(liq + vol, 1.0)
+    features["log_liquidity_clob"] = np.log1p(liquidity_clob)
+    features["log_liquidity_amm"] = np.log1p(liquidity_amm)
+    features["clob_share_liquidity"] = liquidity_clob / max(liq, 1.0)
+    features["clob_share_volume24"] = volume24_clob / max(v24, 1.0)
+    features["clob_share_volume1w"] = volume1w_clob / max(v1w, 1.0)
+    features["price_change_1h"] = price_change_1h
+    features["price_change_1d"] = price_change_1d
+    features["price_change_1w"] = price_change_1w
+    features["price_change_accel"] = price_change_1h - price_change_1d / 24.0
+    features["line_value"] = line_value
+    features["has_line"] = float(line_value != 0.0)
 
     q_len = len(words)
     q_chars = len(question)
@@ -286,7 +341,16 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["has_or"] = float(" or " in question)
     features["has_and"] = float(" and " in question)
     features["cap_ratio"] = sum(1 for char in question if char.isupper()) / max(q_chars, 1)
-    features["punct_count"] = float(sum(1 for char in question if char in "?!.,"))
+    features["punct_count"] = float(sum(1 for char in question if char in "?!.,")) 
+    threshold_max, threshold_min = _extract_numeric_thresholds(question)
+    features["threshold_max"] = threshold_max
+    features["threshold_min"] = threshold_min
+    features["threshold_span"] = max(threshold_max - threshold_min, 0.0)
+    features["is_player_prop"] = float(any(token in text for token in ["points", "rebounds", "assists", "yards", "touchdowns"]))
+    features["is_team_total"] = float(any(token in text for token in ["team total", "total points", "total goals"]))
+    features["is_finance_threshold"] = float(any(token in text for token in ["$", "market cap", "price of", "above", "below"]))
+    features["is_date_based"] = float(features["has_date"] or features["has_before"] or features["has_after"])
+    features["is_high_ambiguity"] = float(any(token in text for token in ["at least", "roughly", "around", "approximately", "or more", "or less"]))
 
     strong_pos = sum(1 for token in STRONG_POS if token in text)
     weak_pos = sum(1 for token in WEAK_POS if token in text)
@@ -343,6 +407,7 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["engagement_x_duration"] = features["engagement"] * features["log_duration"]
     features["sentiment_x_duration"] = features["sentiment"] * features["log_duration"]
     features["vol_x_diversity"] = features["log_vol"] * features["word_diversity"]
+    features.update(_hash_text_embedding(text, config.TEXT_EMBED_DIM))
 
     return features
 

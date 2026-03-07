@@ -3,6 +3,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 import requests
@@ -32,9 +33,34 @@ def get_session():
     return session
 
 
+def _parse_sequence(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except Exception:
+            return []
+    return []
+
+
+def _to_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        parsed = float(value)
+        if pd.isna(parsed):
+            return None
+        return parsed
+    except Exception:
+        return None
+
+
 def resolve_category(tags_list):
     if not tags_list:
-        return "MISC"
+        return "UNKNOWN"
 
     labels = [tag.get("label", "") for tag in tags_list]
     labels_upper = [label.upper() for label in labels]
@@ -48,10 +74,10 @@ def resolve_category(tags_list):
         if label in config.TAG_MAPPING:
             return config.TAG_MAPPING[label]
 
-    return "MISC"
+    return "UNKNOWN"
 
 
-def is_fifteen_minute_crypto_market(market, category):
+def is_short_term_crypto_market(market, category):
     if category != "CRYPTO":
         return False
 
@@ -60,12 +86,13 @@ def is_fifteen_minute_crypto_market(market, category):
     description = str(market.get("description", "") or "").lower()
     combined = f"{slug} {question} {description}"
 
-    # Gamma samples for these markets consistently use slugs like btc-updown-15m-<timestamp>.
-    if "updown-15m" in slug:
+    # Gamma samples for these markets consistently use slugs like btc-updown-15m-<timestamp> or btc-updown-5m-<timestamp>.
+    if "updown-15m" in slug or "updown-5m" in slug:
         return True
 
     # Fallback if Polymarket changes the slug pattern but keeps the market phrasing.
-    return "up or down" in question and any(token in combined for token in ("15m", "15 minute", "15-minute"))
+    short_term_tokens = ("15m", "15 minute", "15-minute", "5m", "5 minute", "5-minute")
+    return "up or down" in question and any(token in combined for token in short_term_tokens)
 
 
 def process_market(market, category, window_start, window_end):
@@ -74,8 +101,6 @@ def process_market(market, category, window_start, window_end):
 
     if not closed_time_raw or len(str(closed_time_raw)) < 10:
         return None, "missing_closed_time"
-    if not end_date_raw:
-        return None, "missing_end_date"
 
     try:
         closed_time = pd.to_datetime(closed_time_raw, utc=True)
@@ -88,62 +113,82 @@ def process_market(market, category, window_start, window_end):
     if closed_time > window_end:
         return None, "too_new"
 
-    if scheduled_time < config.history_start():
-        return None, "too_old"
-
     delta_hours = abs((closed_time - scheduled_time).total_seconds()) / 3600.0
-    if delta_hours > config.DELTA_FIXED_HOURS:
-        return None, f"delta_limit_{delta_hours:.1f}"
+    # if delta_hours > config.DELTA_FIXED_HOURS:
+    #     return None, f"delta_limit_{delta_hours:.1f}"
 
     if market.get("umaResolutionStatus") != "resolved":
         return None, "status_not_resolved"
-    if market.get("active") is False:
-        return None, "inactive"
+    # if market.get("active") is False:
+    #     return None, "inactive"
     if market.get("negRisk") is True:
         return None, "negrisk"
-    if is_fifteen_minute_crypto_market(market, category):
-        return None, "filtered_crypto_15m"
+    if is_short_term_crypto_market(market, category):
+        return None, "filtered_crypto_short_term"
 
-    tokens = market.get("clobTokenIds")
-    if isinstance(tokens, str):
-        try:
-            tokens = json.loads(tokens)
-        except Exception:
-            tokens = []
-    if not isinstance(tokens, list) or len(tokens) != 2:
+    resolution_source = str(market.get("resolutionSource", "") or "").lower()
+    if resolution_source and resolution_source in config.DOMAIN_BLACKLIST:
+        return None, "blacklisted_resolution_source"
+
+    tokens = _parse_sequence(market.get("clobTokenIds"))
+    outcomes = _parse_sequence(market.get("outcomes"))
+    if len(tokens) != 2 or len(outcomes) != 2:
         return None, "invalid_tokens"
+    if any(not str(token).strip() for token in tokens):
+        return None, "empty_token_id"
+    if any(not str(outcome).strip() for outcome in outcomes):
+        return None, "empty_outcome_label"
+    if str(outcomes[0]).strip().lower() == str(outcomes[1]).strip().lower():
+        return None, "duplicate_outcome_labels"
 
-    try:
-        volume = float(market.get("volume", 0))
-        if volume <= 50:
-            return None, "low_volume"
-    except Exception:
-        return None, "volume_parse_error"
+    volume = _to_float(market.get("volume"))
+    liquidity = _to_float(market.get("liquidity") or market.get("liquidityNum"))
+    spread = _to_float(market.get("spread"))
+    rewards_spread = _to_float(market.get("rewardsMaxSpread"))
+    best_bid = _to_float(market.get("bestBid"))
+    best_ask = _to_float(market.get("bestAsk"))
 
-    prices_raw = market.get("outcomePrices", [])
-    if isinstance(prices_raw, str):
-        try:
-            prices_raw = json.loads(prices_raw)
-        except Exception:
-            pass
+    # if volume is None:
+    #     return None, "volume_parse_error"
+    if volume < config.MIN_MARKET_VOLUME:
+        return None, "low_volume"
+    # if liquidity is not None and liquidity < config.MIN_MARKET_LIQUIDITY:
+    #     return None, "low_liquidity"
+    # if spread is not None and spread > config.MAX_MARKET_SPREAD:
+    #     return None, "spread_too_wide"
+    # if rewards_spread is not None and rewards_spread > config.MAX_REWARD_SPREAD:
+    #     return None, "reward_spread_too_wide"
+    # if best_bid is not None and best_ask is not None and best_bid > best_ask:
+    #     return None, "crossed_order_book"
 
-    if isinstance(prices_raw, list) and len(prices_raw) == 2:
-        try:
-            p0 = float(prices_raw[0])
-            p1 = float(prices_raw[1])
-            if not (p0 > 0.9 or p1 > 0.9):
-                return None, "ambiguous_outcome"
-        except Exception:
-            return None, "price_parse_error"
-    else:
+    prices_raw = _parse_sequence(market.get("outcomePrices"))
+    if len(prices_raw) != 2:
         return None, "invalid_prices"
+    try:
+        final_prices = [float(prices_raw[0]), float(prices_raw[1])]
+    except Exception:
+        return None, "price_parse_error"
+
+    winner_candidates = [index for index, value in enumerate(final_prices) if value > 0.9]
+    if len(winner_candidates) != 1:
+        return None, "ambiguous_outcome"
+
+    losing_index = 1 - winner_candidates[0]
+    if final_prices[losing_index] >= 0.1:
+        return None, "ambiguous_outcome_tail"
 
     cleaned = dict(market)
     cleaned["category"] = category
     cleaned["market_id"] = str(cleaned.get("id", ""))
     cleaned["clobTokenIds"] = json.dumps(tokens)
-    cleaned["outcomes"] = json.dumps(cleaned.get("outcomes", []))
-    cleaned["outcomePrices"] = json.dumps(prices_raw)
+    cleaned["outcomes"] = json.dumps(outcomes)
+    cleaned["outcomePrices"] = json.dumps(final_prices)
+    cleaned["primary_token_id"] = str(tokens[0])
+    cleaned["secondary_token_id"] = str(tokens[1])
+    cleaned["primary_outcome"] = str(outcomes[0])
+    cleaned["secondary_outcome"] = str(outcomes[1])
+    cleaned["winning_outcome_index"] = int(winner_candidates[0])
+    cleaned["winning_outcome_label"] = str(outcomes[winner_candidates[0]])
     cleaned["batch_window_start"] = window_start.isoformat()
     cleaned["batch_window_end"] = window_end.isoformat()
 
@@ -165,6 +210,7 @@ def fetch_events_and_flatten(window_start, window_end, limit=100, max_workers=16
     )
 
     all_markets = []
+    quarantine_records = []
     seen_market_ids = set()
     session = get_session()
 
@@ -207,11 +253,25 @@ def fetch_events_and_flatten(window_start, window_end, limit=100, max_workers=16
                             continue
 
                         processed_market, reason = process_market(market, category, window_start, window_end)
-                        if reason not in ("too_old", "missing_closed_time", "missing_end_date"):
+                        if reason not in ("too_old", "missing_closed_time"):
                             batch_contains_window_data = True
                         if processed_market:
                             seen_market_ids.add(market_id)
                             all_markets.append(processed_market)
+                        else:
+                            quarantine_records.append(
+                                {
+                                    "market_id": market_id,
+                                    "category": category,
+                                    "question": market.get("question", market.get("title", "")),
+                                    "resolutionSource": market.get("resolutionSource"),
+                                    "closedTime": market.get("closedTime"),
+                                    "endDate": market.get("endDate"),
+                                    "reject_reason": reason,
+                                    "batch_window_start": window_start.isoformat(),
+                                    "batch_window_end": window_end.isoformat(),
+                                }
+                            )
 
             if batch_empty:
                 is_exhausted = True
@@ -227,6 +287,10 @@ def fetch_events_and_flatten(window_start, window_end, limit=100, max_workers=16
             )
 
     print(f"\n[INFO] Fetch complete. Batch markets: {len(all_markets)}")
+    if quarantine_records:
+        quarantine_df = pd.DataFrame(quarantine_records)
+        quarantine_df.to_csv(config.RAW_MARKET_QUARANTINE_PATH, index=False)
+        print(f"[INFO] Saved raw-market quarantine to {config.RAW_MARKET_QUARANTINE_PATH}")
     return pd.DataFrame(all_markets)
 
 

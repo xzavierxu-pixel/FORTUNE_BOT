@@ -1,42 +1,37 @@
+from __future__ import annotations
+
+import argparse
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import load_domain_features, load_snapshots
-
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = BASE_DIR / "data"
-RULES_PATH = DATA_DIR / "edge" / "trading_rules.csv"
-OUTPUT_DIR = DATA_DIR / "analysis"
+from rule_baseline.utils.research_context import assign_dataset_split, build_artifact_paths, compute_temporal_split
+from rule_baseline.utils.research_data import load_research_snapshots
 
 PRICE_MIN = 0.05
 PRICE_MAX = 0.95
 MIN_RULE_N = 50
 
 
-def load_inputs():
-    snapshots = load_snapshots(config.SNAPSHOTS_PATH)
-    domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
-    snapshots = snapshots.merge(
-        domain_features[["market_id", "domain", "category", "market_type"]],
-        on="market_id",
-        how="left",
-        suffixes=("", "_domain"),
-    )
-    if "category_domain" in snapshots.columns:
-        snapshots["category"] = snapshots["category_domain"].fillna(snapshots["category"])
-        snapshots = snapshots.drop(columns=["category_domain"])
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Analyze rule alpha on the strict test split.")
+    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    return parser.parse_args()
 
-    snapshots["domain"] = snapshots["domain"].fillna("UNKNOWN")
-    snapshots["market_type"] = snapshots["market_type"].fillna("UNKNOWN")
+
+def load_inputs(artifact_paths) -> tuple[pd.DataFrame, pd.DataFrame]:
+    snapshots = load_research_snapshots()
+    snapshots = snapshots[snapshots["quality_pass"]].copy()
+    split = compute_temporal_split(snapshots)
+    snapshots = assign_dataset_split(snapshots, split)
+    snapshots = snapshots[snapshots["dataset_split"] == "test"].copy()
     snapshots = snapshots[(snapshots["price"] >= PRICE_MIN) & (snapshots["price"] <= PRICE_MAX)].copy()
 
-    rules = pd.read_csv(RULES_PATH)
+    rules = pd.read_csv(artifact_paths.rules_path)
     for column in ["domain", "category", "market_type"]:
         rules[column] = rules[column].fillna("UNKNOWN").astype(str)
     return snapshots, rules
@@ -71,7 +66,7 @@ def match_rules_to_snapshots(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd
     )
     matched = merged[mask].copy()
     if matched.empty:
-        raise ValueError("No rules matched snapshots under current schema.")
+        raise RuntimeError("No rules matched test snapshots under current schema.")
     return matched
 
 
@@ -86,7 +81,11 @@ def classify_rule_quadrant(df: pd.DataFrame) -> pd.DataFrame:
     out["quadrant"] = np.where(
         is_contrarian & rule_correct,
         "contrarian_correct",
-        np.where(~is_contrarian & rule_correct, "consensus_correct", np.where(~is_contrarian, "consensus_wrong", "contrarian_wrong")),
+        np.where(
+            ~is_contrarian & rule_correct,
+            "consensus_correct",
+            np.where(~is_contrarian, "consensus_wrong", "contrarian_wrong"),
+        ),
     )
     out["is_contrarian"] = is_contrarian
     out["rule_correct"] = rule_correct
@@ -110,10 +109,7 @@ def compute_rule_metrics(df: pd.DataFrame) -> pd.DataFrame:
         edge = subset["edge_sample_trade"].iloc[0]
         actual_edge = (subset["y"] - subset["price"]).mean()
         fee = config.FEE_RATE
-        if edge > 0:
-            pnl = (subset["y"] - subset["price"] - fee).mean()
-        else:
-            pnl = (subset["price"] - subset["y"] - fee).mean()
+        pnl = (subset["y"] - subset["price"] - fee).mean() if edge > 0 else (subset["price"] - subset["y"] - fee).mean()
 
         rows.append(
             {
@@ -125,10 +121,6 @@ def compute_rule_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "n": len(subset),
                 "rule_edge": round(edge, 4),
                 "actual_edge": round(actual_edge, 4),
-                "cc": cc,
-                "cw": cw,
-                "sc": sc,
-                "sw": sw,
                 "contrarian_pct": round(contrarian_n / len(subset) * 100.0, 1),
                 "alpha_ratio": round(alpha_ratio, 3) if not np.isnan(alpha_ratio) else np.nan,
                 "weighted_score": round(weighted_score, 4),
@@ -140,19 +132,19 @@ def compute_rule_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return result.sort_values("weighted_score", ascending=False) if not result.empty else result
 
 
-def main():
-    snapshots, rules = load_inputs()
+def main() -> None:
+    args = parse_args()
+    artifact_paths = build_artifact_paths(args.artifact_mode)
+    snapshots, rules = load_inputs(artifact_paths)
     matched = match_rules_to_snapshots(snapshots, rules)
     classified = classify_rule_quadrant(matched)
     metrics = compute_rule_metrics(classified)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    metrics.to_csv(OUTPUT_DIR / "rules_alpha_metrics.csv", index=False)
-    classified.to_csv(OUTPUT_DIR / "rules_predictions_with_quadrant.csv", index=False)
+    artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
+    metrics.to_csv(artifact_paths.analysis_dir / "rules_alpha_metrics.csv", index=False)
+    classified.to_csv(artifact_paths.analysis_dir / "rules_predictions_with_quadrant.csv", index=False)
 
-    print("[INFO] Rule alpha metrics:")
-    print(metrics.to_string(index=False) if not metrics.empty else "  <empty>")
-    print(f"[INFO] Saved outputs to {OUTPUT_DIR}")
+    print(metrics.to_string(index=False) if not metrics.empty else "<empty>")
 
 
 if __name__ == "__main__":

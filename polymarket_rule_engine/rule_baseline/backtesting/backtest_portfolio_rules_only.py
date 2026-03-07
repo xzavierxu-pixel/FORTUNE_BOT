@@ -239,7 +239,7 @@ def main():
     cfg = BacktestConfig()
     snapshots = prepare_snapshots()
     _, valid_start = compute_temporal_split(snapshots)
-    snapshots = snapshots[snapshots["resolve_time"] >= valid_start].copy()
+    snapshots = snapshots[snapshots["closedTime"] >= valid_start].copy()
     rules = select_top_rules(load_rules(), cfg)
     equity_df, trades_df = run_backtest(snapshots, rules, cfg)
 

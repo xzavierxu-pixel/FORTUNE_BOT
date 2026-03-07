@@ -35,22 +35,22 @@ def build_dataset() -> pd.DataFrame:
 
 def split_train_calibration_test(df_feat: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     train_end, valid_start = compute_temporal_split(df_feat)
-    df_train = df_feat[df_feat["resolve_time"] <= train_end].copy()
-    df_future = df_feat[df_feat["resolve_time"] >= valid_start].copy()
+    df_train = df_feat[df_feat["closedTime"] <= train_end].copy()
+    df_future = df_feat[df_feat["closedTime"] >= valid_start].copy()
     if df_future.empty:
         raise ValueError("No future-period rows available for calibration/test comparison.")
 
-    reference_end = pd.to_datetime(df_future["resolve_time"], utc=True).max()
+    reference_end = pd.to_datetime(df_future["closedTime"], utc=True).max()
     test_days = max(7, config.VALIDATION_DAYS // 2)
     test_start = reference_end - pd.Timedelta(days=test_days)
 
-    df_calib = df_future[df_future["resolve_time"] < test_start].copy()
-    df_test = df_future[df_future["resolve_time"] >= test_start].copy()
+    df_calib = df_future[df_future["closedTime"] < test_start].copy()
+    df_test = df_future[df_future["closedTime"] >= test_start].copy()
 
     if df_calib.empty or df_test.empty:
-        midpoint = df_future["resolve_time"].sort_values().iloc[len(df_future) // 2]
-        df_calib = df_future[df_future["resolve_time"] < midpoint].copy()
-        df_test = df_future[df_future["resolve_time"] >= midpoint].copy()
+        midpoint = df_future["closedTime"].sort_values().iloc[len(df_future) // 2]
+        df_calib = df_future[df_future["closedTime"] < midpoint].copy()
+        df_test = df_future[df_future["closedTime"] >= midpoint].copy()
 
     if df_calib.empty or df_test.empty:
         raise ValueError("Unable to create non-empty calibration and test splits.")
@@ -59,8 +59,8 @@ def split_train_calibration_test(df_feat: pd.DataFrame) -> tuple[pd.DataFrame, p
     print(f"[INFO] Calibration rows: {len(df_calib)}")
     print(f"[INFO] Test rows: {len(df_test)}")
     print(f"[INFO] Train <= {train_end}")
-    print(f"[INFO] Calibration >= {valid_start} and < {df_test['resolve_time'].min()}")
-    print(f"[INFO] Test >= {df_test['resolve_time'].min()}")
+    print(f"[INFO] Calibration >= {valid_start} and < {df_test['closedTime'].min()}")
+    print(f"[INFO] Test >= {df_test['closedTime'].min()}")
     return df_train, df_calib, df_test
 
 
@@ -86,7 +86,7 @@ def main():
         [
             "market_id",
             "snapshot_time",
-            "resolve_time",
+            "closedTime",
             "price",
             "y",
             "domain",

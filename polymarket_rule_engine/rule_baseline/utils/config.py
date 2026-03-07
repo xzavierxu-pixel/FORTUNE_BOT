@@ -12,11 +12,13 @@ UTC = timezone.utc
 HORIZONS = [1, 2, 4, 6, 12, 24]
 
 # Historical bootstrap window for the first raw fetch.
-DATE_START_STR = "2024-11-01"
+#DATE_START_STR = "2024-11-01"
+DATE_START_STR = "2025-12-07"
 
 # Rolling windows
 RAW_FETCH_OVERLAP_HOURS = 72
 VALIDATION_DAYS = 30
+TEST_DAYS = 30
 
 # Constraints
 DELTA_FIXED_HOURS = 24.0
@@ -25,6 +27,33 @@ EPSILON = 1e-5
 MIN_SAMPLES_LEAF = 200
 EDGE_THRESHOLD = 0.05
 LOW_FREQUENCY_DOMAIN_COUNT = 25
+MAX_ALLOWED_RESOLVE_DELTA_HOURS = 1.0
+STALE_QUOTE_MAX_OFFSET_SEC = 120
+STALE_QUOTE_MAX_GAP_SEC = 900
+
+# Raw market quality filters
+MIN_MARKET_VOLUME = 50.0
+MIN_MARKET_LIQUIDITY = 50.0
+MAX_MARKET_SPREAD = 0.25
+MAX_REWARD_SPREAD = 0.25
+DOMAIN_BLACKLIST: set[str] = set()
+
+# Rule selection / statistics
+BETA_PRIOR_STRENGTH = 20.0
+FDR_ALPHA = 0.10
+MIN_EDGE_LOWER_BOUND = 0.0
+
+# Feature engineering
+TEXT_EMBED_DIM = 16
+
+# Backtesting risk limits
+MAX_DOMAIN_EXPOSURE_F = 0.20
+MAX_CATEGORY_EXPOSURE_F = 0.25
+MAX_CLUSTER_EXPOSURE_F = 0.15
+MAX_SETTLEMENT_EXPOSURE_F = 0.20
+MAX_SIDE_EXPOSURE_F = 0.30
+MAX_TRADE_LIQUIDITY_F = 0.02
+MAX_TRADE_VOLUME24_F = 0.02
 
 # Backtesting
 FEE_RATE = 0.001
@@ -47,6 +76,12 @@ RAW_MERGED_PATH = INTERMEDIATE_DIR / "raw_markets_merged.csv"
 
 PROCESSED_DIR = DATA_DIR / "processed"
 SNAPSHOTS_PATH = PROCESSED_DIR / "snapshots.csv"
+SNAPSHOT_QUARANTINE_PATH = PROCESSED_DIR / "snapshots_quarantine.csv"
+SNAPSHOT_BUILD_SUMMARY_PATH = PROCESSED_DIR / "snapshot_build_summary.json"
+SNAPSHOT_HIT_RATE_PATH = PROCESSED_DIR / "snapshot_horizon_hit_rate.csv"
+SNAPSHOT_MISSINGNESS_PATH = PROCESSED_DIR / "snapshot_missingness_by_domain.csv"
+SNAPSHOT_MARKET_AUDIT_PATH = PROCESSED_DIR / "snapshot_market_audit.csv"
+RAW_MARKET_QUARANTINE_PATH = INTERMEDIATE_DIR / "raw_market_quarantine.csv"
 
 DOMAIN_DIR = DATA_DIR / "domain"
 MARKET_DOMAIN_FEATURES_PATH = DOMAIN_DIR / "market_domain_features.csv"
@@ -68,6 +103,9 @@ PREDICTIONS_PATH = PREDICTIONS_DIR / "snapshots_with_predictions.csv"
 BACKTEST_DIR = DATA_DIR / "backtesting"
 ANALYSIS_DIR = DATA_DIR / "analysis"
 
+OFFLINE_DIR = DATA_DIR / "offline"
+ONLINE_DIR = DATA_DIR / "online"
+
 
 def ensure_data_dirs() -> None:
     for path in [
@@ -76,12 +114,8 @@ def ensure_data_dirs() -> None:
         INTERMEDIATE_DIR,
         PROCESSED_DIR,
         DOMAIN_DIR,
-        NAIVE_RULES_DIR,
-        EDGE_DIR,
-        MODELS_DIR,
-        PREDICTIONS_DIR,
-        BACKTEST_DIR,
-        ANALYSIS_DIR,
+        OFFLINE_DIR,
+        ONLINE_DIR,
     ]:
         path.mkdir(parents=True, exist_ok=True)
 
@@ -123,6 +157,21 @@ def compute_split_boundaries(
     valid_start = end_ref - timedelta(days=validation_days)
     train_end = valid_start - timedelta(seconds=1)
     return history_start(), train_end, valid_start
+
+
+def compute_three_way_split_boundaries(
+    reference_end: datetime | None = None,
+    validation_days: int = VALIDATION_DAYS,
+    test_days: int = TEST_DAYS,
+) -> tuple[datetime, datetime, datetime, datetime, datetime, datetime]:
+    end_ref = (reference_end or current_utc()).astimezone(UTC)
+    test_start = end_ref - timedelta(days=test_days)
+    valid_start = test_start - timedelta(days=validation_days)
+    train_start = history_start()
+    train_end = valid_start - timedelta(seconds=1)
+    valid_end = test_start - timedelta(seconds=1)
+    test_end = end_ref
+    return train_start, train_end, valid_start, valid_end, test_start, test_end
 
 
 def get_dates() -> tuple[datetime, datetime, datetime]:
