@@ -53,6 +53,12 @@ DROP_COLS = {
     "dataset_split",
     "quality_pass",
     "delta_hours_exceeded_flag",
+    "trade_value_true",
+    "expected_pnl_target",
+    "expected_roi_target",
+    "residual_q_target",
+    "winning_outcome_index",
+    "winning_outcome_label",
 }
 
 

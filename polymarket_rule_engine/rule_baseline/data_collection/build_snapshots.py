@@ -178,13 +178,13 @@ def validate_market_dates(row):
         t_sched = row.get("endDate")
         t_res = row.get("closedTime")
 
-        if pd.isna(t_start):
-            return None, None, None, "no_start_date"
         if pd.isna(t_res):
             return None, None, None, "no_closed_time"
 
-        if hasattr(t_start, "to_pydatetime"):
+        if pd.notna(t_start) and hasattr(t_start, "to_pydatetime"):
             t_start = t_start.to_pydatetime()
+        elif pd.isna(t_start):
+            t_start = None
         if pd.notna(t_sched) and hasattr(t_sched, "to_pydatetime"):
             t_sched = t_sched.to_pydatetime()
         if hasattr(t_res, "to_pydatetime"):
@@ -211,7 +211,7 @@ def generate_snapshots(row, token_meta, winner_index, t_start, t_sched, t_res, d
     snapshots = []
     audit_rows = []
     ts_closed_unix = int(t_res.timestamp())
-    ts_start_unix = int(t_start.timestamp())
+    ts_start_unix = int(t_start.timestamp()) if t_start is not None else None
 
     timestamps = [item["t"] for item in history]
     prices = [float(item["p"]) for item in history]
@@ -226,7 +226,7 @@ def generate_snapshots(row, token_meta, winner_index, t_start, t_sched, t_res, d
     winning_outcome_label = token_meta["primary_outcome"] if winner_index == 0 else token_meta["secondary_outcome"]
 
     for horizon, quote_meta, target_time in zip(config.HORIZONS, found_quotes, target_times):
-        horizon_eligible = target_time >= ts_start_unix
+        horizon_eligible = True if ts_start_unix is None else target_time >= ts_start_unix
         price_raw = quote_meta["price"]
         audit_row = {
             "market_id": market_id,
@@ -294,7 +294,7 @@ def process_market(row, session):
         }
 
     t_start, t_sched, t_res, delta_hours = validate_market_dates(row)
-    if t_start is None:
+    if t_res is None:
         return {
             "market_id": market_id,
             "category": category,
@@ -315,8 +315,11 @@ def process_market(row, session):
             "audit_rows": [],
         }
 
-    duration_hours = (t_res - t_start).total_seconds() / 3600.0
-    if duration_hours < min(config.HORIZONS):
+    if t_start is not None:
+        duration_hours = (t_res - t_start).total_seconds() / 3600.0
+    else:
+        duration_hours = None
+    if duration_hours is not None and duration_hours < min(config.HORIZONS):
         return {
             "market_id": market_id,
             "category": category,
@@ -546,12 +549,14 @@ def main():
             if column in chunk.columns:
                 chunk[column] = pd.to_datetime(chunk[column], utc=True, errors="coerce")
 
-        required_date_cols = [column for column in ["startDate", "closedTime"] if column in chunk.columns]
+        required_date_cols = [column for column in ["closedTime"] if column in chunk.columns]
         chunk = chunk.dropna(subset=required_date_cols)
         if chunk.empty:
             continue
 
-        duration_mask = (chunk["closedTime"] - chunk["startDate"]).dt.total_seconds() >= (min_horizon * 3600)
+        duration_mask = chunk["startDate"].isna() | (
+            (chunk["closedTime"] - chunk["startDate"]).dt.total_seconds() >= (min_horizon * 3600)
+        )
         valid_chunk = chunk[duration_mask].copy()
 
         ignored_count = len(chunk) - len(valid_chunk)

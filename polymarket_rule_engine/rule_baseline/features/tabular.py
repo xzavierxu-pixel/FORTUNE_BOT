@@ -210,6 +210,21 @@ def preprocess_features(
         "secondary_outcome",
         "winning_outcome_label",
         "selected_quote_side",
+        "question_market",
+        "description_market",
+        "groupItemTitle_market",
+        "gameId_market",
+        "marketMakerAddress_market",
+        "startDate_market",
+        "endDate_market",
+        "closedTime_market",
+        "domain_parsed_market",
+        "sub_domain_market",
+        "source_url_market",
+        "category_raw_market",
+        "category_parsed_market",
+        "outcome_pattern_market",
+        "source_host_market",
     ]
     for column in categorical_columns:
         if column not in out.columns:

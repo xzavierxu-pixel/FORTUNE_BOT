@@ -25,8 +25,8 @@ def compute_metrics(df: pd.DataFrame) -> dict[str, float]:
 
     metrics = {
         "rows": float(len(df)),
-        "logloss_price": float(log_loss(y, p)),
-        "logloss_model": float(log_loss(y, q)),
+        "logloss_price": float(log_loss(y, p, labels=[0, 1])),
+        "logloss_model": float(log_loss(y, q, labels=[0, 1])),
         "brier_price": float(brier_score_loss(y, p)),
         "brier_model": float(brier_score_loss(y, q)),
         "auc_price": float(roc_auc_score(y, p)) if df["y"].nunique() > 1 else np.nan,
@@ -41,6 +41,7 @@ def compute_metrics(df: pd.DataFrame) -> dict[str, float]:
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
+    artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
     predictions_path = artifact_paths.predictions_path
     if not predictions_path.exists():
         raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
@@ -49,7 +50,32 @@ def main() -> None:
     df = df[(df["price"] > 0.0) & (df["price"] < 1.0)].copy()
     df = df[(df["q_pred"] > 0.0) & (df["q_pred"] < 1.0)].copy()
     if df.empty:
-        raise RuntimeError("No valid prediction rows available.")
+        pd.DataFrame(
+            [
+                {
+                    "rows": 0.0,
+                    "logloss_price": np.nan,
+                    "logloss_model": np.nan,
+                    "brier_price": np.nan,
+                    "brier_model": np.nan,
+                    "auc_price": np.nan,
+                    "auc_model": np.nan,
+                    "logloss_delta": np.nan,
+                    "brier_delta": np.nan,
+                    "auc_delta": np.nan,
+                }
+            ]
+        ).to_csv(artifact_paths.analysis_dir / "calibration_metrics.csv", index=False)
+        pd.DataFrame(columns=["q_bucket", "n", "q_mean", "y_rate", "p_mean", "edge_true", "edge_model"]).to_csv(
+            artifact_paths.analysis_dir / "calibration_reliability.csv",
+            index=False,
+        )
+        pd.DataFrame(columns=["abs_edge_bucket", "n", "edge_model_mean", "edge_true_mean"]).to_csv(
+            artifact_paths.analysis_dir / "calibration_edge_buckets.csv",
+            index=False,
+        )
+        print("[INFO] No valid prediction rows available for calibration analysis. Wrote empty artifacts.")
+        return
 
     metrics = compute_metrics(df)
     metrics_df = pd.DataFrame([metrics])
@@ -81,7 +107,6 @@ def main() -> None:
         .reset_index()
     )
 
-    artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
     metrics_df.to_csv(artifact_paths.analysis_dir / "calibration_metrics.csv", index=False)
     reliability.to_csv(artifact_paths.analysis_dir / "calibration_reliability.csv", index=False)
     edge_table.to_csv(artifact_paths.analysis_dir / "calibration_edge_buckets.csv", index=False)

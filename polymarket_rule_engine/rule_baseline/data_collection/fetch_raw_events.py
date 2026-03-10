@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
@@ -46,16 +47,16 @@ def _parse_sequence(value: Any) -> list[Any]:
     return []
 
 
-def _to_float(value: Any) -> float | None:
+def _to_float(value: Any, default: float | None = None) -> float | None:
     try:
         if value is None or value == "":
-            return None
+            return default
         parsed = float(value)
         if pd.isna(parsed):
-            return None
+            return default
         return parsed
     except Exception:
-        return None
+        return default
 
 
 def resolve_category(tags_list):
@@ -104,16 +105,22 @@ def process_market(market, category, window_start, window_end):
 
     try:
         closed_time = pd.to_datetime(closed_time_raw, utc=True)
-        scheduled_time = pd.to_datetime(end_date_raw, utc=True)
     except Exception as exc:
         return None, f"date_error_{exc}"
+
+    try:
+        scheduled_time = pd.to_datetime(end_date_raw, utc=True) if end_date_raw else pd.NaT
+    except Exception:
+        scheduled_time = pd.NaT
 
     if closed_time < window_start:
         return None, "too_old"
     if closed_time > window_end:
         return None, "too_new"
 
-    delta_hours = abs((closed_time - scheduled_time).total_seconds()) / 3600.0
+    delta_hours = np.nan
+    if pd.notna(scheduled_time):
+        delta_hours = abs((closed_time - scheduled_time).total_seconds()) / 3600.0
     # if delta_hours > config.DELTA_FIXED_HOURS:
     #     return None, f"delta_limit_{delta_hours:.1f}"
 
@@ -141,8 +148,8 @@ def process_market(market, category, window_start, window_end):
     if str(outcomes[0]).strip().lower() == str(outcomes[1]).strip().lower():
         return None, "duplicate_outcome_labels"
 
-    volume = _to_float(market.get("volume"))
-    liquidity = _to_float(market.get("liquidity") or market.get("liquidityNum"))
+    volume = _to_float(market.get("volume"), default=0.0)
+    liquidity = _to_float(market.get("liquidity") or market.get("liquidityNum"), default=0.0)
     spread = _to_float(market.get("spread"))
     rewards_spread = _to_float(market.get("rewardsMaxSpread"))
     best_bid = _to_float(market.get("bestBid"))
@@ -191,6 +198,7 @@ def process_market(market, category, window_start, window_end):
     cleaned["winning_outcome_label"] = str(outcomes[winner_candidates[0]])
     cleaned["batch_window_start"] = window_start.isoformat()
     cleaned["batch_window_end"] = window_end.isoformat()
+    cleaned["delta_hours"] = delta_hours
 
     cleaned.pop("image", None)
     cleaned.pop("icon", None)
