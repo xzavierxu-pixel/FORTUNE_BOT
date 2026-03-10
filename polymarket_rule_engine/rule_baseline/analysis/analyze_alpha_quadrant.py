@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from rule_baseline.utils.research_context import build_artifact_paths
+from rule_baseline.datasets.artifacts import build_artifact_paths
 
 CONTRARIAN_THRESHOLD = 0.05
 PRICE_MIN = 0.05

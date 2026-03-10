@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 import pandas as pd
 
 from rule_baseline.utils import config
-
-ARTIFACT_MODES = {"offline", "online"}
 
 
 @dataclass(frozen=True)
@@ -22,71 +18,6 @@ class TemporalSplit:
 
     def to_dict(self) -> dict[str, str]:
         return {key: value.isoformat() for key, value in asdict(self).items()}
-
-
-@dataclass(frozen=True)
-class ArtifactPaths:
-    mode: str
-    root_dir: Path
-    edge_dir: Path
-    models_dir: Path
-    predictions_dir: Path
-    backtest_dir: Path
-    analysis_dir: Path
-    metadata_dir: Path
-    naive_rules_dir: Path
-    rules_path: Path
-    rule_report_path: Path
-    rule_json_path: Path
-    model_path: Path
-    predictions_path: Path
-    predictions_full_path: Path
-    split_summary_path: Path
-    rule_training_summary_path: Path
-    model_training_summary_path: Path
-
-    def ensure_dirs(self) -> None:
-        for path in [
-            self.root_dir,
-            self.edge_dir,
-            self.models_dir,
-            self.predictions_dir,
-            self.backtest_dir,
-            self.analysis_dir,
-            self.metadata_dir,
-            self.naive_rules_dir,
-        ]:
-            path.mkdir(parents=True, exist_ok=True)
-
-
-def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
-    normalized = mode.lower().strip()
-    if normalized not in ARTIFACT_MODES:
-        raise ValueError(f"Unsupported artifact mode: {mode}")
-
-    root = config.OFFLINE_DIR if normalized == "offline" else config.ONLINE_DIR
-    paths = ArtifactPaths(
-        mode=normalized,
-        root_dir=root,
-        edge_dir=root / "edge",
-        models_dir=root / "models",
-        predictions_dir=root / "predictions",
-        backtest_dir=root / "backtesting",
-        analysis_dir=root / "analysis",
-        metadata_dir=root / "metadata",
-        naive_rules_dir=root / "naive_rules",
-        rules_path=root / "edge" / "trading_rules.csv",
-        rule_report_path=root / "naive_rules" / "naive_all_leaves_report.csv",
-        rule_json_path=root / "naive_rules" / "naive_trading_rules.json",
-        model_path=root / "models" / "ensemble_snapshot_q.pkl",
-        predictions_path=root / "predictions" / "snapshots_with_predictions.csv",
-        predictions_full_path=root / "predictions" / "snapshots_with_predictions_all.csv",
-        split_summary_path=root / "metadata" / "split_summary.json",
-        rule_training_summary_path=root / "metadata" / "rule_training_summary.json",
-        model_training_summary_path=root / "metadata" / "model_training_summary.json",
-    )
-    paths.ensure_dirs()
-    return paths
 
 
 def compute_temporal_split(df: pd.DataFrame, date_col: str = "closedTime") -> TemporalSplit:
@@ -116,12 +47,6 @@ def assign_dataset_split(
     return out
 
 
-def write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(payload, file, ensure_ascii=False, indent=2)
-
-
 def build_walk_forward_splits(
     df: pd.DataFrame,
     date_col: str = "closedTime",
@@ -144,7 +69,6 @@ def build_walk_forward_splits(
 
     walk_step_days = step_days or test_days
     splits: list[TemporalSplit] = []
-
     for reverse_index in range(n_windows - 1, -1, -1):
         test_end = reference_end - pd.Timedelta(days=walk_step_days * reverse_index)
         test_start = test_end - pd.Timedelta(days=test_days) + pd.Timedelta(seconds=1)
@@ -168,5 +92,16 @@ def build_walk_forward_splits(
                 test_end=test_end,
             )
         )
-
     return splits
+
+
+def compute_train_valid_boundary(df: pd.DataFrame, date_col: str = "closedTime") -> tuple[pd.Timestamp, pd.Timestamp]:
+    if date_col not in df.columns:
+        raise ValueError(f"Dataframe is missing required date column '{date_col}'.")
+
+    reference_end = pd.to_datetime(df[date_col], utc=True, errors="coerce").max()
+    if pd.isna(reference_end):
+        raise ValueError(f"Unable to infer rolling split boundaries from '{date_col}'.")
+
+    _, train_end, valid_start = config.compute_split_boundaries(reference_end.to_pydatetime())
+    return pd.Timestamp(train_end), pd.Timestamp(valid_start)

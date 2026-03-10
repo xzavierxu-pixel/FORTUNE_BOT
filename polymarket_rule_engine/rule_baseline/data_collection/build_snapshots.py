@@ -14,8 +14,9 @@ from urllib3.util.retry import Retry
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.utils import config
-from rule_baseline.utils.raw_batches import rebuild_canonical_merged
-from rule_baseline.utils.research_context import write_json
+from rule_baseline.domain_extractor.market_annotations import build_and_save_market_annotations
+from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
+from rule_baseline.datasets.artifacts import write_json
 
 PRICES_URL = "https://clob.polymarket.com/prices-history"
 PARTIAL_SNAPSHOTS_PATH = config.PROCESSED_DIR / "snapshots.partial.csv"
@@ -520,6 +521,9 @@ def main():
     if not config.RAW_MERGED_PATH.exists():
         print("[ERROR] Canonical merged raw markets not found. Run fetch_raw_events.py first.")
         return
+
+    print("[INFO] Refreshing market annotations before snapshot build...")
+    build_and_save_market_annotations()
 
     print(f"[INFO] Processing markets from {config.RAW_MERGED_PATH}...")
 

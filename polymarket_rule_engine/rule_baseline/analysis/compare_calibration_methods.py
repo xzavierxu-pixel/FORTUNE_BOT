@@ -6,17 +6,14 @@ import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from rule_baseline.training.train_snapshot_lgbm_v2 import DROP_COLS, build_feature_table, load_rules
+from rule_baseline.datasets.snapshots import load_raw_markets, load_snapshots
+from rule_baseline.datasets.splits import compute_train_valid_boundary
+from rule_baseline.domain_extractor.market_annotations import load_market_annotations
+from rule_baseline.features import build_market_feature_cache
+from rule_baseline.models import fit_model_payload, predict_probabilities
+from rule_baseline.training.train_snapshot_model import DROP_COLS, build_feature_table, load_rules
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import (
-    build_market_feature_cache,
-    compute_temporal_split,
-    load_domain_features,
-    load_raw_markets,
-    load_snapshots,
-)
-from rule_baseline.utils.modeling import fit_model_payload, predict_probabilities
-from rule_baseline.utils.raw_batches import rebuild_canonical_merged
+from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
 COMPARISON_PATH = config.ANALYSIS_DIR / "calibration_method_comparison.csv"
 PREDICTION_PATH = config.ANALYSIS_DIR / "calibration_method_predictions.csv"
@@ -27,14 +24,14 @@ def build_dataset() -> pd.DataFrame:
     rebuild_canonical_merged()
     snapshots = load_snapshots(config.SNAPSHOTS_PATH)
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
-    market_feature_cache = build_market_feature_cache(raw_markets, domain_features)
+    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
     rules = load_rules(config.RULES_OUTPUT_PATH)
-    return build_feature_table(snapshots, market_feature_cache, domain_features, rules)
+    return build_feature_table(snapshots, market_feature_cache, market_annotations, rules)
 
 
 def split_train_calibration_test(df_feat: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    train_end, valid_start = compute_temporal_split(df_feat)
+    train_end, valid_start = compute_train_valid_boundary(df_feat)
     df_train = df_feat[df_feat["closedTime"] <= train_end].copy()
     df_future = df_feat[df_feat["closedTime"] >= valid_start].copy()
     if df_future.empty:

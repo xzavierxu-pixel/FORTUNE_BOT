@@ -24,13 +24,13 @@ from sklearn.preprocessing import OneHotEncoder, RobustScaler
 
 
 def build_preprocessor(numeric_columns: list[str], categorical_columns: list[str]) -> ColumnTransformer:
-    num_pipeline = Pipeline(
+    numeric_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="constant", fill_value=0.0, keep_empty_features=True)),
             ("scaler", RobustScaler()),
         ]
     )
-    cat_pipeline = Pipeline(
+    categorical_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="constant", fill_value="UNKNOWN", keep_empty_features=True)),
             ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
@@ -38,8 +38,8 @@ def build_preprocessor(numeric_columns: list[str], categorical_columns: list[str
     )
     return ColumnTransformer(
         transformers=[
-            ("num", num_pipeline, numeric_columns),
-            ("cat", cat_pipeline, categorical_columns),
+            ("num", numeric_pipeline, numeric_columns),
+            ("cat", categorical_pipeline, categorical_columns),
         ],
         remainder="drop",
     )

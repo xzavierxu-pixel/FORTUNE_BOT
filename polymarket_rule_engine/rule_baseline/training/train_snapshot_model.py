@@ -10,12 +10,14 @@ import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
+from rule_baseline.datasets.snapshots import load_raw_markets, load_research_snapshots
+from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
+from rule_baseline.domain_extractor.market_annotations import load_market_annotations
+from rule_baseline.features import build_market_feature_cache, preprocess_features
+from rule_baseline.models import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import build_market_feature_cache, load_domain_features, load_raw_markets, preprocess_features
-from rule_baseline.utils.modeling import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
-from rule_baseline.utils.raw_batches import rebuild_canonical_merged
-from rule_baseline.utils.research_context import assign_dataset_split, build_artifact_paths, compute_temporal_split, write_json
-from rule_baseline.utils.research_data import load_research_snapshots
+from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
 DROP_COLS = {
     "y",
@@ -112,18 +114,26 @@ def load_rules(path) -> pd.DataFrame:
 
 def match_snapshots_to_rules(
     snapshots: pd.DataFrame,
-    domain_features: pd.DataFrame,
+    market_annotations: pd.DataFrame,
     rules: pd.DataFrame,
 ) -> pd.DataFrame:
-    context = snapshots.merge(
-        domain_features[["market_id", "domain", "category", "market_type"]],
-        on="market_id",
-        how="left",
-        suffixes=("", "_domain"),
-    )
-    if "category_domain" in context.columns:
-        context["category"] = context["category_domain"].fillna(context["category"])
-        context = context.drop(columns=["category_domain"])
+    context = snapshots.copy()
+    required_columns = {"domain", "category", "market_type"}
+    if required_columns.difference(context.columns):
+        context = context.merge(
+            market_annotations[["market_id", "domain", "category", "market_type"]],
+            on="market_id",
+            how="left",
+            suffixes=("", "_annotation"),
+        )
+        for column in ["domain", "category", "market_type"]:
+            annotation_column = f"{column}_annotation"
+            if annotation_column in context.columns:
+                if column in context.columns:
+                    context[column] = context[annotation_column].fillna(context[column])
+                else:
+                    context[column] = context[annotation_column]
+                context = context.drop(columns=[annotation_column])
 
     context["domain"] = context.get("domain", "UNKNOWN").fillna("UNKNOWN").astype(str)
     context["category"] = context.get("category", "UNKNOWN").fillna("UNKNOWN").astype(str)
@@ -162,20 +172,17 @@ def match_snapshots_to_rules(
     if matched.empty:
         return pd.DataFrame()
 
-    matched = matched.sort_values(
-        ["market_id", "snapshot_time", "rule_score"],
-        ascending=[True, True, False],
-    )
+    matched = matched.sort_values(["market_id", "snapshot_time", "rule_score"], ascending=[True, True, False])
     return matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
 
 
 def build_feature_table(
     snapshots: pd.DataFrame,
     market_feature_cache: pd.DataFrame,
-    domain_features: pd.DataFrame,
+    market_annotations: pd.DataFrame,
     rules: pd.DataFrame,
 ) -> pd.DataFrame:
-    matched = match_snapshots_to_rules(snapshots, domain_features, rules)
+    matched = match_snapshots_to_rules(snapshots, market_annotations, rules)
     if matched.empty:
         return pd.DataFrame()
     return preprocess_features(matched, market_feature_cache)
@@ -223,12 +230,11 @@ def compute_trade_value_from_q(df: pd.DataFrame, q_pred: pd.Series | pd.Index | 
     direction = df["direction"].astype(int).values
     price = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
     q_value = np.asarray(q_pred, dtype=float).clip(1e-6, 1 - 1e-6)
-    trade_value = np.where(
+    return np.where(
         direction > 0,
         q_value / price - 1.0 - config.FEE_RATE,
         (price - q_value) / np.maximum(1.0 - price, 1e-6) - config.FEE_RATE,
     )
-    return trade_value
 
 
 def infer_q_from_trade_value(df: pd.DataFrame, trade_value_pred: np.ndarray) -> np.ndarray:
@@ -305,17 +311,11 @@ def export_predictions(payload: dict, df_feat: pd.DataFrame, artifact_paths, art
     out["edge_prob"] = out["q_pred"] - out["price"]
     out.to_csv(artifact_paths.predictions_full_path, index=False)
 
-    if artifact_mode == "offline":
-        publish_df = out[out["dataset_split"] == "test"].copy()
-    else:
-        publish_df = out.copy()
+    publish_df = out[out["dataset_split"] == "test"].copy() if artifact_mode == "offline" else out.copy()
     publish_df.to_csv(artifact_paths.predictions_path, index=False)
 
     metrics_by_split = {
-        split_name: {
-            **probability_metrics(split_df),
-            **trade_value_metrics(split_df),
-        }
+        split_name: {**probability_metrics(split_df), **trade_value_metrics(split_df)}
         for split_name, split_df in out.groupby("dataset_split", observed=False)
         if split_name in {"train", "valid", "test"}
     }
@@ -335,11 +335,11 @@ def main() -> None:
     snapshots = snapshots[snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
-    market_feature_cache = build_market_feature_cache(raw_markets, domain_features)
+    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
     rules = load_rules(artifact_paths.rules_path)
 
-    df_feat = build_feature_table(snapshots, market_feature_cache, domain_features, rules)
+    df_feat = build_feature_table(snapshots, market_feature_cache, market_annotations, rules)
     if df_feat.empty:
         raise RuntimeError("No feature rows available after rule matching.")
     df_feat = add_training_targets(df_feat)
@@ -376,6 +376,7 @@ def main() -> None:
             feature_columns=feature_columns,
             target_column=target_column,
         )
+
     payload["artifact_mode"] = args.artifact_mode
     payload["target_mode"] = args.target_mode
     payload["split_boundaries"] = split.to_dict()

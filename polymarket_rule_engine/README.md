@@ -120,7 +120,7 @@ python rule_baseline/training/train_rules_naive_output_rule.py `
 默认 `q` 目标：
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode q `
   --calibration-mode valid_isotonic
@@ -129,7 +129,7 @@ python rule_baseline/training/train_snapshot_lgbm_v2.py `
 `residual_q` 目标：
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode residual_q `
   --calibration-mode domain_valid_isotonic
@@ -138,7 +138,7 @@ python rule_baseline/training/train_snapshot_lgbm_v2.py `
 `expected_pnl` 目标：
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode expected_pnl `
   --calibration-mode valid_sigmoid
@@ -147,7 +147,7 @@ python rule_baseline/training/train_snapshot_lgbm_v2.py `
 `expected_roi` 目标：
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode expected_roi `
   --calibration-mode valid_sigmoid
@@ -156,7 +156,7 @@ python rule_baseline/training/train_snapshot_lgbm_v2.py `
 调试版本：
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode residual_q `
   --calibration-mode domain_valid_isotonic `
@@ -414,12 +414,12 @@ python rule_baseline/workflow/run_pipeline.py `
 ### 6.2 验证新目标是否可训练
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode residual_q `
   --calibration-mode domain_valid_isotonic
 
-python rule_baseline/training/train_snapshot_lgbm_v2.py `
+python rule_baseline/training/train_snapshot_model.py `
   --artifact-mode offline `
   --target-mode expected_roi `
   --calibration-mode valid_sigmoid
@@ -482,7 +482,7 @@ python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode of
 
 ```powershell
 python rule_baseline/training/train_rules_naive_output_rule.py --artifact-mode offline
-python rule_baseline/training/train_snapshot_lgbm_v2.py --artifact-mode offline
+python rule_baseline/training/train_snapshot_model.py --artifact-mode offline
 python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode offline
 ```
 
@@ -491,7 +491,7 @@ python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode of
 至少需要重跑：
 
 ```powershell
-python rule_baseline/training/train_snapshot_lgbm_v2.py --artifact-mode offline
+python rule_baseline/training/train_snapshot_model.py --artifact-mode offline
 python rule_baseline/analysis/analyze_q_model_calibration.py --artifact-mode offline
 python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode offline
 python rule_baseline/analysis/compare_baseline_families.py --artifact-mode offline

@@ -9,7 +9,7 @@ import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from rule_baseline.utils.research_context import build_artifact_paths
+from rule_baseline.datasets.artifacts import build_artifact_paths
 
 
 def parse_args() -> argparse.Namespace:

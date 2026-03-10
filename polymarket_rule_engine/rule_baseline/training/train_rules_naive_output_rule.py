@@ -11,10 +11,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-from rule_baseline.utils.research_context import build_artifact_paths, write_json
-from rule_baseline.utils.research_data import prepare_rule_training_frame
+from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
+from rule_baseline.datasets.snapshots import prepare_rule_training_frame
 
-MIN_GROUP_ROWS = 30
+MIN_GROUP_ROWS = 20
 MIN_TRAIN_ROWS = 15
 MIN_VALID_N = 8
 

@@ -70,7 +70,7 @@ def main() -> None:
     train_model_cmd = add_common_args(
         [
             sys.executable,
-            "rule_baseline/training/train_snapshot_lgbm_v2.py",
+            "rule_baseline/training/train_snapshot_model.py",
             "--calibration-mode",
             args.calibration_mode,
             "--target-mode",

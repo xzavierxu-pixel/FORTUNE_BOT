@@ -10,193 +10,22 @@ import numpy as np
 import pandas as pd
 
 from rule_baseline.utils import config
-
-CATEGORIES = {
-    "sports": [
-        "win",
-        "beat",
-        "game",
-        "match",
-        "nba",
-        "nfl",
-        "mlb",
-        "ufc",
-        "boxing",
-        "nhl",
-        "playoffs",
-        "championship",
-        "finals",
-        "mvp",
-        "tennis",
-        "soccer",
-        "superbowl",
-        "world series",
-        "score",
-        "points",
-        "goal",
-        "touchdown",
-    ],
-    "crypto": [
-        "bitcoin",
-        "btc",
-        "eth",
-        "ethereum",
-        "crypto",
-        "solana",
-        "xrp",
-        "token",
-        "blockchain",
-        "defi",
-        "nft",
-        "binance",
-        "coinbase",
-        "doge",
-        "memecoin",
-        "altcoin",
-        "usdt",
-        "usdc",
-        "stablecoin",
-        "web3",
-    ],
-    "politics": [
-        "trump",
-        "biden",
-        "election",
-        "vote",
-        "president",
-        "congress",
-        "senate",
-        "democrat",
-        "republican",
-        "gop",
-        "nominee",
-        "primary",
-        "cabinet",
-        "poll",
-        "governor",
-        "mayor",
-        "impeach",
-        "ballot",
-    ],
-    "world": [
-        "war",
-        "russia",
-        "ukraine",
-        "china",
-        "israel",
-        "nato",
-        "military",
-        "gaza",
-        "iran",
-        "north korea",
-        "taiwan",
-        "ceasefire",
-        "sanctions",
-        "invasion",
-        "conflict",
-        "peace",
-        "treaty",
-    ],
-    "tech": [
-        "ai",
-        "openai",
-        "gpt",
-        "apple",
-        "google",
-        "meta",
-        "microsoft",
-        "tesla",
-        "nvidia",
-        "spacex",
-        "chatgpt",
-        "anthropic",
-        "iphone",
-        "android",
-        "launch",
-        "release",
-        "update",
-        "model",
-        "chip",
-    ],
-    "finance": [
-        "stock",
-        "market",
-        "fed",
-        "rate",
-        "inflation",
-        "gdp",
-        "recession",
-        "dow",
-        "nasdaq",
-        "treasury",
-        "bond",
-        "earnings",
-        "interest",
-        "ipo",
-        "merger",
-        "acquisition",
-        "bank",
-    ],
-    "entertainment": [
-        "oscar",
-        "grammy",
-        "emmy",
-        "movie",
-        "album",
-        "award",
-        "netflix",
-        "disney",
-        "spotify",
-        "taylor swift",
-        "box office",
-        "streaming",
-    ],
-}
-
-STRONG_POS = ["definitely", "certainly", "absolutely", "confirmed", "guaranteed", "will"]
-WEAK_POS = ["likely", "probably", "expected", "should", "may", "could", "might"]
-OUTCOME_POS = [
-    "win",
-    "pass",
-    "above",
-    "reach",
-    "exceed",
-    "approve",
-    "achieve",
-    "surge",
-    "rise",
-    "grow",
-    "gain",
-    "beat",
-    "success",
-    "record",
-    "hit",
-    "breakthrough",
-    "victory",
-    "triumph",
-    "accomplish",
-]
-OUTCOME_NEG = [
-    "lose",
-    "fail",
-    "below",
-    "drop",
-    "crash",
-    "reject",
-    "decline",
-    "fall",
-    "miss",
-    "collapse",
-    "plunge",
-    "default",
-    "bankrupt",
-    "defeat",
-    "loss",
-    "unable",
-    "never",
-]
+from rule_baseline.utils.feature_util import (
+    CATEGORIES,
+    FINANCE_THRESHOLD_KEYWORDS,
+    HIGH_AMBIGUITY_KEYWORDS,
+    MONTH_NAMES,
+    OUTCOME_NEG,
+    OUTCOME_POS,
+    PLAYER_PROP_KEYWORDS,
+    STRONG_POS,
+    TEAM_TOTAL_KEYWORDS,
+    WEAK_POS,
+    build_year_tokens,
+)
 
 THRESHOLD_PATTERN = re.compile(r"([-+]?\d+(?:\.\d+)?)")
+YEAR_TOKENS = build_year_tokens()
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -308,29 +137,11 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["word_diversity"] = len(set(words)) / max(q_len, 1)
     features["num_count"] = float(sum(1 for char in question if char.isdigit()))
     features["has_number"] = float(any(char.isdigit() for char in question))
-    features["has_year"] = float(any(str(year) in question for year in range(2023, 2029)))
+    features["has_year"] = float(any(year in question for year in YEAR_TOKENS))
     features["has_percent"] = float("%" in question or "percent" in question)
     features["has_dollar"] = float("$" in question or "dollar" in question)
     features["has_million"] = float("million" in question or "billion" in question)
-    features["has_date"] = float(
-        any(
-            month in question
-            for month in [
-                "january",
-                "february",
-                "march",
-                "april",
-                "may",
-                "june",
-                "july",
-                "august",
-                "september",
-                "october",
-                "november",
-                "december",
-            ]
-        )
-    )
+    features["has_date"] = float(any(month in question for month in MONTH_NAMES))
     features["starts_will"] = float(question.startswith("will"))
     features["starts_can"] = float(question.startswith("can"))
     features["has_by"] = float(" by " in question)
@@ -346,11 +157,11 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["threshold_max"] = threshold_max
     features["threshold_min"] = threshold_min
     features["threshold_span"] = max(threshold_max - threshold_min, 0.0)
-    features["is_player_prop"] = float(any(token in text for token in ["points", "rebounds", "assists", "yards", "touchdowns"]))
-    features["is_team_total"] = float(any(token in text for token in ["team total", "total points", "total goals"]))
-    features["is_finance_threshold"] = float(any(token in text for token in ["$", "market cap", "price of", "above", "below"]))
+    features["is_player_prop"] = float(any(token in text for token in PLAYER_PROP_KEYWORDS))
+    features["is_team_total"] = float(any(token in text for token in TEAM_TOTAL_KEYWORDS))
+    features["is_finance_threshold"] = float(any(token in text for token in FINANCE_THRESHOLD_KEYWORDS))
     features["is_date_based"] = float(features["has_date"] or features["has_before"] or features["has_after"])
-    features["is_high_ambiguity"] = float(any(token in text for token in ["at least", "roughly", "around", "approximately", "or more", "or less"]))
+    features["is_high_ambiguity"] = float(any(token in text for token in HIGH_AMBIGUITY_KEYWORDS))
 
     strong_pos = sum(1 for token in STRONG_POS if token in text)
     weak_pos = sum(1 for token in WEAK_POS if token in text)

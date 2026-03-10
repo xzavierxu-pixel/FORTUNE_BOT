@@ -7,8 +7,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from rule_baseline.datasets.snapshots import load_snapshots
+from rule_baseline.datasets.splits import compute_train_valid_boundary
+from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import compute_temporal_split, load_domain_features, load_snapshots
 
 INITIAL_BANKROLL = 10_000.0
 TOP_K_RULES = 10
@@ -58,9 +60,9 @@ def load_rules() -> pd.DataFrame:
 
 def prepare_snapshots() -> pd.DataFrame:
     snapshots = load_snapshots(config.SNAPSHOTS_PATH)
-    domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
     snapshots = snapshots.merge(
-        domain_features[["market_id", "domain", "category", "market_type"]],
+        market_annotations[["market_id", "domain", "category", "market_type"]],
         on="market_id",
         how="left",
         suffixes=("", "_domain"),
@@ -238,7 +240,7 @@ def run_backtest(snapshots, rules, cfg):
 def main():
     cfg = BacktestConfig()
     snapshots = prepare_snapshots()
-    _, valid_start = compute_temporal_split(snapshots)
+    _, valid_start = compute_train_valid_boundary(snapshots)
     snapshots = snapshots[snapshots["closedTime"] >= valid_start].copy()
     rules = select_top_rules(load_rules(), cfg)
     equity_df, trades_df = run_backtest(snapshots, rules, cfg)

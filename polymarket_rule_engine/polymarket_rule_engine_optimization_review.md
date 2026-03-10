@@ -115,7 +115,7 @@
 ### 2.2 关键代码
 
 - `rule_baseline/training/train_rules_naive_output_rule.py`
-- `rule_baseline/training/train_snapshot_lgbm_v2.py`
+- `rule_baseline/training/train_snapshot_model.py`
 - `rule_baseline/backtesting/backtest_portfolio_qmodel.py`
 - `rule_baseline/utils/data_processing.py`
 - `rule_baseline/utils/modeling.py`
@@ -299,7 +299,7 @@
    - `rule_score`
 4. 这些规则随后会被:
    - 直接写入 `trading_rules.csv`
-   - 作为模型特征进入 `train_snapshot_lgbm_v2.py`
+- 作为模型特征进入 `train_snapshot_model.py`
    - 作为回测筛选依据进入 `backtest_portfolio_qmodel.py`
 
 影响:
@@ -348,13 +348,13 @@
 
 文件:
 
-- `rule_baseline/training/train_snapshot_lgbm_v2.py`
+- `rule_baseline/training/train_snapshot_model.py`
 - `rule_baseline/analysis/analyze_q_model_calibration.py`
 - `rule_baseline/analysis/analyze_alpha_quadrant.py`
 
 问题点:
 
-1. `train_snapshot_lgbm_v2.py` 会把全量 `df_feat` 导出到 `snapshots_with_predictions.csv`
+1. `train_snapshot_model.py` 会把全量 `df_feat` 导出到 `snapshots_with_predictions.csv`
 2. 校准分析和 alpha 分析都直接读这个全量导出
 3. 因此当前分析报告默认混合了训练数据和验证数据
 
@@ -448,7 +448,7 @@
 
 文件:
 
-- `rule_baseline/training/train_snapshot_lgbm_v2.py`
+- `rule_baseline/training/train_snapshot_model.py`
 - `rule_baseline/utils/modeling.py`
 
 问题点:

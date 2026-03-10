@@ -12,7 +12,7 @@ from urllib3.util.retry import Retry
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.utils import config
-from rule_baseline.utils.raw_batches import (
+from rule_baseline.datasets.raw_market_batches import (
     infer_latest_closed_time,
     rebuild_canonical_merged,
     write_batch,

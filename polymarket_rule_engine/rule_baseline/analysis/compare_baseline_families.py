@@ -11,20 +11,15 @@ from sklearn.metrics import roc_auc_score
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.backtesting.backtest_portfolio_qmodel import BacktestConfig, match_rules, select_top_rules, trade_pnl
+from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
+from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, build_rule_bins, load_raw_markets, load_research_snapshots
+from rule_baseline.datasets.splits import TemporalSplit, assign_dataset_split, build_walk_forward_splits, compute_temporal_split
+from rule_baseline.domain_extractor.market_annotations import load_market_annotations
+from rule_baseline.features import build_market_feature_cache, preprocess_features
+from rule_baseline.models import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
 from rule_baseline.training.train_rules_naive_output_rule import build_rules
-from rule_baseline.training.train_snapshot_lgbm_v2 import DROP_COLS
+from rule_baseline.training.train_snapshot_model import DROP_COLS
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import build_market_feature_cache, load_domain_features, load_raw_markets, preprocess_features
-from rule_baseline.utils.modeling import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
-from rule_baseline.utils.research_context import (
-    TemporalSplit,
-    assign_dataset_split,
-    build_artifact_paths,
-    build_walk_forward_splits,
-    compute_temporal_split,
-    write_json,
-)
-from rule_baseline.utils.research_data import apply_earliest_market_dedup, build_rule_bins, load_research_snapshots
 
 TOP_K = 50
 DEFAULT_STAKE_FRACTION = 0.01
@@ -435,8 +430,8 @@ def main() -> None:
     raw_snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
     raw_snapshots = raw_snapshots[raw_snapshots["quality_pass"]].copy()
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
-    market_feature_cache = build_market_feature_cache(raw_markets, domain_features)
+    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
 
     latest_split = compute_temporal_split(raw_snapshots)
     walk_forward_splits = build_walk_forward_splits(

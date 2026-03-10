@@ -12,12 +12,14 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
+from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, load_raw_markets, load_research_snapshots
+from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
+from rule_baseline.domain_extractor.market_annotations import load_market_annotations
+from rule_baseline.features import build_market_feature_cache, preprocess_features
+from rule_baseline.models import predict_probabilities, predict_regression
 from rule_baseline.utils import config
-from rule_baseline.utils.data_processing import build_market_feature_cache, load_domain_features, load_raw_markets, preprocess_features
-from rule_baseline.utils.modeling import predict_probabilities, predict_regression
-from rule_baseline.utils.raw_batches import rebuild_canonical_merged
-from rule_baseline.utils.research_context import assign_dataset_split, build_artifact_paths, compute_temporal_split, write_json
-from rule_baseline.utils.research_data import apply_earliest_market_dedup, load_research_snapshots
+from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
 INITIAL_BANKROLL = 10_000.0
 TOP_K_RULES = 100
@@ -596,8 +598,8 @@ def main() -> None:
         raise RuntimeError("No strict test-period snapshots available.")
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    domain_features = load_domain_features(config.MARKET_DOMAIN_FEATURES_PATH)
-    market_feature_cache = build_market_feature_cache(raw_markets, domain_features)
+    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
     rules = select_top_rules(load_rules(artifact_paths.rules_path), cfg)
     payload = load_model_payload(artifact_paths.model_path)
 

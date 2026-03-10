@@ -8,9 +8,10 @@ import numpy as np
 import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+from rule_baseline.datasets.artifacts import build_artifact_paths
+from rule_baseline.datasets.snapshots import load_research_snapshots
+from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
 from rule_baseline.utils import config
-from rule_baseline.utils.research_context import assign_dataset_split, build_artifact_paths, compute_temporal_split
-from rule_baseline.utils.research_data import load_research_snapshots
 
 PRICE_MIN = 0.05
 PRICE_MAX = 0.95

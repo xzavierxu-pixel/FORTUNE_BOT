@@ -86,6 +86,7 @@ RAW_MARKET_QUARANTINE_PATH = INTERMEDIATE_DIR / "raw_market_quarantine.csv"
 DOMAIN_DIR = DATA_DIR / "domain"
 MARKET_DOMAIN_FEATURES_PATH = DOMAIN_DIR / "market_domain_features.csv"
 DOMAIN_SUMMARY_PATH = DOMAIN_DIR / "domain_summary.csv"
+OTHER_OUTCOME_PATTERNS_BY_URL_PATH = DOMAIN_DIR / "other_outcome_patterns_by_url.csv"
 
 NAIVE_RULES_DIR = DATA_DIR / "naive_rules"
 EDGE_DIR = DATA_DIR / "edge"
