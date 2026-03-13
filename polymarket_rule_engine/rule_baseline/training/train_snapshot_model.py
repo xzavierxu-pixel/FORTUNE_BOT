@@ -26,6 +26,8 @@ DROP_COLS = {
     "snapshot_time",
     "scheduled_end",
     "snapshot_date",
+    "snapshot_target_ts",
+    "selected_quote_ts",
     "question",
     "description",
     "source_url",

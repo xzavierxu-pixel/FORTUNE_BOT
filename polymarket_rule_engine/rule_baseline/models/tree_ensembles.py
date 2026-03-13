@@ -1,26 +1,62 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
+from catboost import CatBoostClassifier, CatBoostRegressor
+from lightgbm import LGBMClassifier, LGBMRegressor
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import (
-    ExtraTreesClassifier,
-    ExtraTreesRegressor,
-    GradientBoostingClassifier,
-    GradientBoostingRegressor,
-    HistGradientBoostingClassifier,
-    HistGradientBoostingRegressor,
-    RandomForestClassifier,
-    RandomForestRegressor,
-    VotingClassifier,
-    VotingRegressor,
-)
+from sklearn.ensemble import VotingClassifier, VotingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.isotonic import IsotonicRegression
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
+from xgboost import XGBClassifier, XGBRegressor
+
+SEMANTIC_CATEGORICAL_FEATURES = {
+    "domain",
+    "category",
+    "category_raw",
+    "category_parsed",
+    "category_override_flag",
+    "market_type",
+    "leaf_id",
+    "direction",
+    "group_key",
+    "groupItemTitle_market",
+    "gameId_market",
+    "has_line",
+    "has_number",
+    "has_year",
+    "has_dollar",
+    "has_date",
+    "starts_will",
+    "starts_can",
+    "has_by",
+    "has_above_below",
+    "has_or",
+    "has_and",
+    "is_player_prop",
+    "is_team_total",
+    "is_finance_threshold",
+    "is_high_ambiguity",
+    "cat_sports",
+    "cat_crypto",
+    "cat_politics",
+    "cat_world",
+    "cat_tech",
+    "cat_entertainment",
+    "dur_very_short",
+    "dur_short",
+    "dur_medium",
+    "dur_long",
+    "sub_domain_market",
+    "source_url_market",
+    "outcome_pattern_market",
+}
 
 
 def build_preprocessor(numeric_columns: list[str], categorical_columns: list[str]) -> ColumnTransformer:
@@ -46,89 +82,89 @@ def build_preprocessor(numeric_columns: list[str], categorical_columns: list[str
 
 
 def build_ensemble_classifier() -> VotingClassifier:
-    gb = GradientBoostingClassifier(
-        n_estimators=800,
-        max_depth=5,
-        learning_rate=0.02,
-        min_samples_split=30,
-        min_samples_leaf=15,
+    xgb = XGBClassifier(
+        n_estimators=500,
+        max_depth=6,
+        learning_rate=0.03,
         subsample=0.8,
-        max_features="sqrt",
-        random_state=42,
-    )
-    rf = RandomForestClassifier(
-        n_estimators=800,
-        max_depth=12,
-        min_samples_split=10,
-        min_samples_leaf=5,
-        max_features="sqrt",
-        class_weight="balanced_subsample",
+        colsample_bytree=0.8,
+        reg_lambda=2.0,
+        min_child_weight=5,
+        objective="binary:logistic",
+        eval_metric="logloss",
         random_state=42,
         n_jobs=-1,
     )
-    et = ExtraTreesClassifier(
-        n_estimators=800,
-        max_depth=12,
-        min_samples_split=10,
-        min_samples_leaf=5,
-        class_weight="balanced_subsample",
+    lgbm = LGBMClassifier(
+        n_estimators=500,
+        learning_rate=0.03,
+        num_leaves=63,
+        max_depth=-1,
+        min_child_samples=25,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_lambda=2.0,
+        objective="binary",
         random_state=42,
         n_jobs=-1,
     )
-    hgb = HistGradientBoostingClassifier(
-        max_iter=600,
-        max_depth=7,
-        learning_rate=0.025,
-        min_samples_leaf=25,
-        l2_regularization=0.15,
+    cat = CatBoostClassifier(
+        iterations=500,
+        depth=6,
+        learning_rate=0.03,
+        l2_leaf_reg=5.0,
+        loss_function="Logloss",
+        eval_metric="Logloss",
         random_state=42,
+        verbose=False,
+        allow_writing_files=False,
     )
     return VotingClassifier(
-        estimators=[("gb", gb), ("rf", rf), ("et", et), ("hgb", hgb)],
+        estimators=[("xgb", xgb), ("lgbm", lgbm), ("cat", cat)],
         voting="soft",
-        weights=[1.2, 1.0, 1.0, 1.1],
+        weights=[1.0, 1.1, 1.0],
     )
 
 
 def build_ensemble_regressor() -> VotingRegressor:
-    gb = GradientBoostingRegressor(
+    xgb = XGBRegressor(
         n_estimators=500,
-        max_depth=4,
+        max_depth=6,
         learning_rate=0.03,
-        min_samples_split=30,
-        min_samples_leaf=15,
         subsample=0.8,
-        max_features="sqrt",
-        random_state=42,
-    )
-    rf = RandomForestRegressor(
-        n_estimators=500,
-        max_depth=12,
-        min_samples_split=10,
-        min_samples_leaf=5,
-        max_features="sqrt",
+        colsample_bytree=0.8,
+        reg_lambda=2.0,
+        min_child_weight=5,
+        objective="reg:squarederror",
         random_state=42,
         n_jobs=-1,
     )
-    et = ExtraTreesRegressor(
+    lgbm = LGBMRegressor(
         n_estimators=500,
-        max_depth=12,
-        min_samples_split=10,
-        min_samples_leaf=5,
-        random_state=42,
-        n_jobs=-1,
-    )
-    hgb = HistGradientBoostingRegressor(
-        max_iter=400,
-        max_depth=7,
         learning_rate=0.03,
-        min_samples_leaf=25,
-        l2_regularization=0.15,
+        num_leaves=63,
+        max_depth=-1,
+        min_child_samples=25,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_lambda=2.0,
+        objective="regression",
         random_state=42,
+        n_jobs=-1,
+    )
+    cat = CatBoostRegressor(
+        iterations=500,
+        depth=6,
+        learning_rate=0.03,
+        l2_leaf_reg=5.0,
+        loss_function="RMSE",
+        random_state=42,
+        verbose=False,
+        allow_writing_files=False,
     )
     return VotingRegressor(
-        estimators=[("gb", gb), ("rf", rf), ("et", et), ("hgb", hgb)],
-        weights=[1.0, 1.0, 1.0, 1.0],
+        estimators=[("xgb", xgb), ("lgbm", lgbm), ("cat", cat)],
+        weights=[1.0, 1.1, 1.0],
     )
 
 
@@ -136,6 +172,10 @@ def infer_feature_types(df: pd.DataFrame, feature_columns: list[str]) -> tuple[l
     numeric_columns: list[str] = []
     categorical_columns: list[str] = []
     for column in feature_columns:
+        if column in SEMANTIC_CATEGORICAL_FEATURES:
+            categorical_columns.append(column)
+            continue
+
         dtype = df[column].dtype
         if (
             pd.api.types.is_categorical_dtype(dtype)
@@ -147,6 +187,19 @@ def infer_feature_types(df: pd.DataFrame, feature_columns: list[str]) -> tuple[l
         else:
             numeric_columns.append(column)
     return numeric_columns, categorical_columns
+
+
+def coerce_feature_frame(
+    df: pd.DataFrame,
+    numeric_columns: list[str],
+    categorical_columns: list[str],
+) -> pd.DataFrame:
+    out = df.copy()
+    for column in numeric_columns:
+        out[column] = pd.to_numeric(out[column], errors="coerce")
+    for column in categorical_columns:
+        out[column] = out[column].astype("string").fillna("UNKNOWN").astype(object)
+    return out
 
 
 def fit_probability_calibrator(raw_valid: np.ndarray, y_valid: np.ndarray, method: str):
@@ -211,8 +264,8 @@ def fit_model_payload(
 
     numeric_columns, categorical_columns = infer_feature_types(df_train, feature_columns)
     preprocessor = build_preprocessor(numeric_columns, categorical_columns)
-
-    X_train = preprocessor.fit_transform(df_train[feature_columns])
+    train_features = coerce_feature_frame(df_train[feature_columns], numeric_columns, categorical_columns)
+    X_train = preprocessor.fit_transform(train_features)
     y_train = df_train[target_column].astype(int).values
 
     calibrator = None
@@ -230,9 +283,16 @@ def fit_model_payload(
 
     if calibration_mode in {"valid_isotonic", "valid_sigmoid", "domain_valid_isotonic", "horizon_valid_isotonic"}:
         if not df_valid.empty and df_valid[target_column].nunique() > 1:
-            X_valid = preprocessor.transform(df_valid[feature_columns])
+            valid_features = coerce_feature_frame(df_valid[feature_columns], numeric_columns, categorical_columns)
+            X_valid = preprocessor.transform(valid_features)
             y_valid = df_valid[target_column].astype(int).values
-            raw_valid = model.predict_proba(X_valid)[:, 1]
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="X does not have valid feature names, but LGBMClassifier was fitted with feature names",
+                    category=UserWarning,
+                )
+                raw_valid = model.predict_proba(X_valid)[:, 1]
             if calibration_mode in {"valid_isotonic", "valid_sigmoid"}:
                 method = "isotonic" if calibration_mode == "valid_isotonic" else "sigmoid"
                 calibrator = fit_probability_calibrator(raw_valid, y_valid, method)
@@ -265,8 +325,8 @@ def fit_regression_payload(
 ) -> dict:
     numeric_columns, categorical_columns = infer_feature_types(df_train, feature_columns)
     preprocessor = build_preprocessor(numeric_columns, categorical_columns)
-
-    X_train = preprocessor.fit_transform(df_train[feature_columns])
+    train_features = coerce_feature_frame(df_train[feature_columns], numeric_columns, categorical_columns)
+    X_train = preprocessor.fit_transform(train_features)
     y_train = df_train[target_column].astype(float).values
 
     model = build_ensemble_regressor()
@@ -284,8 +344,15 @@ def fit_regression_payload(
 
 def predict_probabilities(payload: dict, df_feat: pd.DataFrame) -> np.ndarray:
     feature_columns = payload["feature_columns"]
-    X = payload["preprocessor"].transform(df_feat[feature_columns])
-    raw_prob = payload["model"].predict_proba(X)[:, 1]
+    feature_frame = coerce_feature_frame(df_feat[feature_columns], payload["numeric_columns"], payload["categorical_columns"])
+    X = payload["preprocessor"].transform(feature_frame)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="X does not have valid feature names, but LGBMClassifier was fitted with feature names",
+            category=UserWarning,
+        )
+        raw_prob = payload["model"].predict_proba(X)[:, 1]
     calibrator = payload.get("calibrator")
     calibrator_meta = payload.get("calibrator_meta") or {}
     if calibrator is not None and calibrator_meta.get("type") == "grouped":
@@ -308,5 +375,12 @@ def predict_probabilities(payload: dict, df_feat: pd.DataFrame) -> np.ndarray:
 
 def predict_regression(payload: dict, df_feat: pd.DataFrame) -> np.ndarray:
     feature_columns = payload["feature_columns"]
-    X = payload["preprocessor"].transform(df_feat[feature_columns])
-    return payload["model"].predict(X)
+    feature_frame = coerce_feature_frame(df_feat[feature_columns], payload["numeric_columns"], payload["categorical_columns"])
+    X = payload["preprocessor"].transform(feature_frame)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="X does not have valid feature names, but LGBMRegressor was fitted with feature names",
+            category=UserWarning,
+        )
+        return payload["model"].predict(X)
