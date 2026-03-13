@@ -128,13 +128,17 @@ def derive_domain_whitelist(rules: pd.DataFrame) -> set[str] | None:
         return None
 
     grouped = (
-        rules.groupby("domain", observed=False)
-        .apply(
-            lambda frame: np.average(
-                frame["edge_lower_bound_valid"].fillna(0.0),
-                weights=frame["n_valid"].clip(lower=1).fillna(1.0),
-            )
+        rules.assign(
+            weighted_edge_component=rules["edge_lower_bound_valid"].fillna(0.0)
+            * rules["n_valid"].clip(lower=1).fillna(1.0)
         )
+        .groupby("domain", observed=False)
+        .agg(
+            weighted_edge_sum=("weighted_edge_component", "sum"),
+            weight_sum=("n_valid", lambda series: series.clip(lower=1).fillna(1.0).sum()),
+        )
+        .assign(weighted_edge_lower=lambda frame: frame["weighted_edge_sum"] / frame["weight_sum"].clip(lower=1.0))
+        ["weighted_edge_lower"]
         .rename("weighted_edge_lower")
         .reset_index()
     )
@@ -227,10 +231,6 @@ def predict_candidates(candidates: pd.DataFrame, market_feature_cache: pd.DataFr
     out = candidates.copy()
     target_mode = payload.get("target_mode", "q")
     supplemental_cols = [
-        "volume",
-        "liquidity",
-        "volume24hr",
-        "volume1wk",
         "source_host",
         "selected_quote_offset_sec",
         "snapshot_quality_score",
@@ -387,88 +387,30 @@ def trade_pnl(direction: int, stake: float, price_yes: float, y: int, fee_rate: 
 
 
 def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.DataFrame, pd.DataFrame]:
-    bankroll = float(cfg.initial_bankroll)
+    cash = float(cfg.initial_bankroll)
     equity_records: list[dict] = []
     trade_records: list[dict] = []
     rule_state: dict = {}
+    pending_by_settlement: dict = {}
 
-    all_dates = sorted(candidates["snapshot_date"].unique()) if not candidates.empty else []
+    if candidates.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    decision_dates = pd.to_datetime(candidates["snapshot_date"], errors="coerce").dt.date
+    settlement_dates = pd.to_datetime(candidates["closedTime"], utc=True, errors="coerce").dt.date
+    candidates = candidates.copy()
+    candidates["snapshot_date"] = decision_dates
+    candidates["settlement_date"] = settlement_dates
+    all_dates = sorted(set(decision_dates.dropna().unique()) | set(settlement_dates.dropna().unique()))
     for current_date in all_dates:
-        day_candidates = candidates[candidates["snapshot_date"] == current_date].copy()
-        if day_candidates.empty:
-            equity_records.append({"date": current_date, "bankroll": bankroll, "daily_pnl": 0.0, "num_trades": 0})
-            continue
+        settled_today = pending_by_settlement.pop(current_date, [])
+        realized_pnl = 0.0
+        for settled in settled_today:
+            cash += float(settled["stake"]) + float(settled["pnl"])
+            realized_pnl += float(settled["pnl"])
 
-        active_rows = []
-        for _, row in day_candidates.iterrows():
-            rule_key = (row["rule_group_key"], int(row["rule_leaf_id"]))
-            state = rule_state.get(rule_key)
-            if state and state.get("kill_until") and current_date < state["kill_until"]:
-                continue
-            active_rows.append(row)
-
-        if not active_rows:
-            equity_records.append({"date": current_date, "bankroll": bankroll, "daily_pnl": 0.0, "num_trades": 0})
-            continue
-
-        day_candidates = pd.DataFrame(active_rows).sort_values("growth_score", ascending=False).head(cfg.max_daily_trades)
-        bankroll_start = bankroll
-        remaining_budget = cfg.max_daily_exposure_f * bankroll_start
-        daily_pnl = 0.0
-        num_trades = 0
-        exposure_by_domain: dict[str, float] = {}
-        exposure_by_category: dict[str, float] = {}
-        exposure_by_cluster: dict[str, float] = {}
-        exposure_by_settlement: dict[str, float] = {}
-        exposure_by_side: dict[str, float] = {}
-
-        for _, row in day_candidates.iterrows():
-            if remaining_budget <= 0:
-                break
-
-            direction_label = "YES" if int(row["direction_model"]) > 0 else "NO"
-            settlement_ts = pd.to_datetime(row.get("closedTime"), utc=True, errors="coerce")
-            settlement_key = settlement_ts.date().isoformat() if pd.notna(settlement_ts) else "UNKNOWN"
-            cluster_key = f"{row.get('source_host', 'UNKNOWN')}|{row['category']}|{settlement_key}"
-            liquidity_cap = float("inf")
-            if np.isfinite(float(row.get("liquidity", np.nan))) and float(row.get("liquidity", 0.0)) > 0:
-                liquidity_cap = cfg.max_trade_liquidity_f * float(row["liquidity"])
-            volume_cap = float("inf")
-            if np.isfinite(float(row.get("volume24hr", np.nan))) and float(row.get("volume24hr", 0.0)) > 0:
-                volume_cap = cfg.max_trade_volume24_f * float(row["volume24hr"])
-
-            domain_room = cfg.max_domain_exposure_f * bankroll_start - exposure_by_domain.get(str(row["domain"]), 0.0)
-            category_room = cfg.max_category_exposure_f * bankroll_start - exposure_by_category.get(str(row["category"]), 0.0)
-            cluster_room = cfg.max_cluster_exposure_f * bankroll_start - exposure_by_cluster.get(cluster_key, 0.0)
-            settlement_room = cfg.max_settlement_exposure_f * bankroll_start - exposure_by_settlement.get(settlement_key, 0.0)
-            side_room = cfg.max_side_exposure_f * bankroll_start - exposure_by_side.get(direction_label, 0.0)
-
-            stake = min(
-                float(row["f_exec"]) * bankroll_start,
-                remaining_budget,
-                liquidity_cap,
-                volume_cap,
-                domain_room,
-                category_room,
-                cluster_room,
-                settlement_room,
-                side_room,
-            )
-            if stake <= 0:
-                continue
-
-            pnl = trade_pnl(int(row["direction_model"]), stake, float(row["price"]), int(row["y"]), cfg.fee_rate)
-            remaining_budget -= stake
-            exposure_by_domain[str(row["domain"])] = exposure_by_domain.get(str(row["domain"]), 0.0) + stake
-            exposure_by_category[str(row["category"])] = exposure_by_category.get(str(row["category"]), 0.0) + stake
-            exposure_by_cluster[cluster_key] = exposure_by_cluster.get(cluster_key, 0.0) + stake
-            exposure_by_settlement[settlement_key] = exposure_by_settlement.get(settlement_key, 0.0) + stake
-            exposure_by_side[direction_label] = exposure_by_side.get(direction_label, 0.0) + stake
-            daily_pnl += pnl
-            num_trades += 1
-
-            pnl_pct = pnl / stake if stake else 0.0
-            rule_key = (row["rule_group_key"], int(row["rule_leaf_id"]))
+            pnl_pct = float(settled["pnl"]) / float(settled["stake"]) if float(settled["stake"]) else 0.0
+            rule_key = (settled["rule_group_key"], int(settled["rule_leaf_id"]))
             state = rule_state.setdefault(rule_key, {"returns": [], "kill_until": None})
             state["returns"].append(pnl_pct)
             if len(state["returns"]) > cfg.rule_rolling_window_trades:
@@ -481,9 +423,97 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
                     state["kill_until"] = current_date + timedelta(days=cfg.rule_cooldown_days)
                     state["returns"] = []
 
+        day_candidates = candidates[candidates["snapshot_date"] == current_date].copy()
+        open_positions = [item for items in pending_by_settlement.values() for item in items]
+        equity_start = cash + sum(float(item["stake"]) for item in open_positions)
+        if day_candidates.empty:
+            equity_records.append({"date": current_date, "bankroll": equity_start, "daily_pnl": realized_pnl, "num_trades": 0})
+            continue
+
+        active_rows = []
+        for _, row in day_candidates.iterrows():
+            rule_key = (row["rule_group_key"], int(row["rule_leaf_id"]))
+            state = rule_state.get(rule_key)
+            if state and state.get("kill_until") and current_date < state["kill_until"]:
+                continue
+            active_rows.append(row)
+
+        if not active_rows:
+            equity_records.append({"date": current_date, "bankroll": equity_start, "daily_pnl": realized_pnl, "num_trades": 0})
+            continue
+
+        day_candidates = pd.DataFrame(active_rows).sort_values("growth_score", ascending=False).head(cfg.max_daily_trades)
+        bankroll_start = equity_start
+        remaining_budget = min(cfg.max_daily_exposure_f * bankroll_start, cash)
+        daily_pnl = realized_pnl
+        num_trades = 0
+        exposure_by_domain: dict[str, float] = {}
+        exposure_by_category: dict[str, float] = {}
+        exposure_by_cluster: dict[str, float] = {}
+        exposure_by_settlement: dict[str, float] = {}
+        exposure_by_side: dict[str, float] = {}
+        for pending in open_positions:
+            exposure_by_domain[str(pending["domain"])] = exposure_by_domain.get(str(pending["domain"]), 0.0) + float(pending["stake"])
+            exposure_by_category[str(pending["category"])] = exposure_by_category.get(str(pending["category"]), 0.0) + float(pending["stake"])
+            exposure_by_cluster[str(pending["cluster_key"])] = exposure_by_cluster.get(str(pending["cluster_key"]), 0.0) + float(pending["stake"])
+            exposure_by_settlement[str(pending["settlement_key"])] = exposure_by_settlement.get(str(pending["settlement_key"]), 0.0) + float(pending["stake"])
+            exposure_by_side[str(pending["direction_label"])] = exposure_by_side.get(str(pending["direction_label"]), 0.0) + float(pending["stake"])
+
+        for _, row in day_candidates.iterrows():
+            if remaining_budget <= 0:
+                break
+
+            direction_label = "YES" if int(row["direction_model"]) > 0 else "NO"
+            settlement_ts = pd.to_datetime(row.get("closedTime"), utc=True, errors="coerce")
+            settlement_key = settlement_ts.date().isoformat() if pd.notna(settlement_ts) else "UNKNOWN"
+            settlement_date = settlement_ts.date() if pd.notna(settlement_ts) else current_date
+            cluster_key = f"{row.get('source_host', 'UNKNOWN')}|{row['category']}|{settlement_key}"
+            domain_room = cfg.max_domain_exposure_f * bankroll_start - exposure_by_domain.get(str(row["domain"]), 0.0)
+            category_room = cfg.max_category_exposure_f * bankroll_start - exposure_by_category.get(str(row["category"]), 0.0)
+            cluster_room = cfg.max_cluster_exposure_f * bankroll_start - exposure_by_cluster.get(cluster_key, 0.0)
+            settlement_room = cfg.max_settlement_exposure_f * bankroll_start - exposure_by_settlement.get(settlement_key, 0.0)
+            side_room = cfg.max_side_exposure_f * bankroll_start - exposure_by_side.get(direction_label, 0.0)
+
+            stake = min(
+                float(row["f_exec"]) * bankroll_start,
+                remaining_budget,
+                domain_room,
+                category_room,
+                cluster_room,
+                settlement_room,
+                side_room,
+            )
+            if stake <= 0:
+                continue
+
+            pnl = trade_pnl(int(row["direction_model"]), stake, float(row["price"]), int(row["y"]), cfg.fee_rate)
+            cash -= stake
+            remaining_budget -= stake
+            exposure_by_domain[str(row["domain"])] = exposure_by_domain.get(str(row["domain"]), 0.0) + stake
+            exposure_by_category[str(row["category"])] = exposure_by_category.get(str(row["category"]), 0.0) + stake
+            exposure_by_cluster[cluster_key] = exposure_by_cluster.get(cluster_key, 0.0) + stake
+            exposure_by_settlement[settlement_key] = exposure_by_settlement.get(settlement_key, 0.0) + stake
+            exposure_by_side[direction_label] = exposure_by_side.get(direction_label, 0.0) + stake
+            num_trades += 1
+
+            pnl_pct = pnl / stake if stake else 0.0
+            pending_trade = {
+                "stake": float(stake),
+                "pnl": float(pnl),
+                "domain": str(row["domain"]),
+                "category": str(row["category"]),
+                "cluster_key": cluster_key,
+                "settlement_key": settlement_key,
+                "direction_label": direction_label,
+                "rule_group_key": row["rule_group_key"],
+                "rule_leaf_id": int(row["rule_leaf_id"]),
+            }
+            pending_by_settlement.setdefault(settlement_date, []).append(pending_trade)
+
             trade_records.append(
                 {
                     "date": current_date,
+                    "settlement_date": settlement_date,
                     "snapshot_time": row["snapshot_time"],
                     "market_id": row["market_id"],
                     "domain": row["domain"],
@@ -510,9 +540,9 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
                 }
             )
 
-        bankroll += daily_pnl
+        ending_equity = cash + sum(float(item["stake"]) for items in pending_by_settlement.values() for item in items)
         equity_records.append(
-            {"date": current_date, "bankroll": bankroll, "daily_pnl": daily_pnl, "num_trades": num_trades}
+            {"date": current_date, "bankroll": ending_equity, "daily_pnl": daily_pnl, "num_trades": num_trades}
         )
 
     return pd.DataFrame(equity_records), pd.DataFrame(trade_records)

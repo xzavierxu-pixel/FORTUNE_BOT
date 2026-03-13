@@ -22,9 +22,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def classify_quadrant(p: np.ndarray, q: np.ndarray, y: np.ndarray, threshold: float = CONTRARIAN_THRESHOLD) -> np.ndarray:
-    is_contrarian = np.abs(q - p) > threshold
-    model_lean_yes = q > 0.5
-    model_correct = (model_lean_yes & (y == 1)) | (~model_lean_yes & (y == 0))
+    signal = q - p
+    is_contrarian = np.abs(signal) > threshold
+    trade_yes = signal > 0
+    model_correct = (trade_yes & (y == 1)) | (~trade_yes & (y == 0))
     return np.where(
         is_contrarian & model_correct,
         "contrarian_correct",
@@ -43,7 +44,7 @@ def compute_quadrant_metrics(df: pd.DataFrame) -> pd.DataFrame:
         if subset.empty:
             continue
 
-        yes_bets = subset["q_pred"] > 0.5
+        yes_bets = subset["q_pred"] > subset["price"]
         signed_edge = np.where(yes_bets, subset["y"] - subset["price"], subset["price"] - subset["y"])
         rows.append(
             {
@@ -58,6 +59,7 @@ def compute_quadrant_metrics(df: pd.DataFrame) -> pd.DataFrame:
                 "brier_market": round(float(((subset["price"] - subset["y"]) ** 2).mean()), 4),
                 "brier_model": round(float(((subset["q_pred"] - subset["y"]) ** 2).mean()), 4),
                 "mean_deviation": round(float(np.abs(subset["q_pred"] - subset["price"]).mean()), 4),
+                "mean_signal": round(float((subset["q_pred"] - subset["price"]).mean()), 4),
             }
         )
     return pd.DataFrame(rows)

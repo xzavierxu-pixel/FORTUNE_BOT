@@ -137,7 +137,12 @@ def infer_feature_types(df: pd.DataFrame, feature_columns: list[str]) -> tuple[l
     categorical_columns: list[str] = []
     for column in feature_columns:
         dtype = df[column].dtype
-        if pd.api.types.is_categorical_dtype(dtype) or pd.api.types.is_object_dtype(dtype) or pd.api.types.is_bool_dtype(dtype):
+        if (
+            pd.api.types.is_categorical_dtype(dtype)
+            or pd.api.types.is_object_dtype(dtype)
+            or pd.api.types.is_string_dtype(dtype)
+            or pd.api.types.is_bool_dtype(dtype)
+        ):
             categorical_columns.append(column)
         else:
             numeric_columns.append(column)
