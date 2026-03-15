@@ -31,24 +31,29 @@ class GammaMarketProvider:
         limit: int = 500,
         max_markets: int = 5000,
         *,
-        order: str = "closedTime",
-        ascending: bool = False,
+        order: str = "endDate",
+        ascending: bool = True,
+        end_date_min: str | None = None,
+        end_date_max: str | None = None,
     ) -> List[Dict[str, Any]]:
         markets: List[Dict[str, Any]] = []
         offset = 0
         while len(markets) < max_markets:
-            params = urllib.parse.urlencode(
-                {
-                    "active": "true",
-                    "closed": "false",
-                    "archived": "false",
-                    "accepting_orders": "true",
-                    "order": order,
-                    "ascending": "true" if ascending else "false",
-                    "limit": str(limit),
-                    "offset": str(offset),
-                }
-            )
+            query: Dict[str, str] = {
+                "active": "true",
+                "closed": "false",
+                "archived": "false",
+                "accepting_orders": "true",
+                "order": order,
+                "ascending": "true" if ascending else "false",
+                "limit": str(limit),
+                "offset": str(offset),
+            }
+            if end_date_min:
+                query["end_date_min"] = end_date_min
+            if end_date_max:
+                query["end_date_max"] = end_date_max
+            params = urllib.parse.urlencode(query)
             url = f"{self.base_url}/markets?{params}"
             request = urllib.request.Request(url, headers={"User-Agent": "PEG/0.3"})
             with urllib.request.urlopen(request, timeout=self.timeout_sec) as resp:

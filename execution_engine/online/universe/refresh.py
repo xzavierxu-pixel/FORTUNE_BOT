@@ -209,11 +209,16 @@ def _write_manifest(path: Path, payload: Dict[str, Any]) -> None:
 
 def refresh_current_universe(cfg: PegConfig, max_markets: int | None = None) -> UniverseRefreshResult:
     provider = GammaMarketProvider(cfg.gamma_base_url, timeout_sec=cfg.clob_request_timeout_sec)
+    now = _utc_now()
+    window_end = now + pd.Timedelta(hours=cfg.online_universe_window_hours)
     raw_markets = provider.fetch_open_markets(
         limit=cfg.rule_engine_page_size,
         max_markets=max_markets or cfg.rule_engine_max_markets,
+        order="endDate",
+        ascending=True,
+        end_date_min=_to_iso(now),
+        end_date_max=_to_iso(window_end),
     )
-    now = _utc_now()
     opened_market_ids = load_open_market_ids(cfg)
 
     rows: List[Dict[str, Any]] = []
