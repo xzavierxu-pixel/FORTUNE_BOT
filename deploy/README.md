@@ -5,40 +5,86 @@
 它不会替代你现在的 Windows 本地开发流程。
 你本地现有的 `.ps1` 脚本保持不变。
 
-## 1. `deploy` 目录里有什么
+## 1. 现在这套真实交易工作流是什么
+
+你现在要走的是 Polymarket 的 proxy wallet 路径，不是直接用 EOA 余额交易。
+
+当前正确流程是：
+
+1. 用浏览器登录 Polymarket，让 proxy wallet 被部署。
+2. 在 Polymarket UI 里抄下 proxy wallet 地址。
+3. 把 `USDC.e` 转到这个 proxy wallet。
+4. 代码里用：
+   - `signature_type=2`
+   - `funder=proxy wallet 地址`
+5. 用你的 MetaMask 私钥做签名。
+6. 执行 `create_or_derive_api_creds()`，拿到 CLOB API 凭证。
+7. 做一次 approve / allowance 更新。
+8. 下一个极小测试单。
+9. 再查 `open orders / trades / balances`。
+10. 验证通过后再启动 execution 的定时工作流。
+
+仓库现在已经按这条路径改好了：
+
+- 默认 `PEG_CLOB_SIGNATURE_TYPE=2`
+- 缺少 `PEG_CLOB_FUNDER` 时，live client 会直接报错
+- 已新增一次性测试脚本：
+  - `execution_engine/app/scripts/manual/proxy_wallet_smoketest.py`
+
+## 2. 你现在这个状态下，还需要存 POL 吗
+
+如果你走的是这条 proxy wallet 路径，一般不需要额外往 Polymarket 里存 `POL` 才能开始这套 API 交易流程。
+
+你现在更关键的是这几件事：
+
+- 确认 `USDC.e` 已经在 Polymarket 的 proxy wallet 里
+- 确认 proxy wallet 地址已经拿到
+- 确认服务器上填的是：
+  - `PEG_CLOB_PRIVATE_KEY`
+  - `PEG_CLOB_FUNDER`
+  - `PEG_CLOB_SIGNATURE_TYPE=2`
+- 先跑一次 smoke test，把 API creds 和 allowance 跑通
+
+只有在你自己额外做需要链上 gas 的 EOA 操作时，才需要单独考虑 `POL`。
+
+## 3. 你现在还没配完的关键配置
+
+如果你已经把 USDC 存进 Polymarket，但还没跑通 API，下列值通常还没配完整：
+
+- `PEG_CLOB_PRIVATE_KEY`
+  - 这是你的 MetaMask / 浏览器钱包私钥
+  - 不是 API key，但必须有
+- `PEG_CLOB_FUNDER`
+  - 这里必须填 Polymarket UI 里看到的 proxy wallet 地址
+- `PEG_CLOB_SIGNATURE_TYPE=2`
+  - proxy wallet 路径必须是 2
+- `PEG_CLOB_API_KEY`
+- `PEG_CLOB_API_SECRET`
+- `PEG_CLOB_API_PASSPHRASE`
+
+上面最后这 3 个才是 CLOB API 凭证。
+
+如果你现在还没生成过它们，那是正常的。
+你应该先跑 smoke test，由脚本调用 `create_or_derive_api_creds()` 生成或取回它们，再把结果填回环境变量文件。
+
+## 4. deploy 目录里有什么
 
 - `deploy/env/fortune_bot.env.example`
-  - Ubuntu 环境变量模板。
+  - Ubuntu 环境变量模板
 - `deploy/systemd/*.service`
-  - 定时任务对应的 `systemd` service。
+  - 定时任务对应的 `systemd` service
 - `deploy/systemd/*.timer`
-  - 定时调度对应的 `systemd` timer。
+  - 定时调度对应的 `systemd` timer
 - `deploy/monitor/job_status.py`
-  - 写入任务心跳和成功/失败状态文件。
+  - 写入任务心跳和成功/失败状态文件
 - `deploy/monitor/check_jobs.py`
-  - 检查 timer 和心跳状态，并通过 SMTP 发邮件告警。
+  - 检查 timer 和心跳状态，并通过 SMTP 发邮件告警
 - `execution_engine/app/scripts/linux/*.sh`
-  - Linux 专用的 execution 工作流启动脚本。
+  - Linux 专用的 execution 工作流启动脚本
+- `execution_engine/app/scripts/manual/proxy_wallet_smoketest.py`
+  - proxy wallet 一次性联调脚本
 
-## 2. 当前 Ubuntu 运行形态
-
-当前 Ubuntu 部署分成两部分：
-
-- 由 `systemd` 管理的定时任务
-  - `refresh-universe`
-  - `hourly-cycle`
-  - `label-analysis`
-  - `healthcheck`
-- 长驻的市场流进程
-  - 目前用 `tmux` 手动启动
-  - 这个仓库里暂时还没有单独的 `systemd` service
-
-如果你要把 execution 整个跑起来，需要同时启动：
-
-- `systemd` timers
-- 长驻的 `stream-market-data`
-
-## 3. 服务器依赖
+## 5. 服务器依赖
 
 你已经装好了：
 
@@ -47,7 +93,7 @@
 - `tmux`
 - `htop`
 
-还建议补装这些：
+还建议补装：
 
 ```bash
 sudo apt update
@@ -60,7 +106,7 @@ sudo apt install python3-venv build-essential -y
 sudo apt install libgomp1 -y
 ```
 
-## 4. 约定的目录
+## 6. 约定目录
 
 这套部署默认使用这些 Linux 路径：
 
@@ -70,7 +116,7 @@ sudo apt install libgomp1 -y
 - execution 数据目录：`/var/lib/fortune_bot/execution_engine_data`
 - 环境变量文件：`/etc/fortune-bot/fortune_bot.env`
 
-先创建这些目录：
+创建目录：
 
 ```bash
 sudo mkdir -p /opt
@@ -81,25 +127,25 @@ sudo mkdir -p /var/lib/fortune_bot/execution_engine_data/summary
 sudo mkdir -p /etc/fortune-bot
 ```
 
-## 5. 把仓库放到服务器上
+## 7. 代码放到服务器
 
 如果 Ubuntu 上还没有代码：
 
 ```bash
 cd /opt
-sudo git clone <your-repo-url> fortune_bot
+sudo git clone https://github.com/xzavierxu-pixel/FORTUNE_BOT.git fortune_bot
 sudo chown -R "$USER":"$USER" /opt/fortune_bot
 cd /opt/fortune_bot
 ```
 
-如果代码已经在服务器上，只需要拉最新：
+如果代码已经在服务器上：
 
 ```bash
 cd /opt/fortune_bot
 git pull
 ```
 
-## 6. 创建 Ubuntu 环境变量文件
+## 8. 环境变量文件
 
 先复制模板：
 
@@ -114,7 +160,7 @@ cp deploy/env/fortune_bot.env.example /tmp/fortune_bot.env
 nano /tmp/fortune_bot.env
 ```
 
-至少要把这些变量填对：
+至少先填这些：
 
 - `FORTUNE_BOT_REPO_ROOT=/opt/fortune_bot`
 - `FORTUNE_BOT_VENV=/opt/fortune_bot/.venv-execution`
@@ -126,10 +172,12 @@ nano /tmp/fortune_bot.env
 - `PEG_BALANCES_PATH=/var/lib/fortune_bot/execution_engine_data/shared/balances.json`
 - `PEG_DRY_RUN=0`
 - `PEG_CLOB_ENABLED=1`
-- `PEG_CLOB_PRIVATE_KEY=...`
-- `PEG_CLOB_API_KEY=...`
-- `PEG_CLOB_API_SECRET=...`
-- `PEG_CLOB_API_PASSPHRASE=...`
+- `PEG_CLOB_PRIVATE_KEY=你的MetaMask私钥`
+- `PEG_CLOB_FUNDER=你的Polymarket proxy wallet地址`
+- `PEG_CLOB_SIGNATURE_TYPE=2`
+- `PEG_CLOB_API_KEY=先留空或临时占位`
+- `PEG_CLOB_API_SECRET=先留空或临时占位`
+- `PEG_CLOB_API_PASSPHRASE=先留空或临时占位`
 - `SMTP_HOST=smtp.qq.com`
 - `SMTP_PORT=465`
 - `SMTP_USE_SSL=1`
@@ -145,15 +193,20 @@ sudo mv /tmp/fortune_bot.env /etc/fortune-bot/fortune_bot.env
 sudo chmod 600 /etc/fortune-bot/fortune_bot.env
 ```
 
-## 7. 准备 `balances.json`
+## 9. `balances.json` 是什么
 
-当前 execution 流程依赖余额文件。
-
-文件路径是：
+当前 execution 还会读一个本地余额文件：
 
 - `/var/lib/fortune_bot/execution_engine_data/shared/balances.json`
 
-示例内容：
+这个文件现在更适合被当成：
+
+- 本地策略资金上限
+- execution 的可用资金上限
+
+它不是 Polymarket 真实余额的自动同步结果。
+
+示例：
 
 ```json
 {
@@ -163,7 +216,7 @@ sudo chmod 600 /etc/fortune-bot/fortune_bot.env
 }
 ```
 
-可以直接这样创建：
+创建：
 
 ```bash
 cat > /var/lib/fortune_bot/execution_engine_data/shared/balances.json <<'EOF'
@@ -175,9 +228,9 @@ cat > /var/lib/fortune_bot/execution_engine_data/shared/balances.json <<'EOF'
 EOF
 ```
 
-这里的金额要按你真实希望给 execution 使用的本金来填写。
+如果你真实存进 Polymarket 的资金大于 100，但你现在只想让策略先跑 100，这里就写 100。
 
-## 8. 初始化 Python 虚拟环境
+## 10. 初始化 Python 虚拟环境
 
 执行：
 
@@ -186,21 +239,17 @@ cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/bootstrap_venv.sh
 ```
 
-这个脚本会做三件事：
-
-- 创建 `/opt/fortune_bot/.venv-execution`
-- 安装 `execution_engine/requirements-live.txt`
-- 以 editable 模式安装本地 `py-clob-client`
-
-可以这样验证 venv 是否正常：
+验证：
 
 ```bash
 /opt/fortune_bot/.venv-execution/bin/python --version
 ```
 
-## 9. 在启用定时器之前先手动试跑
+## 11. 先跑 proxy wallet smoke test
 
-先把环境变量加载到当前 shell：
+这一步是现在最关键的。
+
+先加载环境变量：
 
 ```bash
 set -a
@@ -208,7 +257,58 @@ source /etc/fortune-bot/fortune_bot.env
 set +a
 ```
 
-然后依次手动执行一次。
+运行一次性测试脚本：
+
+```bash
+cd /opt/fortune_bot
+/opt/fortune_bot/.venv-execution/bin/python execution_engine/app/scripts/manual/proxy_wallet_smoketest.py
+```
+
+这个脚本会做：
+
+1. 用 `signature_type=2 + funder=proxy wallet` 初始化 client
+2. 执行 `create_or_derive_api_creds()`
+3. 查询 approve 前余额和 allowance
+4. 执行 collateral / conditional allowance 更新
+5. 下一个极小测试买单
+6. 查询 `open orders / trades / balances`
+
+脚本默认测试单参数是：
+
+- token：
+  - `83155705733555118569646804738526000527065734405672442364016752623981274522859`
+- 价格：
+  - `0.55`
+- 数量：
+  - `1`
+
+如果你想调小：
+
+```bash
+/opt/fortune_bot/.venv-execution/bin/python execution_engine/app/scripts/manual/proxy_wallet_smoketest.py --size 0.1
+```
+
+## 12. 把脚本打印出来的 API creds 写回环境变量
+
+smoke test 成功后，把脚本输出的这 3 个值抄回 `/etc/fortune-bot/fortune_bot.env`：
+
+- `PEG_CLOB_API_KEY`
+- `PEG_CLOB_API_SECRET`
+- `PEG_CLOB_API_PASSPHRASE`
+
+然后重新加载环境变量：
+
+```bash
+set -a
+source /etc/fortune-bot/fortune_bot.env
+set +a
+```
+
+到这一步，Polymarket API 侧的必要凭证就配齐了。
+
+## 13. 手动试跑 execution 工作流
+
+先手动执行一次。
 
 刷新 universe：
 
@@ -231,20 +331,20 @@ cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/label_analysis_daily.sh --scope all
 ```
 
-这三个命令如果都能跑通，说明定时任务路径基本可用了。
+如果这些都能跑通，再开定时。
 
-## 10. 用 `tmux` 启动市场流
+## 14. 用 `tmux` 启动市场流
 
 当前仓库里还没有 `stream-market-data` 的独立 `systemd` service。
 所以目前先用 `tmux` 跑。
 
-先创建一个 `tmux` 会话：
+创建会话：
 
 ```bash
 tmux new -s fortune-stream
 ```
 
-进入 `tmux` 之后执行：
+进入后执行：
 
 ```bash
 cd /opt/fortune_bot
@@ -254,13 +354,13 @@ set +a
 bash execution_engine/app/scripts/linux/stream_market_data.sh
 ```
 
-退出但不关闭会话：
+退出但不关会话：
 
 ```bash
 Ctrl+b d
 ```
 
-后续常用的 `tmux` 命令：
+常用命令：
 
 ```bash
 tmux ls
@@ -268,9 +368,9 @@ tmux attach -t fortune-stream
 tmux kill-session -t fortune-stream
 ```
 
-## 11. 安装 `systemd` 单元
+## 15. 安装 `systemd` 单元
 
-把 unit 文件复制到系统目录：
+复制 unit 文件：
 
 ```bash
 cd /opt/fortune_bot
@@ -278,13 +378,13 @@ sudo cp deploy/systemd/fortune-bot-*.service /etc/systemd/system/
 sudo cp deploy/systemd/fortune-bot-*.timer /etc/systemd/system/
 ```
 
-重新加载 `systemd`：
+重新加载：
 
 ```bash
 sudo systemctl daemon-reload
 ```
 
-启用这些 timers：
+启用 timers：
 
 ```bash
 sudo systemctl enable --now fortune-bot-refresh-universe.timer
@@ -293,25 +393,13 @@ sudo systemctl enable --now fortune-bot-label-analysis.timer
 sudo systemctl enable --now fortune-bot-healthcheck.timer
 ```
 
-查看 timer 是否启动成功：
+查看：
 
 ```bash
 systemctl list-timers --all | grep fortune-bot
 ```
 
-## 12. 每个 timer 是做什么的
-
-- `fortune-bot-refresh-universe.timer`
-  - 触发 `refresh_universe.sh`
-- `fortune-bot-hourly-cycle.timer`
-  - 触发 `run_hourly_cycle.sh --skip-refresh-universe`
-- `fortune-bot-label-analysis.timer`
-  - 触发 `label_analysis_daily.sh --scope all`
-- `fortune-bot-healthcheck.timer`
-  - 触发 `deploy/monitor/check_jobs.py`
-  - 如果 timer 缺失、任务失败或心跳过期，会通过 SMTP 发邮件
-
-## 13. 查看日志和任务状态
+## 16. 查看日志和任务状态
 
 查看 service 日志：
 
@@ -337,17 +425,9 @@ systemctl status fortune-bot-healthcheck.service
 find /var/lib/fortune_bot/jobs -maxdepth 1 -type f | sort
 ```
 
-这些心跳和状态文件由下面这个脚本写入：
+## 17. 测试 SMTP 邮件告警
 
-- `deploy/monitor/job_status.py`
-
-这些文件会被下面这个脚本读取检查：
-
-- `deploy/monitor/check_jobs.py`
-
-## 14. 测试 SMTP 邮件告警
-
-先手动执行一次健康检查：
+手动执行一次健康检查：
 
 ```bash
 cd /opt/fortune_bot
@@ -357,9 +437,7 @@ set +a
 python3 deploy/monitor/check_jobs.py
 ```
 
-如果系统健康，通常不会有明显输出。
-
-如果你想强制测试邮件告警，可以先停掉一个 timer 再执行：
+如果想强制测试邮件告警：
 
 ```bash
 sudo systemctl stop fortune-bot-hourly-cycle.timer
@@ -370,81 +448,22 @@ set +a
 python3 deploy/monitor/check_jobs.py
 ```
 
-测试完记得恢复：
+然后恢复：
 
 ```bash
 sudo systemctl start fortune-bot-hourly-cycle.timer
 ```
 
-## 15. 日常更新和维护
+## 18. 现在你接下来应该做什么
 
-拉最新代码：
+如果你已经把 USDC 存进 Polymarket，那么推荐顺序就是：
 
-```bash
-cd /opt/fortune_bot
-git pull
-```
+1. 去 Polymarket UI 再确认一次 proxy wallet 地址。
+2. 把 `PEG_CLOB_PRIVATE_KEY` 和 `PEG_CLOB_FUNDER` 写进 `/etc/fortune-bot/fortune_bot.env`。
+3. 保持 `PEG_CLOB_SIGNATURE_TYPE=2`。
+4. 先跑 `proxy_wallet_smoketest.py`。
+5. 把脚本打印出来的 `PEG_CLOB_API_KEY / SECRET / PASSPHRASE` 回填到 env 文件。
+6. 再手动试跑 `refresh_universe` 和 `hourly_cycle`。
+7. 没问题后再启 `tmux` market stream 和 `systemd` timers。
 
-如果 Python 依赖有变化：
-
-```bash
-cd /opt/fortune_bot
-bash execution_engine/app/scripts/linux/bootstrap_venv.sh
-```
-
-如果 deploy 里的 `systemd` 文件有改动：
-
-```bash
-cd /opt/fortune_bot
-sudo cp deploy/systemd/fortune-bot-*.service /etc/systemd/system/
-sudo cp deploy/systemd/fortune-bot-*.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-```
-
-然后重启 timers：
-
-```bash
-sudo systemctl restart fortune-bot-refresh-universe.timer
-sudo systemctl restart fortune-bot-hourly-cycle.timer
-sudo systemctl restart fortune-bot-label-analysis.timer
-sudo systemctl restart fortune-bot-healthcheck.timer
-```
-
-如果你更新了 stream 相关代码，还要手动重启 `tmux` 里的市场流进程。
-
-## 16. 常见故障点
-
-- `python3 -m venv` 找不到
-  - 安装 `python3-venv`
-- 依赖安装失败
-  - 安装 `build-essential`
-- 邮件发不出去
-  - 确认 `SMTP_PASSWORD` 用的是 QQ 邮箱 SMTP 授权码
-  - 确认 QQ 邮箱已经开启 SMTP
-- timer 显示正常但任务没跑
-  - 先看对应 `.service` 的 `journalctl` 日志
-- `systemd` 下任务一启动就失败
-  - 检查 `/etc/fortune-bot/fortune_bot.env`
-  - 检查 `FORTUNE_BOT_REPO_ROOT=/opt/fortune_bot`
-  - 检查服务器上代码是不是确实在这个目录
-- execution 没有下单
-  - 检查 `balances.json`
-  - 检查 `PEG_DRY_RUN`
-  - 检查候选市场是否真的生成了可交易信号
-
-## 17. 最短上线顺序
-
-如果这是台新的 Ubuntu 机器，推荐按这个顺序做：
-
-1. 安装 apt 依赖。
-2. 把仓库 clone 到 `/opt/fortune_bot`。
-3. 创建 `/etc/fortune-bot/fortune_bot.env`。
-4. 创建 `/var/lib/fortune_bot/execution_engine_data/shared/balances.json`。
-5. 运行 `bootstrap_venv.sh`。
-6. 手动测试 `refresh_universe.sh`。
-7. 手动测试 `run_hourly_cycle.sh`。
-8. 用 `tmux` 启动 `stream_market_data.sh`。
-9. 安装并启用 `systemd` timers。
-10. 手动运行一次 `check_jobs.py`，确认邮件告警能收到。
-
-做完这些，Ubuntu 上的 execution 工作流就起来了。
+这就是你当前最短、最稳的上线路径。

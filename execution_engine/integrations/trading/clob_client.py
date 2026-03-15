@@ -137,6 +137,10 @@ class LiveClobClient(ClobClient):
 
         if not self.cfg.clob_private_key:
             raise ValueError("Missing PEG_CLOB_PRIVATE_KEY for live CLOB client")
+        if self.cfg.clob_signature_type == 2 and not self.cfg.clob_funder:
+            raise ValueError(
+                "Missing PEG_CLOB_FUNDER for proxy wallet trading with PEG_CLOB_SIGNATURE_TYPE=2"
+            )
 
         types = _import_py_clob_client()
         PyClobClient = types["PyClobClient"]
