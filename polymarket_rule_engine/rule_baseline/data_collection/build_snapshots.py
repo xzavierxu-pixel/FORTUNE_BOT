@@ -2,6 +2,7 @@ import json
 import math
 import os
 import sys
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -17,12 +18,26 @@ from rule_baseline.utils import config
 from rule_baseline.domain_extractor.market_annotations import build_and_save_market_annotations
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 from rule_baseline.datasets.artifacts import write_json
+from rule_baseline.datasets.snapshot_batches import (
+    load_processed_market_ids,
+    rebuild_canonical_snapshot_audit,
+    rebuild_canonical_snapshot_quarantine,
+    rebuild_canonical_snapshots,
+    reset_snapshot_batches,
+    write_snapshot_batch,
+)
 
 PRICES_URL = "https://clob.polymarket.com/prices-history"
 PARTIAL_SNAPSHOTS_PATH = config.PROCESSED_DIR / "snapshots.partial.csv"
 PROGRESS_PATH = config.PROCESSED_DIR / "snapshots.progress.csv"
 QUARANTINE_PARTIAL_PATH = config.PROCESSED_DIR / "snapshots_quarantine.partial.csv"
 FLUSH_MARKET_INTERVAL = 500
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build append-only snapshot batches from merged raw markets.")
+    parser.add_argument("--full-refresh", action="store_true", help="Delete existing snapshot batches and rebuild from all merged raw markets.")
+    return parser.parse_args()
 
 
 def get_session():
@@ -372,15 +387,6 @@ def process_market(row, session):
     }
 
 
-def load_processed_market_ids(progress_path: Path) -> set[str]:
-    if not progress_path.exists():
-        return set()
-    progress_df = pd.read_csv(progress_path, usecols=["market_id"], dtype={"market_id": str})
-    processed_ids = set(progress_df["market_id"].dropna().astype(str))
-    print(f"[INFO] Resuming snapshot build. Loaded {len(processed_ids)} processed market_ids.")
-    return processed_ids
-
-
 def flush_buffers(
     snapshot_buffer,
     progress_buffer,
@@ -518,6 +524,7 @@ def write_snapshot_reports(audit_path: Path, quarantine_path: Path, stats: dict[
 
 
 def main():
+    args = parse_args()
     if not config.RAW_MERGED_PATH.exists():
         rebuild_canonical_merged()
 
@@ -525,12 +532,22 @@ def main():
         print("[ERROR] Canonical merged raw markets not found. Run fetch_raw_events.py first.")
         return
 
+    if args.full_refresh:
+        reset_snapshot_batches()
+        print("[INFO] Running snapshot full refresh from merged raw markets.")
+
+    for temp_path in [PARTIAL_SNAPSHOTS_PATH, PROGRESS_PATH, QUARANTINE_PARTIAL_PATH]:
+        if temp_path.exists():
+            temp_path.unlink()
+
     print("[INFO] Refreshing market annotations before snapshot build...")
     build_and_save_market_annotations()
 
     print(f"[INFO] Processing markets from {config.RAW_MERGED_PATH}...")
 
-    processed_market_ids = load_processed_market_ids(PROGRESS_PATH)
+    processed_market_ids = set() if args.full_refresh else load_processed_market_ids()
+    if processed_market_ids:
+        print(f"[INFO] Loaded {len(processed_market_ids)} processed market_ids from existing snapshot batches.")
     stats = {}
     session = get_session()
     snapshot_buffer = []
@@ -635,25 +652,40 @@ def main():
     for reason, count in sorted(stats.items(), key=lambda item: -item[1]):
         print(f"  {reason}: {count}")
 
-    if PARTIAL_SNAPSHOTS_PATH.exists():
-        if config.SNAPSHOTS_PATH.exists():
-            config.SNAPSHOTS_PATH.unlink()
-        PARTIAL_SNAPSHOTS_PATH.replace(config.SNAPSHOTS_PATH)
-        if PROGRESS_PATH.exists():
-            if config.SNAPSHOT_MARKET_AUDIT_PATH.exists():
-                config.SNAPSHOT_MARKET_AUDIT_PATH.unlink()
-            PROGRESS_PATH.replace(config.SNAPSHOT_MARKET_AUDIT_PATH)
-        if QUARANTINE_PARTIAL_PATH.exists():
-            if config.SNAPSHOT_QUARANTINE_PATH.exists():
-                config.SNAPSHOT_QUARANTINE_PATH.unlink()
-            QUARANTINE_PARTIAL_PATH.replace(config.SNAPSHOT_QUARANTINE_PATH)
-        write_snapshot_reports(config.SNAPSHOT_MARKET_AUDIT_PATH, config.SNAPSHOT_QUARANTINE_PATH, stats, total_snapshots)
-        print(f"[INFO] Saved to {config.SNAPSHOTS_PATH}")
-        print(f"[INFO] Saved market audit to {config.SNAPSHOT_MARKET_AUDIT_PATH}")
-        print(f"[INFO] Saved snapshot quarantine to {config.SNAPSHOT_QUARANTINE_PATH}")
-        print(f"[INFO] Saved snapshot build summary to {config.SNAPSHOT_BUILD_SUMMARY_PATH}")
-    else:
-        print("[WARN] No snapshots generated.")
+    if PARTIAL_SNAPSHOTS_PATH.exists() or PROGRESS_PATH.exists() or QUARANTINE_PARTIAL_PATH.exists():
+        snapshot_batch_df = pd.read_csv(PARTIAL_SNAPSHOTS_PATH, low_memory=False) if PARTIAL_SNAPSHOTS_PATH.exists() else pd.DataFrame()
+        audit_batch_df = pd.read_csv(PROGRESS_PATH, low_memory=False) if PROGRESS_PATH.exists() else pd.DataFrame()
+        quarantine_batch_df = pd.read_csv(QUARANTINE_PARTIAL_PATH, low_memory=False) if QUARANTINE_PARTIAL_PATH.exists() else pd.DataFrame()
+
+        if not snapshot_batch_df.empty and "closedTime" in snapshot_batch_df.columns:
+            closed_times = pd.to_datetime(snapshot_batch_df["closedTime"], utc=True, errors="coerce")
+            window_start = closed_times.min().to_pydatetime() if closed_times.notna().any() else config.current_utc()
+            window_end = closed_times.max().to_pydatetime() if closed_times.notna().any() else config.current_utc()
+        else:
+            window_start = config.current_utc()
+            window_end = window_start
+
+        batch_id = write_snapshot_batch(
+            snapshots=snapshot_batch_df,
+            audit=audit_batch_df,
+            quarantine=quarantine_batch_df,
+            window_start=window_start,
+            window_end=window_end,
+        )
+        print(f"[INFO] Saved append-only snapshot batch to {config.SNAPSHOT_BATCHES_DIR / f'{batch_id}.csv'}")
+
+        for temp_path in [PARTIAL_SNAPSHOTS_PATH, PROGRESS_PATH, QUARANTINE_PARTIAL_PATH]:
+            if temp_path.exists():
+                temp_path.unlink()
+
+    merged_snapshots = rebuild_canonical_snapshots()
+    merged_audit = rebuild_canonical_snapshot_audit()
+    rebuild_canonical_snapshot_quarantine()
+    write_snapshot_reports(config.SNAPSHOT_MARKET_AUDIT_PATH, config.SNAPSHOT_QUARANTINE_PATH, stats, len(merged_snapshots))
+    print(f"[INFO] Rebuilt canonical snapshots at {config.SNAPSHOTS_PATH} ({len(merged_snapshots)} rows)")
+    print(f"[INFO] Rebuilt canonical snapshot audit at {config.SNAPSHOT_MARKET_AUDIT_PATH} ({len(merged_audit)} rows)")
+    print(f"[INFO] Rebuilt canonical snapshot quarantine at {config.SNAPSHOT_QUARANTINE_PATH}")
+    print(f"[INFO] Saved snapshot build summary to {config.SNAPSHOT_BUILD_SUMMARY_PATH}")
 
 
 if __name__ == "__main__":

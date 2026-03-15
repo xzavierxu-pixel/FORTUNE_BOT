@@ -1,5 +1,16 @@
 # Data directories
 polymarket_rule_engine/data/
+!polymarket_rule_engine/data/
+polymarket_rule_engine/data/*
+!polymarket_rule_engine/data/offline/
+polymarket_rule_engine/data/offline/*
+!polymarket_rule_engine/data/offline/edge/
+polymarket_rule_engine/data/offline/edge/*
+!polymarket_rule_engine/data/offline/edge/trading_rules.csv
+!polymarket_rule_engine/data/offline/models/
+polymarket_rule_engine/data/offline/models/*
+!polymarket_rule_engine/data/offline/models/ensemble_snapshot_q.pkl
+execution_engine/data/
 
 # Python ignore patterns
 __pycache__/
@@ -38,6 +49,7 @@ venv.bak/
 *.h5
 *.model
 *.weights
+!polymarket_rule_engine/data/offline/models/ensemble_snapshot_q.pkl
 
 # OS generated files
 .DS_Store

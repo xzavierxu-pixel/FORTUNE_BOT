@@ -42,6 +42,20 @@ python rule_baseline/workflow/run_online_pipeline.py
 python rule_baseline/workflow/run_pipeline.py --artifact-mode online --skip-backtest --skip-baselines
 ```
 
+### 2.2.1 offline / online / live 样本边界
+
+| 阶段 | offline | online | live |
+|---|---|---|---|
+| 原始数据抓取 | 只用已结算市场 | 只用已结算市场 | 读取未结算 live 市场 |
+| snapshots 构建 | 只用已结算市场 | 只用已结算市场 | 不参与训练集构建 |
+| rule bins | 只允许 `train + valid` 参与 | 允许全部 labeled 数据参与，也就是 `train + valid` | 只读 |
+| rule 是否存在 | 只允许 `train + valid` 参与 | 允许全部 labeled 数据参与，也就是 `train + valid` | 只读 |
+| rule 打分 / 参数估计 | 只允许 `train / valid` 参与 | 允许全部 labeled 数据参与，也就是 `train + valid` | 只读 |
+| model 训练 | 只用 `train` | 只用 `train` | 不训练 |
+| calibration | 只用 `valid` | 只用最近 20 天 `valid` | 不做 calibration 拟合 |
+| 最终评估 / 回测 | 只用 `test` | 不做 offline 回测 | 不做历史回测 |
+| live 打分 | 不负责线上信号 | 产出 serving artifacts | 对当前未结算市场打分 |
+
 ### 2.3 一键跑“小样本调试”
 
 ```powershell
@@ -205,8 +219,10 @@ python rule_baseline/analysis/analyze_rules_alpha_quadrant.py --artifact-mode of
 ### 3.6 跑主回测
 
 ```powershell
-python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode offline
+python rule_baseline/backtesting/backtest_execution_parity.py --artifact-mode offline
 ```
+
+`offline` 的 `test` 窗口只用于最终评估和回测，不得参与 rule 定义、分桶、模型训练或概率校准。
 
 调试版本：
 
@@ -219,10 +235,12 @@ python rule_baseline/backtesting/backtest_portfolio_qmodel.py `
 
 输出重点：
 
-- `data/offline/backtesting/backtest_equity_qmodel.csv`
-- `data/offline/backtesting/backtest_trades_qmodel.csv`
-- `data/offline/backtesting/rule_performance_qmodel.csv`
-- `data/offline/metadata/backtest_summary.json`
+- `data/offline/backtesting/backtest_equity_execution_parity.csv`
+- `data/offline/backtesting/backtest_trades_execution_parity.csv`
+- `data/offline/backtesting/backtest_skipped_execution_parity.csv`
+- `data/offline/backtesting/backtest_daily_execution_parity.csv`
+- `data/offline/backtesting/backtest_filter_breakdown_execution_parity.csv`
+- `data/offline/metadata/backtest_summary_execution_parity.json`
 
 ### 3.7 跑 baseline family 对比
 

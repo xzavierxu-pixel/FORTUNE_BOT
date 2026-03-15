@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--walk-forward-windows", type=int, default=3)
     parser.add_argument("--walk-forward-step-days", type=int, default=config.TEST_DAYS)
+    parser.add_argument("--split-reference-end", type=str, default=None)
+    parser.add_argument("--history-start", type=str, default=None)
     return parser.parse_args()
 
 
@@ -433,11 +435,17 @@ def main() -> None:
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
     market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
 
-    latest_split = compute_temporal_split(raw_snapshots)
+    latest_split = compute_temporal_split(
+        raw_snapshots,
+        reference_end=args.split_reference_end,
+        history_start_override=args.history_start,
+    )
     walk_forward_splits = build_walk_forward_splits(
         raw_snapshots,
         n_windows=args.walk_forward_windows,
         step_days=args.walk_forward_step_days,
+        reference_end=args.split_reference_end,
+        history_start_override=args.history_start,
     )
     if not walk_forward_splits:
         walk_forward_splits = [latest_split]

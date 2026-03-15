@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from rule_baseline.datasets.splits import TemporalSplit, assign_dataset_split, compute_temporal_split
+from rule_baseline.datasets.splits import TemporalSplit, assign_dataset_split, compute_artifact_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
@@ -155,6 +155,13 @@ def add_term_structure_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.merge(pivot, on="market_id", how="left")
 
     price_columns = [f"p_{horizon}h" for horizon in config.HORIZONS if f"p_{horizon}h" in out.columns]
+    current_horizon = pd.to_numeric(out.get("horizon_hours"), errors="coerce")
+    # Only horizons at or before the current decision time are observable.
+    for horizon in config.HORIZONS:
+        column = f"p_{horizon}h"
+        if column in out.columns:
+            out.loc[current_horizon.notna() & (current_horizon > horizon), column] = np.nan
+
     for left, right in [(1, 2), (2, 4), (4, 12), (12, 24)]:
         left_column = f"p_{left}h"
         right_column = f"p_{right}h"
@@ -316,8 +323,13 @@ def load_research_snapshots(
     )
 
 
-def build_rule_bins(df: pd.DataFrame, price_bin_step: float = DEFAULT_PRICE_BIN_STEP) -> pd.DataFrame:
+def build_rule_bins(
+    df: pd.DataFrame,
+    price_bin_step: float = DEFAULT_PRICE_BIN_STEP,
+    bin_source_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     out = df.copy()
+    reference = bin_source_df.copy() if bin_source_df is not None else out.copy()
     horizon_edges = [0] + sorted(config.HORIZONS) + [1000]
     horizon_labels = [f"<{horizon_edges[1]}h"]
     for index in range(1, len(horizon_edges) - 2):
@@ -328,7 +340,20 @@ def build_rule_bins(df: pd.DataFrame, price_bin_step: float = DEFAULT_PRICE_BIN_
     group_columns = [column for column in RULE_BIN_GROUP_COLUMNS if column in out.columns]
     grouped = out.groupby(group_columns, observed=False, sort=False) if group_columns else [(None, out)]
     for _, group_df in grouped:
-        market_count = int(group_df["market_id"].nunique()) if "market_id" in group_df.columns else int(len(group_df))
+        if group_columns:
+            reference_mask = pd.Series(True, index=reference.index)
+            for column in group_columns:
+                reference_mask &= reference[column].astype(str) == str(group_df.iloc[0][column])
+            reference_group_df = reference[reference_mask]
+        else:
+            reference_group_df = reference
+        if reference_group_df.empty:
+            continue
+        market_count = (
+            int(reference_group_df["market_id"].nunique())
+            if "market_id" in reference_group_df.columns
+            else int(len(reference_group_df))
+        )
         step = _select_price_bin_step(market_count) if price_bin_step == DEFAULT_PRICE_BIN_STEP else price_bin_step
         price_bins = _build_price_bin_edges(step)
         price_labels = [f"{left:.2f}-{right:.2f}" for left, right in zip(price_bins[:-1], price_bins[1:])]
@@ -343,17 +368,28 @@ def build_rule_bins(df: pd.DataFrame, price_bin_step: float = DEFAULT_PRICE_BIN_
 
 
 def prepare_rule_training_frame(
+    artifact_mode: str = "offline",
     max_rows: int | None = None,
     recent_days: int | None = None,
+    split_reference_end: str | None = None,
+    history_start_override: str | None = None,
 ) -> tuple[pd.DataFrame, TemporalSplit]:
     snapshots = load_research_snapshots(max_rows=max_rows, recent_days=recent_days)
     print(f"[INFO] Snapshot rows before quality_pass filter: {len(snapshots)}")
     snapshots = snapshots[snapshots["quality_pass"]].copy()
     print(f"[INFO] Snapshot rows after quality_pass filter: {len(snapshots)}")
-    snapshots = build_rule_bins(snapshots)
-    split = compute_temporal_split(snapshots, date_col="closedTime")
+    split = compute_artifact_split(
+        snapshots,
+        artifact_mode=artifact_mode,
+        date_col="closedTime",
+        reference_end=split_reference_end,
+        history_start_override=history_start_override,
+    )
     snapshots = assign_dataset_split(snapshots, split, date_col="closedTime")
-    snapshots = snapshots[snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
+    allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
+    snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
+    bin_source = snapshots.copy() if artifact_mode == "online" else snapshots[snapshots["dataset_split"].isin(["train", "valid"])].copy()
+    snapshots = build_rule_bins(snapshots, bin_source_df=bin_source)
     return snapshots, split
 
 

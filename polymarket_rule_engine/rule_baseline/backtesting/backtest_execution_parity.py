@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--recent-days", type=int, default=None)
+    parser.add_argument("--split-reference-end", type=str, default=None)
+    parser.add_argument("--history-start", type=str, default=None)
     return parser.parse_args()
 
 
@@ -434,7 +436,11 @@ def main() -> None:
 
     snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_temporal_split(snapshots)
+    split = compute_temporal_split(
+        snapshots,
+        reference_end=args.split_reference_end,
+        history_start_override=args.history_start,
+    )
     snapshots = assign_dataset_split(snapshots, split)
     snapshots = snapshots[snapshots["dataset_split"] == "test"].copy()
     if snapshots.empty:

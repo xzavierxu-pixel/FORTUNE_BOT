@@ -23,21 +23,40 @@ def parse_args() -> argparse.Namespace:
             "cv_sigmoid",
             "none",
         ],
-        default="valid_isotonic",
+        default="horizon_valid_isotonic",
     )
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--recent-days", type=int, default=None)
     parser.add_argument("--walk-forward-windows", type=int, default=3)
     parser.add_argument("--walk-forward-step-days", type=int, default=None)
+    parser.add_argument("--date-start", type=str, default=None)
+    parser.add_argument("--date-end", type=str, default=None)
+    parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--skip-fetch", action="store_true")
     parser.add_argument("--skip-snapshots", action="store_true")
     parser.add_argument("--skip-analysis", action="store_true")
     parser.add_argument("--skip-backtest", action="store_true")
     parser.add_argument("--skip-baselines", action="store_true")
+    parser.add_argument("--full-refresh-fetch", action="store_true")
+    parser.add_argument("--full-refresh-snapshots", action="store_true")
     return parser.parse_args()
 
 
 def add_common_args(command: list[str], args: argparse.Namespace) -> list[str]:
+    if args.artifact_mode:
+        command.extend(["--artifact-mode", args.artifact_mode])
+    if args.max_rows is not None:
+        command.extend(["--max-rows", str(args.max_rows)])
+    if args.recent_days is not None:
+        command.extend(["--recent-days", str(args.recent_days)])
+    if args.split_reference_end is not None:
+        command.extend(["--split-reference-end", args.split_reference_end])
+    if args.date_start is not None:
+        command.extend(["--history-start", args.date_start])
+    return command
+
+
+def add_data_args(command: list[str], args: argparse.Namespace) -> list[str]:
     if args.artifact_mode:
         command.extend(["--artifact-mode", args.artifact_mode])
     if args.max_rows is not None:
@@ -56,10 +75,20 @@ def main() -> None:
     args = parse_args()
 
     if not args.skip_fetch:
-        run_step("Fetch raw markets", [sys.executable, "rule_baseline/data_collection/fetch_raw_events.py"])
+        fetch_cmd = [sys.executable, "rule_baseline/data_collection/fetch_raw_events.py"]
+        if args.full_refresh_fetch:
+            fetch_cmd.append("--full-refresh")
+        if args.date_start is not None:
+            fetch_cmd.extend(["--date-start", args.date_start])
+        if args.date_end is not None:
+            fetch_cmd.extend(["--date-end", args.date_end])
+        run_step("Fetch raw markets", fetch_cmd)
 
     if not args.skip_snapshots:
-        run_step("Build snapshots", [sys.executable, "rule_baseline/data_collection/build_snapshots.py"])
+        snapshot_cmd = [sys.executable, "rule_baseline/data_collection/build_snapshots.py"]
+        if args.full_refresh_snapshots:
+            snapshot_cmd.append("--full-refresh")
+        run_step("Build snapshots", snapshot_cmd)
 
     train_rules_cmd = add_common_args(
         [sys.executable, "rule_baseline/training/train_rules_naive_output_rule.py"],
@@ -81,17 +110,18 @@ def main() -> None:
     run_step("Train model", train_model_cmd)
 
     if not args.skip_analysis:
-        for label, script_path in [
-            ("Analyze calibration", "rule_baseline/analysis/analyze_q_model_calibration.py"),
-            ("Analyze alpha", "rule_baseline/analysis/analyze_alpha_quadrant.py"),
-            ("Analyze rules alpha", "rule_baseline/analysis/analyze_rules_alpha_quadrant.py"),
-        ]:
-            command = add_common_args([sys.executable, script_path], args)
+        analysis_steps = [
+            ("Analyze calibration", "rule_baseline/analysis/analyze_q_model_calibration.py", add_data_args),
+            ("Analyze alpha", "rule_baseline/analysis/analyze_alpha_quadrant.py", add_data_args),
+            ("Analyze rules alpha", "rule_baseline/analysis/analyze_rules_alpha_quadrant.py", add_common_args),
+        ]
+        for label, script_path, arg_builder in analysis_steps:
+            command = arg_builder([sys.executable, script_path], args)
             run_step(label, command)
 
     if args.artifact_mode == "offline" and not args.skip_backtest:
-        command = add_common_args([sys.executable, "rule_baseline/backtesting/backtest_portfolio_qmodel.py"], args)
-        run_step("Backtest q-model", command)
+        command = add_common_args([sys.executable, "rule_baseline/backtesting/backtest_execution_parity.py"], args)
+        run_step("Backtest execution parity", command)
 
     if args.artifact_mode == "offline" and not args.skip_baselines:
         baseline_cmd = add_common_args(

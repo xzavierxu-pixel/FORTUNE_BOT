@@ -10,6 +10,12 @@ Run the full offline pipeline:
 python rule_baseline/workflow/run_pipeline.py --artifact-mode offline
 ```
 
+Run a full offline pipeline with raw/snapshot rebuilds:
+
+```powershell
+python rule_baseline/workflow/run_pipeline.py --artifact-mode offline --full-refresh-fetch --full-refresh-snapshots
+```
+
 Run the online-style pipeline:
 
 ```powershell
@@ -22,6 +28,23 @@ That is equivalent to:
 python rule_baseline/workflow/run_pipeline.py --artifact-mode online --skip-backtest --skip-baselines
 ```
 
+Hard rule:
+- In `offline`, `test` is evaluation-only. It must never influence rule definition, bin construction, model fitting, or calibration. It is reserved for final diagnostics and backtesting only.
+
+Mode boundary table:
+
+| Stage | Offline | Online | Live |
+|---|---|---|---|
+| Raw fetch | Resolved markets only | Resolved markets only | Unresolved live markets |
+| Snapshot build | Resolved markets only | Resolved markets only | No training snapshots |
+| Rule bins | `train + valid` only | all labeled rows (`train + valid`) | read-only |
+| Rule existence / bucket eligibility | `train + valid` only | all labeled rows (`train + valid`) | read-only |
+| Rule scoring / parameter estimation | `train` / `valid` only | all labeled rows (`train + valid`) | read-only |
+| Model fit | `train` only | `train` only | no fit |
+| Calibration fit | `valid` only | latest 20-day `valid` only | no calibration fit |
+| Final evaluation / backtest | `test` only | none | none |
+| Published predictions | `test` diagnostics only | all labeled rows for diagnostics; serving artifacts for live use | score current unresolved markets |
+
 ## 2. Step-by-step workflow
 
 ### Step 1: Fetch raw markets
@@ -32,10 +55,17 @@ Script:
 python rule_baseline/data_collection/fetch_raw_events.py
 ```
 
+Full refresh:
+
+```powershell
+python rule_baseline/data_collection/fetch_raw_events.py --full-refresh
+```
+
 Purpose:
 - Fetch raw market batches from the source API
 - Save batch files and update the batch manifest
 - Rebuild the merged raw market table
+- `--full-refresh` clears existing raw batches and rebuilds from `history_start`
 
 Main data layer used:
 - `rule_baseline/datasets/raw_market_batches.py`
@@ -68,14 +98,22 @@ Script:
 python rule_baseline/data_collection/build_snapshots.py
 ```
 
+Full refresh:
+
+```powershell
+python rule_baseline/data_collection/build_snapshots.py --full-refresh
+```
+
 Purpose:
 - Build snapshot rows for each market/horizon
 - Use `closedTime` as the actual market close timestamp
 - Use `closedTime - startDate` as actual tradeable duration
-- Save processed snapshot artifacts
+- Save append-only snapshot batches plus canonical merged snapshot artifacts
+- `--full-refresh` clears existing snapshot batches and rebuilds from all merged raw markets
 
 Main data layer used:
 - `rule_baseline/datasets/raw_market_batches.py`
+- `rule_baseline/datasets/snapshot_batches.py`
 - `rule_baseline/datasets/snapshots.py`
 
 ### Step 4: Train rules
@@ -89,7 +127,8 @@ python rule_baseline/training/train_rules_naive_output_rule.py --artifact-mode o
 Purpose:
 - Load enriched snapshots
 - Apply rule bins on price and horizon
-- Split into train/valid/test
+- In `offline`, split into train/valid/test and define rule bins from train+valid only
+- In `online`, split into train/valid with the last 20 days as valid and define rule bins from all labeled rows
 - Select rule buckets by sample thresholds, direction consistency, and positive conservative edge
 
 Main data layer used:
@@ -105,10 +144,16 @@ Script:
 python rule_baseline/training/train_snapshot_model.py --artifact-mode offline
 ```
 
+Current default combination:
+- classifier hyperparameters: `conservative_tree`
+- calibration mode: `horizon_valid_isotonic`
+
 Purpose:
 - Match snapshots to selected rules
 - Build the model feature table
 - Train the ensemble classifier/regressor
+- In `offline`, fit on train and calibrate on valid
+- In `online`, fit on train and use the most recent 20 days as valid for calibration
 - Export predictions and model artifacts
 
 Main layers used:
@@ -128,16 +173,17 @@ python rule_baseline/analysis/compare_baseline_families.py --artifact-mode offli
 python rule_baseline/analysis/compare_calibration_methods.py
 ```
 
-Backtest script:
+Default backtest script:
 
 ```powershell
-python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode offline
+python rule_baseline/backtesting/backtest_execution_parity.py --artifact-mode offline
 ```
 
 Purpose:
 - Evaluate calibration and alpha behavior
 - Compare baseline families
-- Simulate portfolio construction and PnL
+- Simulate execution-parity trading and realized PnL
+- Use the `offline` `test` window only as the final out-of-sample backtest window
 
 ## 3. Module layout
 
@@ -210,7 +256,7 @@ Purpose:
 
 Files:
 - `fetch_raw_events.py`: fetch raw event batches
-- `build_snapshots.py`: construct snapshot dataset
+- `build_snapshots.py`: construct append-only snapshot batches and rebuild the canonical merged snapshot dataset
 
 ### `rule_baseline/domain_extractor`
 
@@ -242,7 +288,7 @@ If you only care about the current supported path, use this order:
 6. `rule_baseline/analysis/analyze_q_model_calibration.py`
 7. `rule_baseline/analysis/analyze_alpha_quadrant.py`
 8. `rule_baseline/analysis/analyze_rules_alpha_quadrant.py`
-9. `rule_baseline/backtesting/backtest_portfolio_qmodel.py`
+9. `rule_baseline/backtesting/backtest_execution_parity.py`
 
 Or just run:
 

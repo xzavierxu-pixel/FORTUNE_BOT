@@ -16,6 +16,86 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
 from xgboost import XGBClassifier, XGBRegressor
 
+DEFAULT_CLASSIFIER_PARAMS = {
+    "xgb": {
+        "n_estimators": 500,
+        "max_depth": 4,
+        "learning_rate": 0.03,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 5.0,
+        "min_child_weight": 10,
+        "objective": "binary:logistic",
+        "eval_metric": "logloss",
+        "random_state": 42,
+        "n_jobs": -1,
+    },
+    "lgbm": {
+        "n_estimators": 500,
+        "learning_rate": 0.03,
+        "num_leaves": 31,
+        "max_depth": -1,
+        "min_child_samples": 100,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 5.0,
+        "objective": "binary",
+        "random_state": 42,
+        "n_jobs": -1,
+    },
+    "cat": {
+        "iterations": 500,
+        "depth": 5,
+        "learning_rate": 0.03,
+        "l2_leaf_reg": 10.0,
+        "loss_function": "Logloss",
+        "eval_metric": "Logloss",
+        "random_state": 42,
+        "verbose": False,
+        "allow_writing_files": False,
+    },
+    "weights": [1.0, 1.1, 1.0],
+}
+
+DEFAULT_REGRESSOR_PARAMS = {
+    "xgb": {
+        "n_estimators": 500,
+        "max_depth": 6,
+        "learning_rate": 0.03,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 2.0,
+        "min_child_weight": 5,
+        "objective": "reg:squarederror",
+        "random_state": 42,
+        "n_jobs": -1,
+    },
+    "lgbm": {
+        "n_estimators": 500,
+        "learning_rate": 0.03,
+        "num_leaves": 63,
+        "max_depth": -1,
+        "min_child_samples": 25,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_lambda": 2.0,
+        "objective": "regression",
+        "random_state": 42,
+        "n_jobs": -1,
+    },
+    "cat": {
+        "iterations": 500,
+        "depth": 6,
+        "learning_rate": 0.03,
+        "l2_leaf_reg": 5.0,
+        "loss_function": "RMSE",
+        "random_state": 42,
+        "verbose": False,
+        "allow_writing_files": False,
+    },
+    "weights": [1.0, 1.1, 1.0],
+}
+
 SEMANTIC_CATEGORICAL_FEATURES = {
     "domain",
     "category",
@@ -81,90 +161,47 @@ def build_preprocessor(numeric_columns: list[str], categorical_columns: list[str
     )
 
 
-def build_ensemble_classifier() -> VotingClassifier:
-    xgb = XGBClassifier(
-        n_estimators=500,
-        max_depth=6,
-        learning_rate=0.03,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=2.0,
-        min_child_weight=5,
-        objective="binary:logistic",
-        eval_metric="logloss",
-        random_state=42,
-        n_jobs=-1,
-    )
-    lgbm = LGBMClassifier(
-        n_estimators=500,
-        learning_rate=0.03,
-        num_leaves=63,
-        max_depth=-1,
-        min_child_samples=25,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=2.0,
-        objective="binary",
-        random_state=42,
-        n_jobs=-1,
-    )
-    cat = CatBoostClassifier(
-        iterations=500,
-        depth=6,
-        learning_rate=0.03,
-        l2_leaf_reg=5.0,
-        loss_function="Logloss",
-        eval_metric="Logloss",
-        random_state=42,
-        verbose=False,
-        allow_writing_files=False,
-    )
+def _resolve_ensemble_params(defaults: dict, overrides: dict | None) -> dict:
+    resolved: dict = {}
+    for key, value in defaults.items():
+        if isinstance(value, dict):
+            resolved[key] = value.copy()
+        elif isinstance(value, list):
+            resolved[key] = list(value)
+        else:
+            resolved[key] = value
+
+    if not overrides:
+        return resolved
+
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(resolved.get(key), dict):
+            resolved[key].update(value)
+        else:
+            resolved[key] = value
+    return resolved
+
+
+def build_ensemble_classifier(hyperparams: dict | None = None) -> VotingClassifier:
+    params = _resolve_ensemble_params(DEFAULT_CLASSIFIER_PARAMS, hyperparams)
+    xgb = XGBClassifier(**params["xgb"])
+    lgbm = LGBMClassifier(**params["lgbm"])
+    cat = CatBoostClassifier(**params["cat"])
     return VotingClassifier(
         estimators=[("xgb", xgb), ("lgbm", lgbm), ("cat", cat)],
         voting="soft",
-        weights=[1.0, 1.1, 1.0],
+        weights=params["weights"],
     )
 
 
-def build_ensemble_regressor() -> VotingRegressor:
-    xgb = XGBRegressor(
-        n_estimators=500,
-        max_depth=6,
-        learning_rate=0.03,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=2.0,
-        min_child_weight=5,
-        objective="reg:squarederror",
-        random_state=42,
-        n_jobs=-1,
-    )
-    lgbm = LGBMRegressor(
-        n_estimators=500,
-        learning_rate=0.03,
-        num_leaves=63,
-        max_depth=-1,
-        min_child_samples=25,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=2.0,
-        objective="regression",
-        random_state=42,
-        n_jobs=-1,
-    )
-    cat = CatBoostRegressor(
-        iterations=500,
-        depth=6,
-        learning_rate=0.03,
-        l2_leaf_reg=5.0,
-        loss_function="RMSE",
-        random_state=42,
-        verbose=False,
-        allow_writing_files=False,
-    )
+def build_ensemble_regressor(hyperparams: dict | None = None) -> VotingRegressor:
+    params = _resolve_ensemble_params(DEFAULT_REGRESSOR_PARAMS, hyperparams)
+    xgb = XGBRegressor(**params["xgb"])
+    lgbm = LGBMRegressor(**params["lgbm"])
+    cat = CatBoostRegressor(**params["cat"])
     return VotingRegressor(
         estimators=[("xgb", xgb), ("lgbm", lgbm), ("cat", cat)],
-        weights=[1.0, 1.1, 1.0],
+        weights=params["weights"],
     )
 
 
@@ -248,7 +285,8 @@ def fit_model_payload(
     df_valid: pd.DataFrame,
     feature_columns: list[str],
     target_column: str = "y",
-    calibration_mode: str = "cv_isotonic",
+    calibration_mode: str = "horizon_valid_isotonic",
+    model_hyperparams: dict | None = None,
 ) -> dict:
     valid_modes = {
         "valid_isotonic",
@@ -271,7 +309,7 @@ def fit_model_payload(
     calibrator = None
     calibrator_meta: dict[str, object] | None = None
     model_is_calibrated = False
-    model = build_ensemble_classifier()
+    model = build_ensemble_classifier(model_hyperparams)
 
     if calibration_mode in {"cv_isotonic", "cv_sigmoid"}:
         method = "isotonic" if calibration_mode == "cv_isotonic" else "sigmoid"
@@ -315,6 +353,7 @@ def fit_model_payload(
         "feature_columns": feature_columns,
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
+        "model_hyperparams": model_hyperparams or {},
     }
 
 
@@ -322,6 +361,7 @@ def fit_regression_payload(
     df_train: pd.DataFrame,
     feature_columns: list[str],
     target_column: str,
+    model_hyperparams: dict | None = None,
 ) -> dict:
     numeric_columns, categorical_columns = infer_feature_types(df_train, feature_columns)
     preprocessor = build_preprocessor(numeric_columns, categorical_columns)
@@ -329,7 +369,7 @@ def fit_regression_payload(
     X_train = preprocessor.fit_transform(train_features)
     y_train = df_train[target_column].astype(float).values
 
-    model = build_ensemble_regressor()
+    model = build_ensemble_regressor(model_hyperparams)
     model.fit(X_train, y_train)
 
     return {
@@ -339,6 +379,7 @@ def fit_regression_payload(
         "numeric_columns": numeric_columns,
         "categorical_columns": categorical_columns,
         "target_column": target_column,
+        "model_hyperparams": model_hyperparams or {},
     }
 
 

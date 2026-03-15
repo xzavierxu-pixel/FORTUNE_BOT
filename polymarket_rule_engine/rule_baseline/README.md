@@ -84,10 +84,10 @@ Polymarket 预测市场量化交易策略的规则引擎与机器学习流水线
 │       │                             (逆势/顺势四象限分析)                 │
 │       │                                                                  │
 │       ▼                                                                  │
-│  backtest_portfolio_qmodel.py ────► data/backtesting/                   │
-│                                     ├── backtest_equity_qmodel.csv      │
-│                                     ├── backtest_trades_qmodel.csv      │
-│                                     └── rule_performance_qmodel.csv     │
+│  backtest_execution_parity.py ────► data/backtesting/                   │
+│                                     ├── backtest_equity_execution_parity.csv │
+│                                     ├── backtest_trades_execution_parity.csv │
+│                                     └── backtest_filter_breakdown_execution_parity.csv │
 │                                                                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -118,7 +118,7 @@ python rule_baseline/training/train_snapshot_lgbm_v2.py
 python rule_baseline/analysis/analyze_q_model_calibration.py
 
 # 6. 运行回测
-python rule_baseline/backtesting/backtest_portfolio_qmodel.py
+python rule_baseline/backtesting/backtest_execution_parity.py
 
 # 7. 分析 Alpha 四象限
 python rule_baseline/analysis/analyze_alpha_quadrant.py
@@ -134,7 +134,7 @@ python rule_baseline/data_collection/build_snapshots.py && \
 python rule_baseline/training/train_rules_naive_output_rule.py && \
 python rule_baseline/training/train_snapshot_lgbm_v2.py && \
 python rule_baseline/analysis/analyze_q_model_calibration.py && \
-python rule_baseline/backtesting/backtest_portfolio_qmodel.py
+python rule_baseline/backtesting/backtest_execution_parity.py
 ```
 
 ---
@@ -155,7 +155,7 @@ python rule_baseline/backtesting/backtest_portfolio_qmodel.py
 | 重新训练规则 | `python rule_baseline/training/train_rules_naive_output_rule.py` | 适应市场变化 |
 | 重新训练模型 | `python rule_baseline/training/train_snapshot_lgbm_v2.py` | 更新概率估计 |
 | 验证校准 | `python rule_baseline/analysis/analyze_q_model_calibration.py` | 检查模型漂移 |
-| 运行回测 | `python rule_baseline/backtesting/backtest_portfolio_qmodel.py` | 评估策略表现 |
+| 运行回测 | `python rule_baseline/backtesting/backtest_execution_parity.py` | 评估 execution parity 策略表现 |
 
 ### 📅 月度任务
 
@@ -215,13 +215,13 @@ python rule_baseline/backtesting/backtest_portfolio_qmodel.py
 
 ### 3️⃣ 回测结果分析
 
-运行 `backtest_portfolio_qmodel.py` 后，检查 `data/backtesting/` 下的文件：
+运行 `backtest_execution_parity.py` 后，检查 `data/backtesting/` 下的文件：
 
-**backtest_equity_qmodel.csv** - 每日权益曲线
+**backtest_equity_execution_parity.csv** - 每日权益曲线
 ```python
 # 分析脚本示例
 import pandas as pd
-equity = pd.read_csv('data/backtesting/backtest_equity_qmodel.csv')
+equity = pd.read_csv('data/backtesting/backtest_equity_execution_parity.csv')
 
 # 关键指标
 total_return = (equity['equity'].iloc[-1] / equity['equity'].iloc[0] - 1) * 100
@@ -233,20 +233,10 @@ print(f"Max Drawdown: {max_drawdown:.2f}%")
 print(f"Sharpe Ratio: {sharpe:.2f}")
 ```
 
-**rule_performance_qmodel.csv** - 每条规则的表现
+**backtest_filter_breakdown_execution_parity.csv** - 筛选流量分解
 ```python
-rules = pd.read_csv('data/backtesting/rule_performance_qmodel.csv')
-
-# 找出最佳/最差规则
-best_rules = rules.nlargest(10, 'total_pnl')
-worst_rules = rules.nsmallest(10, 'total_pnl')
-
-# 规则筛选标准
-good_rules = rules[
-    (rules['win_rate'] > 0.5) &
-    (rules['total_trades'] > 20) &
-    (rules['total_pnl'] > 0)
-]
+breakdown = pd.read_csv('data/backtesting/backtest_filter_breakdown_execution_parity.csv')
+print(breakdown.T)
 ```
 
 ### 4️⃣ 分类别分析
@@ -305,10 +295,11 @@ EDGE_AB_THRESHOLD = 0.02 # 最小绝对 edge
 
 | 脚本 | 功能 | 策略 |
 |------|------|------|
-| `backtest_portfolio_qmodel.py` | **[主要]** Q-Model 组合回测 | Kelly + 规则筛选 + 风险控制 |
+| `backtest_execution_parity.py` | **[主要]** Execution parity 回测 | 对齐线上执行逻辑 + Kelly |
+| `backtest_portfolio_qmodel.py` | Q-Model 组合回测 | 更严格的 rule / risk / portfolio 筛选 |
 | `backtest_portfolio_rules_only.py` | 纯规则回测 (无 ML) | 作为 baseline 对比 |
 
-**backtest_portfolio_qmodel.py 关键参数**:
+**backtest_execution_parity.py 关键参数**:
 ```python
 INITIAL_BANKROLL = 10_000.0  # 初始资金
 MAX_DAILY_TRADES = 300       # 每日最大交易数
@@ -378,9 +369,9 @@ data/
 ├── edge/
 │   └── trading_rules.csv        # 最终交易规则
 ├── backtesting/
-│   ├── backtest_equity_qmodel.csv    # 权益曲线
-│   ├── backtest_trades_qmodel.csv    # 交易记录
-│   └── rule_performance_qmodel.csv   # 规则表现
+│   ├── backtest_equity_execution_parity.csv    # 权益曲线
+│   ├── backtest_trades_execution_parity.csv    # 交易记录
+│   └── backtest_filter_breakdown_execution_parity.csv   # 筛选分解
 └── analysis/
     ├── alpha_quadrant_metrics.csv    # 四象限统计
     ├── alpha_by_category.csv         # 分类别 alpha

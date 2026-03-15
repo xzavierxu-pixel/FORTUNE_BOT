@@ -1,130 +1,224 @@
-# Polymarket Execution Gateway (PEG)
+﻿# Polymarket Execution Gateway
 
-PEG (Polymarket Execution Gateway) 是系统的核心执行引擎，负责接收来自规则模型 (Rule Baseline) 和大语言模型 (LLM) 的交易信号，进行融合、验证、风险检查，并最终将订单发送到 Polymarket CLOB (Central Limit Order Book) 或模拟执行。
+`execution_engine` is the live execution layer for Polymarket.
 
-## 目录结构
+Target-state design for the next online pipeline iteration:
 
-经过重构，PEG 采用了扁平化且职责清晰的架构：
+- [ONLINE_EXECUTION_PIPELINE_DESIGN.md](C:\Users\ROG\Desktop\fortune_bot\execution_engine\ONLINE_EXECUTION_PIPELINE_DESIGN.md)
 
-```text
-execution_engine/
-├── cli/                # 命令行入口 (原 scripts)
-│   ├── demo_run.py     # 演示/测试运行脚本
-│   └── build_signals.py# 信号构建工具
-├── core/               # 核心业务逻辑
-│   ├── engine.py       # 引擎主入口 (Run Loop)
-│   ├── decision.py     # 信号融合与决策逻辑
-│   ├── validation.py   # 价格验证与风控检查
-│   ├── state.py        # 运行时状态管理
-│   ├── config.py       # 集中配置管理
-│   └── models.py       # 数据模型定义
-├── execution/          # 订单执行层
-│   ├── order_manager.py# 订单生命周期管理
-│   ├── clob_client.py  # Polymarket CLOB 客户端封装
-│   ├── state_machine.py# 订单状态机
-│   └── nonce.py        # Nonce 管理
-├── connectors/         # 外部连接适配器
-│   ├── llm_adapter.py  # LLM 信号适配
-│   ├── rule_adapter.py # 规则信号适配
-│   ├── price_provider.py # 价格数据源 (CLOB/File)
-│   └── ...
-└── utils/              # 通用工具库
-    ├── time.py         # 时间处理
-    ├── io.py           # 文件 I/O
-    ├── logger.py       # 结构化日志
-    └── ...
+Use the dedicated environment at `C:\Users\ROG\Desktop\fortune_bot\.venv-execution` for live trading and dry-runs. This keeps the official `py-clob-client` isolated from unrelated tools in the global Python environment.
+
+Run artifacts live under [execution_engine/data](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data):
+
+- `runs/YYYY-MM-DD/<run_id>/...`: one directory per daily run
+- `shared/`: shared cache and nonce state
+- `summary/runs_index.jsonl`: run-level summary index
+- `summary/dashboard.html`: local monitoring dashboard
+
+The repository now exposes a single execution model: the online pipeline described in [ONLINE_EXECUTION_PIPELINE_DESIGN.md](C:\Users\ROG\Desktop\fortune_bot\execution_engine\ONLINE_EXECUTION_PIPELINE_DESIGN.md).
+
+## Top-level layout
+
+- `execution_engine/app/`: user-facing entrypoints
+- `execution_engine/runtime/`: config, state, decisions, validation, and exposure logic
+- `execution_engine/integrations/`: Gamma/CLOB/balance integrations
+- `execution_engine/online/`: online trading pipeline by job responsibility
+- `execution_engine/shared/`: shared I/O, time, logging, metrics, and alert helpers
+
+## Online package layout
+
+The online pipeline is now organized by job responsibility instead of a single flat module list:
+
+- `execution_engine/online/universe/`: rolling 24h market universe refresh
+- `execution_engine/online/streaming/`: WebSocket market ingestion and token-state persistence
+- `execution_engine/online/scoring/`: hourly snapshot building, rule matching, model scoring, and selection
+- `execution_engine/online/execution/`: passive order submission, monitoring, and position state
+- `execution_engine/online/analysis/`: resolved labels, lifecycle joins, executed/opportunity analysis
+- `execution_engine/online/pipeline/`: cross-job orchestration and eligibility flow
+- `execution_engine/online/reporting/`: run summaries and local dashboard generation
+
+This keeps the implementation aligned with the jobs in the design document and removes the previous flat `execution_engine/online/*.py` layout.
+
+## Main commands
+
+Bootstrap the isolated execution environment:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\env\bootstrap_venv.ps1
 ```
 
-## 核心工作流
+Refresh the shared 24h online universe:
 
-PEG 的单次运行 (`run_once`) 遵循以下流水线：
-
-1.  **信号加载 (Ingestion)**:
-    *   从 `data/execution_engine/rule_signals.jsonl` 加载规则信号。
-    *   从 `data/execution_engine/llm_signals.jsonl` 加载 LLM 信号。
-2.  **信号融合 (Fusion)**:
-    *   在 `core/decision.py` 中，根据 Market ID 和 Outcome 匹配两种信号。
-    *   执行融合策略（如：`HARD_AGREE`，要求方向一致，取更保守的价格）。
-    *   生成 `DecisionRecord`。
-3.  **验证与风控 (Validation & Risk)**:
-    *   **价格检查 (`core/validation.py`)**: 验证当前盘口价格是否偏离参考价格过大，检查市场流动性。
-    *   **风控检查 (`core/validation.py`)**: 检查资金余额、每日亏损限额、最大持仓、重复下单等。
-4.  **执行 (Execution)**:
-    *   通过 `execution/order_manager.py` 提交订单。
-    *   如果是 `DRY_RUN` 模式，仅记录日志。
-    *   如果是实盘模式，通过 `execution/clob_client.py` 签名并发送 HTTP 请求至 Polymarket。
-5.  **对账 (Reconciliation)**:
-    *   查询 CLOB 的 Open Orders 和 Fills。
-    *   更新本地订单状态 (`FILLED`, `CANCELED` 等)。
-    *   处理过期订单 (TTL)。
-
-## 日常运维 (Daily Operations)
-
-所有操作建议在项目根目录下通过 `python -m` 方式运行。
-
-### 1. 生成信号 (Build Signals)
-
-将上游的原始数据（CSV 或 LLM JSON）转换为 PEG 可识别的标准信号格式。
-
-```bash
-python -m execution_engine.cli.build_signals \
-  --run-id <RUN_ID> \
-  --rule-input data/raw/rule_candidates.csv \
-  --llm-snapshot-dir tasks/snapshots
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\refresh_universe.ps1 -RunId UNIVERSE_001 -MaxMarkets 1000
 ```
 
-*   **输入**: 原始规则 CSV, LLM 推理结果目录。
-*   **输出**: `data/execution_engine/rule_signals.jsonl`, `data/execution_engine/llm_signals.jsonl`。
+Stream reference-token market data into the shared token-state store:
 
-### 2. 运行引擎 (Run Engine)
-
-执行一次完整的交易循环（推荐用于 Cron Job）。
-
-```bash
-# 演示/测试运行 (会自动生成模拟数据)
-python -m execution_engine.cli.demo_run --run-id TEST_001
-
-# 实盘/生产运行 (需要配置环境变量)
-# 通常由上层调度脚本 (ops/run.ps1) 调用 core/engine.py
-python -m execution_engine.core.engine
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\stream_market_data.ps1 -RunId STREAM_001 -DurationSec 60 -MarketLimit 20
 ```
 
-### 3. 环境变量配置
+Run the hourly snapshot scoring job:
 
-在 `.env` 或 `execution_engine/core/config.py` 中管理配置。主要参数：
-
-| 变量名 | 默认值 | 说明 |
-|--------|--------|------|
-| `PEG_DRY_RUN` | `True` | 是否为模拟运行。生产环境设为 `False`。 |
-| `PEG_ORDER_USDC` | `10.0` | 单笔订单金额 (USDC)。 |
-| `PEG_CLOB_ENABLED` | `False` | 是否启用真实 CLOB 连接。 |
-| `PEG_CLOB_API_KEY` | - | Polymarket API Key (实盘必填)。 |
-| `PEG_PRICE_DEV_ABS` | `0.05` | 允许的最大价格绝对偏差 (5美分)。 |
-| `PEG_DAILY_LOSS_LIMIT`| `-500` | 每日最大亏损额 (USDC)。 |
-
-## 结果验证 (Verification)
-
-运行后，所有输出文件位于项目根目录的 `data/execution_engine/` 下：
-
-| 文件 | 内容 | 检查重点 |
-|------|------|----------|
-| `decisions.jsonl` | 生成的交易决策 | 检查 `fusion_mode` 和 `status`。 |
-| `orders.jsonl` | 提交的订单记录 | 检查 `status` 是否为 `NEW`/`FILLED`。 |
-| `rejections.jsonl` | 被拒绝的信号 | **最重要**。检查 `reason_code` (如 `PRICE_DEVIATION`, `RISK_LIMIT`)。 |
-| `logs.jsonl` | 结构化运行日志 | 详细的调试信息。 |
-| `metrics.json` | 累积统计指标 | `orders_sent`, `rejections_count` 等。 |
-
-### 常见拒绝原因 (Rejection Codes)
-
-*   `LLM_MISSING`: 只有规则信号，没有对应的 LLM 确认。
-*   `ENGINE_DISAGREE`: 规则和 LLM 方向不一致。
-*   `PRICE_DEVIATION`: 市场现价与模型预测价格偏差过大。
-*   `BALANCE_INSUFFICIENT`: 余额不足。
-*   `DUPLICATE_DECISION`: 短时间内对同一市场重复决策。
-
-## 开发指南
-
-*   **添加新规则**: 修改 `connectors/rule_adapter.py`。
-*   **调整风控**: 修改 `core/validation.py` 中的 `check_basic_risk` 函数。
-*   **对接新数据源**: 在 `connectors/` 下添加新的 Provider。
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\score_hourly.ps1 -RunId SCORE_001
 ```
+
+Submit hourly selections as passive limit orders:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\submit_hourly.ps1 -RunId SUBMIT_001
+```
+
+Run the full hourly online cycle in batch order:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\run_hourly_cycle.ps1 -RunId CYCLE_001
+```
+
+Run standalone order lifecycle monitoring and reconciliation:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\monitor_orders.ps1 -RunId MONITOR_001
+```
+
+Build resolved-label sync plus executed/opportunity analysis:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\label_analysis_daily.ps1 -RunId LABEL_001
+```
+
+## Online pipeline flow
+
+1. Refresh a rolling 24h market universe
+2. Stream reference-token market data into shared token state
+3. Build hourly market-level snapshots
+4. Reuse `rule_baseline` rules, feature preprocessing, model scoring, and stake sizing
+5. Submit passive limit orders at `best_bid - 1 tick`
+6. Monitor 5-minute TTL outcomes and rebuild shared open-position state
+7. Sync resolved labels and run executed/opportunity analysis
+
+## Environment layout
+
+- `execution_engine/requirements-live.txt`: live runtime dependencies for rule-engine execution
+- `execution_engine/app/scripts/env/`: environment/bootstrap scripts
+- `execution_engine/app/scripts/online/`: online pipeline scripts
+
+`bootstrap_venv.ps1` installs the local [py-clob-client](C:\Users\ROG\Desktop\fortune_bot\py-clob-client) clone in editable mode. That uses the official package metadata instead of the `py-clob-client` repo's pinned `requirements.txt`, so the online runtime stays isolated without forcing old versions into your global Python.
+
+## Important environment variables
+
+Core:
+
+- `PEG_DRY_RUN=1|0`
+- `PEG_RUN_ID=<id>`
+
+Rule engine integration:
+
+- `PEG_RULE_ENGINE_DIR`
+- `PEG_RULE_ENGINE_RULES_PATH`
+- `PEG_RULE_ENGINE_MODEL_PATH`
+- `PEG_RULE_ENGINE_MAX_MARKETS`
+- `PEG_RULE_ENGINE_PAGE_SIZE`
+- `PEG_RULE_ENGINE_ORDER_BUFFER`
+
+Online pipeline:
+
+- `PEG_ONLINE_UNIVERSE_WINDOW_HOURS`
+- `PEG_ONLINE_MARKET_BATCH_SIZE`
+- `PEG_ONLINE_REQUIRE_TWO_TOKEN_MARKETS`
+- `PEG_ONLINE_REQUIRE_RULE_COVERAGE`
+- `PEG_ONLINE_LIMIT_TICKS_BELOW_BEST_BID`
+- `PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC`
+- `PEG_MARKET_STATE_CACHE_PATH`
+- `PEG_SHARED_STATE_DIR`
+- `PEG_STATE_SNAPSHOT_PATH`
+
+CLOB:
+
+- `PEG_CLOB_ENABLED=1`
+- `PEG_CLOB_PRIVATE_KEY`
+- `PEG_CLOB_API_KEY`
+- `PEG_CLOB_API_SECRET`
+- `PEG_CLOB_API_PASSPHRASE`
+
+## Output files
+
+Core execution outputs under [execution_engine/data/runs](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data\runs):
+
+- `decisions.jsonl`
+- `orders.jsonl`
+- `fills.jsonl`
+- `rejections.jsonl`
+- `logs.jsonl`
+- `metrics.json`
+
+Each run directory also gets a `run_summary.json`, and the aggregate dashboard is rebuilt at [dashboard.html](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data\summary\dashboard.html).
+
+Online streaming shared artifacts under [execution_engine/data/shared](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data\shared):
+
+- `universe/current_universe.csv`
+- `universe/current_universe_manifest.json`
+- `positions/market_state.json`
+- `positions/open_positions.jsonl`
+- `orders_live/latest_orders.jsonl`
+- `orders_live/fills.jsonl`
+- `orders_live/cancels.jsonl`
+- `orders_live/opened_positions.jsonl`
+- `orders_live/opened_position_events.jsonl`
+- `state/state_snapshot.json`
+- `token_state/current_token_state.csv`
+- `token_state/current_token_state.json`
+- `ws_raw/YYYY-MM-DD/HH/shard_XX.jsonl`
+
+Per-run hourly scoring artifacts:
+
+- `snapshot_score/processed_markets.csv`
+- `snapshot_score/raw_snapshot_inputs.jsonl`
+- `snapshot_score/normalized_snapshots.csv`
+- `snapshot_score/feature_inputs.csv`
+- `snapshot_score/rule_hits.csv`
+- `snapshot_score/model_outputs.csv`
+- `snapshot_score/selection_decisions.csv`
+- `snapshot_score/manifest.json`
+
+Per-run hourly submission artifacts:
+
+- `submit_hourly/submission_attempts.csv`
+- `submit_hourly/orders_submitted.jsonl`
+- `submit_hourly/fills.jsonl`
+- `submit_hourly/cancels.jsonl`
+- `submit_hourly/opened_positions.jsonl`
+- `submit_hourly/opened_position_events.jsonl`
+- `submit_hourly/manifest.json`
+
+Per-run order monitoring artifacts:
+
+- `order_monitor/manifest.json`
+
+Per-run hourly cycle artifacts:
+
+- `hourly_cycle/manifest.json`
+- `hourly_cycle/batches/batch_XXX/universe.csv`
+- `hourly_cycle/batches/batch_XXX/market_stream/*`
+- `hourly_cycle/batches/batch_XXX/snapshot_score/*`
+- `hourly_cycle/batches/batch_XXX/submit_hourly/*`
+
+Per-run label analysis artifacts:
+
+- `label_analysis/manifest.json`
+- `label_analysis/resolved_labels.csv`
+- `label_analysis/order_lifecycle.csv`
+- `label_analysis/executed_analysis.csv`
+- `label_analysis/opportunity_analysis.csv`
+- `label_analysis/summary.json`
+
+`label_analysis/order_lifecycle.csv` is the canonical daily lifecycle table for submitted orders. It drives fill/cancel/reject rates, average order lifetime, and average fill-latency metrics in the daily summary.
+
+Hourly scoring also recomputes `remaining_hours` from `end_time_utc` at run time before horizon filtering. This prevents stale 6-hour universe snapshots from leaking expired markets into hourly scoring between universe refreshes.
+
+## Current behavior note
+
+The live path is wired end-to-end and dry-run verified. Whether it emits signals at a given moment depends entirely on the current market set passing the offline rule filters, model scoring thresholds, and exposure constraints.
+

@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
@@ -16,10 +17,19 @@ from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import (
     infer_latest_closed_time,
     rebuild_canonical_merged,
+    reset_raw_batches,
     write_batch,
 )
 
 BASE_URL = "https://gamma-api.polymarket.com/events"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Fetch raw resolved markets into append-only batches.")
+    parser.add_argument("--full-refresh", action="store_true", help="Delete existing raw batches and rebuild from history start.")
+    parser.add_argument("--date-start", type=str, default=None, help="Optional inclusive history start in ISO-8601 format.")
+    parser.add_argument("--date-end", type=str, default=None, help="Optional inclusive fetch end in ISO-8601 format.")
+    return parser.parse_args()
 
 
 def get_session():
@@ -303,8 +313,18 @@ def fetch_events_and_flatten(window_start, window_end, limit=100, max_workers=16
 
 
 def main():
-    latest_closed_time = infer_latest_closed_time()
-    window_start, window_end = config.get_fetch_window(latest_closed_time)
+    args = parse_args()
+    if args.full_refresh:
+        reset_raw_batches()
+        latest_closed_time = None
+        print("[INFO] Running raw-market full refresh from history start.")
+    else:
+        latest_closed_time = infer_latest_closed_time()
+    window_start, window_end = config.get_fetch_window(
+        latest_closed_time,
+        now=config.parse_utc_datetime(args.date_end) if args.date_end else None,
+        history_start_override=args.date_start,
+    )
 
     df = fetch_events_and_flatten(window_start, window_end)
     if "closedTime" in df.columns:

@@ -1,4 +1,6 @@
 from rule_baseline.models.tree_ensembles import (
+    DEFAULT_CLASSIFIER_PARAMS,
+    DEFAULT_REGRESSOR_PARAMS,
     apply_probability_calibrator,
     build_ensemble_classifier,
     build_ensemble_regressor,

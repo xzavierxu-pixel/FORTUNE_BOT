@@ -21,13 +21,23 @@ MIN_RULE_N = 50
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze rule alpha on the strict test split.")
     parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    parser.add_argument("--split-reference-end", type=str, default=None)
+    parser.add_argument("--history-start", type=str, default=None)
     return parser.parse_args()
 
 
-def load_inputs(artifact_paths) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_inputs(
+    artifact_paths,
+    split_reference_end: str | None,
+    history_start: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     snapshots = load_research_snapshots()
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_temporal_split(snapshots)
+    split = compute_temporal_split(
+        snapshots,
+        reference_end=split_reference_end,
+        history_start_override=history_start,
+    )
     snapshots = assign_dataset_split(snapshots, split)
     snapshots = snapshots[snapshots["dataset_split"] == "test"].copy()
     snapshots = snapshots[(snapshots["price"] >= PRICE_MIN) & (snapshots["price"] <= PRICE_MAX)].copy()
@@ -136,7 +146,7 @@ def compute_rule_metrics(df: pd.DataFrame) -> pd.DataFrame:
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
-    snapshots, rules = load_inputs(artifact_paths)
+    snapshots, rules = load_inputs(artifact_paths, args.split_reference_end, args.history_start)
     matched = match_rules_to_snapshots(snapshots, rules)
     classified = classify_rule_quadrant(matched)
     metrics = compute_rule_metrics(classified)

@@ -12,7 +12,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
 from rule_baseline.datasets.snapshots import load_raw_markets, load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
+from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
 from rule_baseline.models import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
@@ -162,7 +162,7 @@ def parse_args() -> argparse.Namespace:
             "cv_sigmoid",
             "none",
         ],
-        default="valid_isotonic",
+        default="horizon_valid_isotonic",
         help="Calibration strategy for probability outputs.",
     )
     parser.add_argument(
@@ -173,6 +173,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--recent-days", type=int, default=None)
+    parser.add_argument("--split-reference-end", type=str, default=None)
+    parser.add_argument("--history-start", type=str, default=None)
     return parser.parse_args()
 
 
@@ -422,9 +424,15 @@ def main() -> None:
     rebuild_canonical_merged()
     snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_temporal_split(snapshots)
+    split = compute_artifact_split(
+        snapshots,
+        artifact_mode=args.artifact_mode,
+        reference_end=args.split_reference_end,
+        history_start_override=args.history_start,
+    )
     snapshots = assign_dataset_split(snapshots, split)
-    snapshots = snapshots[snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
+    allowed_splits = ["train", "valid", "test"] if args.artifact_mode == "offline" else ["train", "valid"]
+    snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)

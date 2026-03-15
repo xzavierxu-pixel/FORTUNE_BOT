@@ -198,9 +198,10 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str, prior_mean: floa
     n_train = get_metric(row, "train", "n")
     n_valid = get_metric(row, "valid", "n")
     n_all = get_metric(row, "all", "n")
+    n_definition = n_all if artifact_mode == "online" else n_train + n_valid
 
-    if not np.isfinite(n_all) or n_all < MIN_GROUP_ROWS:
-        return {}, "insufficient_total_rows"
+    if not np.isfinite(n_definition) or n_definition < MIN_GROUP_ROWS:
+        return {}, "insufficient_definition_rows"
     if not np.isfinite(n_train) or n_train < MIN_TRAIN_ROWS:
         return {}, "insufficient_train_rows"
     if not np.isfinite(n_valid) or n_valid < MIN_VALID_N:
@@ -393,7 +394,11 @@ def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
 
-    df, split = prepare_rule_training_frame(max_rows=args.max_rows, recent_days=args.recent_days)
+    df, split = prepare_rule_training_frame(
+        artifact_mode=args.artifact_mode,
+        max_rows=args.max_rows,
+        recent_days=args.recent_days,
+    )
     rules_df, report_df = build_rules(df, args.artifact_mode)
 
     if rules_df.empty:

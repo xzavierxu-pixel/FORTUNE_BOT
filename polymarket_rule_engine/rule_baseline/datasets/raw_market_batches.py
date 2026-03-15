@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -35,6 +36,15 @@ def load_manifest() -> pd.DataFrame:
 def save_manifest(manifest: pd.DataFrame) -> None:
     config.ensure_data_dirs()
     manifest[MANIFEST_COLUMNS].to_csv(config.RAW_BATCH_MANIFEST_PATH, index=False)
+
+
+def reset_raw_batches() -> None:
+    if config.RAW_BATCHES_DIR.exists():
+        shutil.rmtree(config.RAW_BATCHES_DIR)
+    for path in [config.RAW_BATCH_MANIFEST_PATH, config.RAW_MERGED_PATH, config.RAW_MARKET_QUARANTINE_PATH]:
+        if path.exists():
+            path.unlink()
+    config.ensure_data_dirs()
 
 
 def list_batch_files() -> list[Path]:

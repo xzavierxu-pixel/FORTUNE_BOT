@@ -12,13 +12,13 @@ UTC = timezone.utc
 HORIZONS = [1, 2, 4, 6, 12, 24]
 
 # Historical bootstrap window for the first raw fetch.
-#DATE_START_STR = "2024-11-01"
 DATE_START_STR = "2025-12-07"
 
 # Rolling windows
 RAW_FETCH_OVERLAP_HOURS = 72
 VALIDATION_DAYS = 30
 TEST_DAYS = 30
+ONLINE_VALIDATION_DAYS = 20
 
 # Constraints
 DELTA_FIXED_HOURS = 24.0
@@ -75,6 +75,10 @@ INTERMEDIATE_DIR = DATA_DIR / "intermediate"
 RAW_MERGED_PATH = INTERMEDIATE_DIR / "raw_markets_merged.csv"
 
 PROCESSED_DIR = DATA_DIR / "processed"
+SNAPSHOT_BATCHES_DIR = PROCESSED_DIR / "batches"
+SNAPSHOT_BATCH_MANIFEST_PATH = PROCESSED_DIR / "batch_manifest.csv"
+SNAPSHOT_AUDIT_BATCHES_DIR = PROCESSED_DIR / "audit_batches"
+SNAPSHOT_QUARANTINE_BATCHES_DIR = PROCESSED_DIR / "quarantine_batches"
 SNAPSHOTS_PATH = PROCESSED_DIR / "snapshots.csv"
 SNAPSHOT_QUARANTINE_PATH = PROCESSED_DIR / "snapshots_quarantine.csv"
 SNAPSHOT_BUILD_SUMMARY_PATH = PROCESSED_DIR / "snapshot_build_summary.json"
@@ -114,6 +118,9 @@ def ensure_data_dirs() -> None:
         RAW_BATCHES_DIR,
         INTERMEDIATE_DIR,
         PROCESSED_DIR,
+        SNAPSHOT_BATCHES_DIR,
+        SNAPSHOT_AUDIT_BATCHES_DIR,
+        SNAPSHOT_QUARANTINE_BATCHES_DIR,
         DOMAIN_DIR,
         OFFLINE_DIR,
         ONLINE_DIR,
@@ -141,34 +148,45 @@ def current_utc() -> datetime:
     return datetime.now(tz=UTC)
 
 
-def get_fetch_window(max_closed_time: datetime | None, now: datetime | None = None) -> tuple[datetime, datetime]:
-    window_end = now or current_utc()
+def resolve_history_start(value: str | datetime | None = None) -> datetime:
+    return parse_utc_datetime(value) if value is not None else history_start()
+
+
+def get_fetch_window(
+    max_closed_time: datetime | None,
+    now: datetime | None = None,
+    history_start_override: str | datetime | None = None,
+) -> tuple[datetime, datetime]:
+    window_end = parse_utc_datetime(now) if now is not None else current_utc()
+    effective_history_start = resolve_history_start(history_start_override)
     if max_closed_time is None:
-        window_start = history_start()
+        window_start = effective_history_start
     else:
-        window_start = max(history_start(), max_closed_time - timedelta(hours=RAW_FETCH_OVERLAP_HOURS))
+        window_start = max(effective_history_start, max_closed_time - timedelta(hours=RAW_FETCH_OVERLAP_HOURS))
     return window_start, window_end
 
 
 def compute_split_boundaries(
     reference_end: datetime | None = None,
     validation_days: int = VALIDATION_DAYS,
+    history_start_override: str | datetime | None = None,
 ) -> tuple[datetime, datetime, datetime]:
-    end_ref = (reference_end or current_utc()).astimezone(UTC)
+    end_ref = parse_utc_datetime(reference_end) if reference_end is not None else current_utc()
     valid_start = end_ref - timedelta(days=validation_days)
     train_end = valid_start - timedelta(seconds=1)
-    return history_start(), train_end, valid_start
+    return resolve_history_start(history_start_override), train_end, valid_start
 
 
 def compute_three_way_split_boundaries(
     reference_end: datetime | None = None,
     validation_days: int = VALIDATION_DAYS,
     test_days: int = TEST_DAYS,
+    history_start_override: str | datetime | None = None,
 ) -> tuple[datetime, datetime, datetime, datetime, datetime, datetime]:
-    end_ref = (reference_end or current_utc()).astimezone(UTC)
+    end_ref = parse_utc_datetime(reference_end) if reference_end is not None else current_utc()
     test_start = end_ref - timedelta(days=test_days)
     valid_start = test_start - timedelta(days=validation_days)
-    train_start = history_start()
+    train_start = resolve_history_start(history_start_override)
     train_end = valid_start - timedelta(seconds=1)
     valid_end = test_start - timedelta(seconds=1)
     test_end = end_ref
