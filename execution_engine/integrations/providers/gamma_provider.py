@@ -26,7 +26,14 @@ class GammaMarketProvider:
             return data["data"] or []
         return []
 
-    def fetch_open_markets(self, limit: int = 500, max_markets: int = 5000) -> List[Dict[str, Any]]:
+    def fetch_open_markets(
+        self,
+        limit: int = 500,
+        max_markets: int = 5000,
+        *,
+        order: str = "closedTime",
+        ascending: bool = False,
+    ) -> List[Dict[str, Any]]:
         markets: List[Dict[str, Any]] = []
         offset = 0
         while len(markets) < max_markets:
@@ -36,8 +43,8 @@ class GammaMarketProvider:
                     "closed": "false",
                     "archived": "false",
                     "accepting_orders": "true",
-                    "order": "endDate",
-                    "ascending": "true",
+                    "order": order,
+                    "ascending": "true" if ascending else "false",
                     "limit": str(limit),
                     "offset": str(offset),
                 }
