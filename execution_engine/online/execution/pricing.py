@@ -65,6 +65,15 @@ def build_submission_signal(
     if limit_price > cap:
         return None, "LIMIT_PRICE_ABOVE_CAP"
 
+    planned_amount_usdc = to_float(row.get("stake_usdc"))
+    min_order_size = to_float(quote.get("min_order_size"))
+    required_amount_usdc = min_order_size * limit_price if min_order_size > 0 and limit_price > 0 else 0.0
+    amount_usdc = max(planned_amount_usdc, required_amount_usdc)
+    if amount_usdc <= 0:
+        return None, "INVALID_ORDER_SIZE"
+    if cfg.max_trade_amount_usdc > 0 and amount_usdc > cfg.max_trade_amount_usdc:
+        return None, "MIN_ORDER_SIZE_ABOVE_MAX_TRADE"
+
     now_iso = to_iso(utc_now())
     close_time = str(row.get("market_close_time_utc") or row.get("valid_until_utc") or "")
     signal: SignalPayload = {
@@ -77,7 +86,7 @@ def build_submission_signal(
         "price_limit": limit_price,
         "reference_mid_price": to_float(row.get("price"), default=to_float(quote.get("mid"))),
         "reference_price_time_utc": str(quote.get("quote_time_utc") or now_iso),
-        "amount_usdc": to_float(row.get("stake_usdc")),
+        "amount_usdc": amount_usdc,
         "expiration_seconds": cfg.order_ttl_sec,
         "strategy_ref_id": "online_hourly_selection",
         "created_at_utc": now_iso,
@@ -104,6 +113,9 @@ def build_submission_signal(
         "outcome_label": str(row.get("selected_outcome_label") or ""),
         "best_bid_at_submit": best_bid,
         "best_ask_at_submit": best_ask,
+        "min_order_size": min_order_size,
+        "required_amount_usdc": required_amount_usdc,
+        "planned_amount_usdc": planned_amount_usdc,
         "tick_size": tick_size,
     }
     return ensure_ids(signal), "OK"
