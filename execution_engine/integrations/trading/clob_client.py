@@ -168,7 +168,13 @@ class LiveClobClient(ClobClient):
     def get_midpoint(self, token_id: str) -> Optional[float]:
         self._ensure_client()
         mid = self._client.get_midpoint(token_id)  # type: ignore[union-attr]
-        return None if mid is None else float(mid)
+        mid_val = _obj_get(mid, ["mid", "price", "value"])
+        if mid_val is None and not isinstance(mid, (dict, list, tuple)):
+            mid_val = mid
+        try:
+            return None if mid_val is None else float(mid_val)
+        except (TypeError, ValueError):
+            return None
 
     def get_order_book(self, token_id: str) -> Dict[str, object]:
         self._ensure_client()
