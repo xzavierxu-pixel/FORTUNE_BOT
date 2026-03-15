@@ -6,4 +6,4 @@ After=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/fortune-bot/fortune_bot.env
-ExecStart=/bin/bash -lc 'cd "$FORTUNE_BOT_REPO_ROOT" && /usr/bin/env bash "$FORTUNE_BOT_REPO_ROOT/execution_engine/app/scripts/linux/refresh_universe.sh" --max-markets 1000'
+ExecStart=/bin/bash -lc 'cd "$FORTUNE_BOT_REPO_ROOT" && /usr/bin/env bash "$FORTUNE_BOT_REPO_ROOT/execution_engine/app/scripts/linux/refresh_universe.sh" --max-markets 5000'
