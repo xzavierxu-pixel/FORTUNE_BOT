@@ -11,6 +11,7 @@ import time
 from execution_engine.runtime.config import PegConfig
 from execution_engine.runtime.state import refresh_state_snapshot
 from execution_engine.integrations.trading.clob_client import build_clob_client
+from execution_engine.online.exits import manage_exit_lifecycle
 from execution_engine.integrations.trading.order_manager import reconcile, sweep_expired_orders
 from execution_engine.online.execution.positions import load_open_position_rows, refresh_market_state_cache
 from execution_engine.online.reporting.run_summary import publish_run_summary
@@ -295,6 +296,10 @@ class OrderMonitorResult:
     shared_cancel_count: int
     shared_open_position_count: int
     shared_opened_position_event_count: int
+    exit_candidate_count: int
+    exit_submitted_count: int
+    settlement_close_count: int
+    canceled_exit_order_count: int
 
 
 def monitor_order_lifecycle(
@@ -309,6 +314,7 @@ def monitor_order_lifecycle(
     client = build_clob_client(cfg)
     sweep_expired_orders(cfg, client)
     reconcile(cfg, client)
+    exit_result = manage_exit_lifecycle(cfg, clob_client=client)
     state_snapshot = refresh_state_snapshot(cfg)
     market_state = refresh_market_state_cache(cfg)
     positions = load_open_position_rows(cfg)
@@ -354,6 +360,13 @@ def monitor_order_lifecycle(
         "orders_live_cancels_path": str(cfg.orders_live_cancels_path),
         "orders_live_opened_positions_path": str(cfg.orders_live_opened_positions_path),
         "orders_live_opened_position_events_path": str(cfg.orders_live_opened_position_events_path),
+        "exit_candidate_count": int(exit_result.candidate_count),
+        "exit_submitted_count": int(exit_result.submitted_count),
+        "exit_status_counts": dict(sorted(exit_result.status_counts.items())),
+        "settlement_close_count": int(exit_result.settlement_close_count),
+        "canceled_exit_order_count": int(exit_result.canceled_exit_order_count),
+        "exit_manifest_path": exit_result.exit_manifest_path,
+        "settlement_path": exit_result.settlement_path,
         "orders_root": str(cfg.runs_root_dir),
     }
     _write_manifest(cfg.run_monitor_manifest_path, manifest)
@@ -383,6 +396,10 @@ def monitor_order_lifecycle(
         shared_cancel_count=int(shared_export_counts["shared_cancel_count"]),
         shared_open_position_count=int(shared_export_counts["shared_open_position_count"]),
         shared_opened_position_event_count=int(shared_export_counts["shared_opened_position_event_count"]),
+        exit_candidate_count=int(exit_result.candidate_count),
+        exit_submitted_count=int(exit_result.submitted_count),
+        settlement_close_count=int(exit_result.settlement_close_count),
+        canceled_exit_order_count=int(exit_result.canceled_exit_order_count),
     )
 
 

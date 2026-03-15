@@ -1,0 +1,9 @@
+[Unit]
+Description=Fortune Bot healthcheck and SMTP alert job
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fortune-bot/fortune_bot.env
+ExecStart=/bin/bash -lc 'cd "$FORTUNE_BOT_REPO_ROOT" && /usr/bin/env python3 "$FORTUNE_BOT_REPO_ROOT/deploy/monitor/check_jobs.py"'

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Fortune Bot label-analysis daily
+
+[Timer]
+OnCalendar=*-*-* 00:10:00
+Persistent=true
+Unit=fortune-bot-label-analysis.service
+
+[Install]
+WantedBy=timers.target

@@ -41,9 +41,9 @@ This design intentionally does **not** optimize for:
 - aggressive crossing of the spread
 - multi-outcome markets
 - intrahour continuous re-scoring
-- active position management after entry
+- discretionary or continuously re-priced position management after entry
 
-The strategy is passive, slow, and consistency-first.
+The strategy is passive, slow, and consistency-first, with a single fixed take-profit exit order after entry and settlement fallback if the exit order never fills.
 
 ## High-Level Architecture
 
@@ -442,6 +442,30 @@ Use the more conservative of:
 
 Implementation may use explicit expiration or a cancel-after-TTL monitor.
 
+### Exit Order Policy After Entry
+
+Entry order handling stays unchanged during the initial 5-minute TTL window.
+
+Rules:
+
+- submit the buy limit order and allow it to work for up to 5 minutes
+- do not cancel the remaining buy quantity early just because a partial fill occurred
+- when the 5-minute TTL window ends, treat the actually filled quantity as the opened position
+- cancel or let expire any still-unfilled buy quantity
+- if filled quantity is greater than zero, immediately place a sell limit order for that filled quantity
+
+Exit order rules:
+
+- side = sell the same token that was filled
+- quantity = only the actually filled share quantity from the entry order
+- limit price = `0.99`
+- submit immediately after the entry TTL window closes and opened quantity is known
+- keep the exit order live until either it fills or the market resolves
+
+If the sell limit order never fills, the remaining position is closed at market settlement using the final resolved payout.
+
+The exit order is the default passive take-profit mechanism and should be persisted as part of the same order lifecycle.
+
 ## Order Lifecycle and Re-Entry Rules
 
 ### States
@@ -464,12 +488,15 @@ Minimum required states:
 - mark market as opened
 - stop future snapshot collection for that market
 - stop future scoring for that market
+- when the 5-minute entry TTL window closes, submit a sell limit order at `0.99` for the full filled share quantity
 
 #### If order is partially filled within 5 minutes
 
 - treat as opened position
-- cancel remaining unfilled quantity
+- allow the remaining entry quantity to continue working until the 5-minute TTL window closes
+- cancel or let expire the remaining unfilled quantity at TTL
 - stop future snapshot collection for that market
+- when the 5-minute entry TTL window closes, submit a sell limit order at `0.99` for the filled share quantity
 
 #### If order receives zero fill and expires/cancels/rejects
 
@@ -502,6 +529,15 @@ Required fields:
 - `filled_shares`
 - `opened_at_utc`
 - `status`
+- `exit_order_attempt_id`
+- `exit_limit_price`
+- `exit_submitted_at_utc`
+- `exit_status`
+- `exit_fill_price`
+- `exit_filled_shares`
+- `closed_at_utc`
+- `close_reason`
+- `realized_pnl_usdc`
 
 Only markets present in this ledger are excluded from future universe refresh and snapshot collection.
 
@@ -588,6 +624,28 @@ Must include at least:
 - `fill_shares`
 - `filled_at_utc`
 
+## Realized PnL Semantics
+
+Realized PnL must be computed using the actual close path of the filled position.
+
+Rules:
+
+- if the sell limit order fills, use the actual sell fill price to compute realized PnL
+- if the sell limit order does not fill before market resolution, use the market settlement payout to compute realized PnL
+- if the entry order receives zero fill, no position is opened and no realized PnL is recorded
+- if the entry order is partially filled, only the filled portion becomes a position and is eligible for realized PnL
+- the unfilled portion of the entry order is not a position and must not create separate position PnL
+
+### Opportunity PnL for Unfilled Quantity
+
+If you want to evaluate what the unfilled quantity would have earned at settlement, track it separately from realized PnL.
+
+Rules:
+
+- compute `opportunity_pnl` only for analysis, never for ledgered realized PnL
+- the reference close for unfilled quantity may use market settlement payout
+- keep `opportunity_pnl` in analysis outputs, not in the canonical position ledger
+
 ## Analysis Design
 
 Daily analysis should produce two perspectives.
@@ -640,8 +698,28 @@ The recommended implementation order is:
 9. Passive order submission with `best_bid - 1 tick`
 10. 5-minute TTL monitor and re-entry rules
 11. Open-position ledger
-12. Daily label sync
-13. Executed and opportunity analysis reports
+12. Exit-order and settlement-close module
+13. Daily label sync
+14. Executed and opportunity analysis reports
+
+## Code Organization Guidance
+
+Keep the implementation simple and separate entry execution from exit and settlement handling.
+
+Suggested package split:
+
+- `execution_engine/online/execution/`: entry submission, entry TTL monitoring, and live order reconciliation
+- `execution_engine/online/positions/`: opened-position ledger and position state transitions
+- `execution_engine/online/exits/`: exit-order submission, exit-order monitoring, settlement close, and realized PnL
+
+Minimum suggested files:
+
+- `execution_engine/online/exits/submit_exit.py`
+- `execution_engine/online/exits/monitor_exit.py`
+- `execution_engine/online/exits/settlement.py`
+- `execution_engine/online/exits/pnl.py`
+
+This keeps buy-entry logic isolated from post-entry lifecycle logic and makes the code easier to test and maintain.
 
 ## Explicit Decisions Locked In
 

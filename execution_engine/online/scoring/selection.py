@@ -52,15 +52,16 @@ def allocate_candidates(
 
     balance_provider = FileBalanceProvider(cfg.balances_path)
     available_cash = balance_provider.get_available_usdc()
-    bankroll = (
-        float(available_cash) + float(state.net_exposure_usdc)
-        if available_cash is not None
-        else max(float(state.net_exposure_usdc), cfg.max_net_exposure_usdc)
-    )
+    bankroll = float(cfg.initial_bankroll_usdc)
     if bankroll <= 0:
         return pd.DataFrame()
 
-    remaining_cash = float(available_cash) if available_cash is not None else float(bankroll)
+    available_capacity = max(0.0, bankroll - float(state.net_exposure_usdc))
+    remaining_cash = (
+        min(float(available_cash), available_capacity)
+        if available_cash is not None
+        else available_capacity
+    )
     selected_rows: List[Dict[str, Any]] = []
     ranked = candidates.copy()
     if "snapshot_time" not in ranked.columns:
@@ -80,7 +81,7 @@ def allocate_candidates(
         stake = min(
             desired_stake,
             bt_cfg.max_position_f * bankroll,
-            bt_cfg.max_trade_amount,
+            cfg.max_trade_amount_usdc,
             remaining_cash,
         )
         if stake <= 0:

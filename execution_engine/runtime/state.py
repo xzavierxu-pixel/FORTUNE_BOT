@@ -38,6 +38,7 @@ def _empty_state_payload(cfg: PegConfig) -> Dict[str, Any]:
         "orders_root_dir": str(cfg.runs_root_dir),
         "decision_last_seen": {},
         "market_action_filled": [],
+        "daily_order_count": 0,
         "open_orders_count": 0,
         "net_exposure_usdc": 0.0,
         "market_exposure_usdc": {},
@@ -74,12 +75,17 @@ def _write_state_snapshot(cfg: PegConfig, payload: Dict[str, Any]) -> Dict[str, 
 
 
 def build_state_snapshot(cfg: PegConfig) -> Dict[str, Any]:
+    from execution_engine.online.execution.positions import load_open_position_rows, refresh_market_state_cache
+
     orders = read_jsonl_many(list_run_artifact_paths(cfg.runs_root_dir, "orders.jsonl"))
     fills = read_jsonl_many(list_run_artifact_paths(cfg.runs_root_dir, "fills.jsonl"))
     latest_by_order = _latest_orders_by_attempt(orders)
+    refresh_market_state_cache(cfg)
+    open_positions = load_open_position_rows(cfg)
 
     decision_last_seen: Dict[str, str] = {}
     market_action_filled: Set[str] = set()
+    daily_order_count = 0
     open_orders_count = 0
     net_exposure_usdc = 0.0
     market_exposure_usdc: Dict[str, float] = {}
@@ -100,31 +106,47 @@ def build_state_snapshot(cfg: PegConfig) -> Dict[str, Any]:
             timestamp = str(order.get("updated_at_utc") or order.get("created_at_utc") or "")
             if timestamp:
                 decision_last_seen[decision_id] = timestamp
+        created_at = str(order.get("created_at_utc") or "")
+        if created_at:
+            try:
+                if parse_utc(created_at).date() == today:
+                    daily_order_count += 1
+            except ValueError:
+                pass
 
         if status and status not in TERMINAL_STATES:
             open_orders_count += 1
-            net_exposure_usdc += amount_usdc
-            if market_id and action:
+            if action.upper() == "BUY":
+                net_exposure_usdc += amount_usdc
+            if market_id and action and action.upper() == "BUY":
                 key = _market_action_key(market_id, outcome_index, action)
                 market_exposure_usdc[key] = market_exposure_usdc.get(key, 0.0) + amount_usdc
-            if category:
+            if category and action.upper() == "BUY":
                 category_exposure_usdc[category] = category_exposure_usdc.get(category, 0.0) + amount_usdc
 
-    for fill in fills:
-        market_id = str(fill.get("market_id", "") or "")
-        outcome_index = int(fill.get("outcome_index", 0))
-        action = str(fill.get("action", "") or "")
-        amount_usdc = float(fill.get("amount_usdc", 0.0))
-        category = str(fill.get("category", "")).strip()
-        pnl = float(fill.get("pnl_usdc", 0.0))
-
-        if market_id and action:
-            key = _market_action_key(market_id, outcome_index, action)
-            market_exposure_usdc[key] = market_exposure_usdc.get(key, 0.0) + amount_usdc
+    for position in open_positions:
+        market_id = str(position.get("market_id", "") or "")
+        outcome_index = int(position.get("outcome_index", 0) or 0)
+        amount_usdc = float(position.get("filled_amount_usdc", 0.0) or 0.0)
+        category = str(position.get("category", "")).strip()
+        if market_id:
+            key = _market_action_key(market_id, outcome_index, "BUY")
             market_action_filled.add(key)
+            market_exposure_usdc[key] = market_exposure_usdc.get(key, 0.0) + amount_usdc
         if category:
             category_exposure_usdc[category] = category_exposure_usdc.get(category, 0.0) + amount_usdc
         net_exposure_usdc += amount_usdc
+
+    for fill in fills:
+        action = str(fill.get("action", "") or "").upper()
+        if action == "BUY":
+            market_id = str(fill.get("market_id", "") or "")
+            outcome_index = int(fill.get("outcome_index", 0))
+            if market_id:
+                market_action_filled.add(_market_action_key(market_id, outcome_index, "BUY"))
+
+        market_id = str(fill.get("market_id", "") or "")
+        pnl = float(fill.get("pnl_usdc", 0.0))
 
         filled_at = fill.get("filled_at_utc")
         if filled_at:
@@ -137,6 +159,7 @@ def build_state_snapshot(cfg: PegConfig) -> Dict[str, Any]:
     payload = {
         "decision_last_seen": dict(sorted(decision_last_seen.items())),
         "market_action_filled": sorted(market_action_filled),
+        "daily_order_count": int(daily_order_count),
         "open_orders_count": int(open_orders_count),
         "net_exposure_usdc": float(net_exposure_usdc),
         "market_exposure_usdc": {key: float(value) for key, value in sorted(market_exposure_usdc.items())},
@@ -158,6 +181,7 @@ class StateStore:
         self.decision_ids: Set[str] = set()
         self.decision_last_seen: Dict[str, object] = {}
         self.market_action_filled: Set[str] = set()
+        self.daily_order_count = 0
         self.open_orders_count = 0
         self.net_exposure_usdc = 0.0
         self.market_exposure_usdc: Dict[str, float] = {}
@@ -184,6 +208,7 @@ class StateStore:
             for value in (payload.get("market_action_filled", []) or [])
             if str(value)
         }
+        self.daily_order_count = int(payload.get("daily_order_count", 0) or 0)
         self.open_orders_count = int(payload.get("open_orders_count", 0) or 0)
         self.net_exposure_usdc = float(payload.get("net_exposure_usdc", 0.0) or 0.0)
         self.market_exposure_usdc = {
@@ -203,6 +228,7 @@ class StateStore:
                 for key, value in sorted(self.decision_last_seen.items())
             },
             "market_action_filled": sorted(self.market_action_filled),
+            "daily_order_count": int(self.daily_order_count),
             "open_orders_count": int(self.open_orders_count),
             "net_exposure_usdc": float(self.net_exposure_usdc),
             "market_exposure_usdc": {
@@ -272,16 +298,7 @@ class StateStore:
 
     def record_order(self, record: Dict[str, object]) -> None:
         append_jsonl(self.cfg.orders_path, record)
-        self._apply_order_record(record)
-        decision_id = record.get("decision_id")
-        if decision_id:
-            timestamp = record.get("updated_at_utc") or record.get("created_at_utc")
-            if timestamp:
-                try:
-                    self.decision_last_seen[str(decision_id)] = parse_utc(str(timestamp))
-                except ValueError:
-                    pass
-        self.persist_snapshot()
+        self._apply_snapshot(build_state_snapshot(self.cfg))
 
     def record_rejection(self, record: Dict[str, object]) -> None:
         append_jsonl(self.cfg.rejections_path, record)
@@ -291,21 +308,7 @@ class StateStore:
 
     def record_fill(self, record: Dict[str, object]) -> None:
         append_jsonl(self.cfg.fills_path, record)
-        market_id = str(record.get("market_id", "") or "")
-        outcome_index = int(record.get("outcome_index", 0))
-        action = str(record.get("action", "") or "")
-        amount_usdc = float(record.get("amount_usdc", 0.0) or 0.0)
-        category = str(record.get("category", "") or "").strip()
-        pnl = float(record.get("pnl_usdc", 0.0) or 0.0)
-        if market_id and action:
-            key = _market_action_key(market_id, outcome_index, action)
-            self.market_action_filled.add(key)
-            self.market_exposure_usdc[key] = self.market_exposure_usdc.get(key, 0.0) + amount_usdc
-        if category:
-            self.category_exposure_usdc[category] = self.category_exposure_usdc.get(category, 0.0) + amount_usdc
-        self.net_exposure_usdc += amount_usdc
-        self.daily_pnl_usdc += pnl
-        self.persist_snapshot()
+        self._apply_snapshot(build_state_snapshot(self.cfg))
 
     def get_market_exposure(self, market_id: str, outcome_index: int, action: str) -> float:
         return self.market_exposure_usdc.get(_market_action_key(market_id, outcome_index, action), 0.0)

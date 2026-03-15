@@ -64,6 +64,9 @@ def check_basic_risk(
     if amount_usdc <= 0:
         return False, "INVALID_ORDER_SIZE"
 
+    if cfg.max_trade_amount_usdc > 0 and amount_usdc > cfg.max_trade_amount_usdc:
+        return False, "MAX_TRADE_AMOUNT_BREACH"
+
     if amount_usdc > cfg.max_notional:
         return False, "MAX_NOTIONAL_BREACH"
 
@@ -73,6 +76,9 @@ def check_basic_risk(
 
     if state.current_daily_pnl() < cfg.daily_loss_limit:
         return False, "DAILY_LOSS_LIMIT"
+
+    if cfg.max_daily_orders > 0 and state.daily_order_count >= cfg.max_daily_orders:
+        return False, "DAILY_ORDER_LIMIT"
 
     if cfg.enforce_one_order_per_market:
         market_id = str(signal.get("market_id", ""))

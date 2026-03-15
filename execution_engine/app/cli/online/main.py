@@ -186,6 +186,10 @@ def _cmd_monitor_orders(args: argparse.Namespace) -> None:
     print(f"shared_cancel_count={result.shared_cancel_count}")
     print(f"shared_open_position_count={result.shared_open_position_count}")
     print(f"shared_opened_position_event_count={result.shared_opened_position_event_count}")
+    print(f"exit_candidate_count={result.exit_candidate_count}")
+    print(f"exit_submitted_count={result.exit_submitted_count}")
+    print(f"settlement_close_count={result.settlement_close_count}")
+    print(f"canceled_exit_order_count={result.canceled_exit_order_count}")
     for key, value in sorted(result.order_status_counts.items()):
         print(f"status_{key}={value}")
     print(f"manifest={result.run_manifest_path}")

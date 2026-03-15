@@ -168,6 +168,8 @@ class PegConfig:
     run_label_summary_path: Path
 
     # Order sizing and TTL
+    initial_bankroll_usdc: float
+    max_trade_amount_usdc: float
     order_usdc: float
     order_ttl_sec: int
 
@@ -187,6 +189,7 @@ class PegConfig:
     # Risk limits
     max_notional: float
     daily_loss_limit: float
+    max_daily_orders: int
     dup_window_sec: int
     min_time_to_close_sec: int
     max_open_orders: int
@@ -432,7 +435,9 @@ def load_config() -> PegConfig:
         run_label_summary_path=Path(
             _get_env("PEG_RUN_LABEL_SUMMARY_PATH", str(data_dir / "label_analysis" / "summary.json"))
         ),
-        order_usdc=_get_float("PEG_ORDER_USDC", 10.0),
+        initial_bankroll_usdc=_get_float("PEG_INITIAL_BANKROLL_USDC", 100.0),
+        max_trade_amount_usdc=_get_float("PEG_MAX_TRADE_AMOUNT_USDC", 1.0),
+        order_usdc=_get_float("PEG_ORDER_USDC", 1.0),
         order_ttl_sec=_get_int("PEG_ORDER_TTL_SEC", 300),
         signal_ttl_sec_min=_get_int("PEG_SIGNAL_TTL_SEC_MIN", 300),
         signal_ttl_sec_max=_get_int("PEG_SIGNAL_TTL_SEC_MAX", 600),
@@ -443,13 +448,14 @@ def load_config() -> PegConfig:
         min_depth_usdc=_get_float("PEG_MIN_DEPTH_USDC", 0.0),
         price_refresh_retries=_get_int("PEG_PRICE_REFRESH_RETRIES", 2),
         price_refresh_backoff_sec=_get_int("PEG_PRICE_REFRESH_BACKOFF_SEC", 2),
-        max_notional=_get_float("PEG_MAX_NOTIONAL", 100.0),
+        max_notional=_get_float("PEG_MAX_NOTIONAL", 1.0),
         daily_loss_limit=_get_float("PEG_DAILY_LOSS_LIMIT", -500.0),
+        max_daily_orders=_get_int("PEG_MAX_DAILY_ORDERS", 0),
         dup_window_sec=_get_int("PEG_DUP_WINDOW_SEC", 5),
         min_time_to_close_sec=_get_int("PEG_MIN_TIME_TO_CLOSE_SEC", 900),
         max_open_orders=_get_int("PEG_MAX_OPEN_ORDERS", 20),
-        max_position_per_market_usdc=_get_float("PEG_MAX_POSITION_PER_MARKET_USDC", 200.0),
-        max_net_exposure_usdc=_get_float("PEG_MAX_NET_EXPOSURE_USDC", 1000.0),
+        max_position_per_market_usdc=_get_float("PEG_MAX_POSITION_PER_MARKET_USDC", 1.0),
+        max_net_exposure_usdc=_get_float("PEG_MAX_NET_EXPOSURE_USDC", 100.0),
         max_exposure_per_category_usdc=_get_float("PEG_MAX_EXPOSURE_PER_CATEGORY_USDC", 0.0),
         fat_finger_high=_get_float("PEG_FAT_FINGER_HIGH", 0.99),
         fat_finger_low=_get_float("PEG_FAT_FINGER_LOW", 0.01),

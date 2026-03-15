@@ -54,6 +54,8 @@ class SignalPayload(TypedDict, total=False):
     best_bid_at_submit: float
     best_ask_at_submit: float
     tick_size: float
+    execution_phase: str
+    parent_order_attempt_id: str
 
 
 class DecisionRecord(TypedDict, total=False):
@@ -88,6 +90,8 @@ class DecisionRecord(TypedDict, total=False):
     best_bid_at_submit: float
     best_ask_at_submit: float
     tick_size: float
+    execution_phase: str
+    parent_order_attempt_id: str
 
 
 class OrderRecord(TypedDict, total=False):
@@ -102,6 +106,7 @@ class OrderRecord(TypedDict, total=False):
     price_limit: float
     amount_usdc: float
     expiration_seconds: int
+    market_close_time_utc: str
     status: str
     created_at_utc: str
     run_id: str
@@ -125,6 +130,8 @@ class OrderRecord(TypedDict, total=False):
     best_bid_at_submit: float
     best_ask_at_submit: float
     tick_size: float
+    execution_phase: str
+    parent_order_attempt_id: str
 
 
 class FillRecord(TypedDict, total=False):
@@ -145,6 +152,9 @@ class FillRecord(TypedDict, total=False):
     position_side: str
     token_id: str
     outcome_label: str
+    execution_phase: str
+    parent_order_attempt_id: str
+    close_reason: str
 
 
 class EventRecord(TypedDict, total=False):

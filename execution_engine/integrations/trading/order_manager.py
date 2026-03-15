@@ -14,7 +14,7 @@ from execution_engine.runtime.models import DecisionRecord, FillRecord, OrderRec
 from execution_engine.shared.logger import log_structured
 from execution_engine.shared.metrics import increment_metric
 from execution_engine.shared.time import parse_utc, to_iso, utc_now
-from execution_engine.online.execution.positions import rebuild_open_positions_ledger
+from execution_engine.online.execution.positions import load_open_position_rows, rebuild_open_positions_ledger
 
 
 def compute_effective_expiration_seconds(signal: Dict[str, object], cfg: PegConfig) -> Tuple[int, Optional[str]]:
@@ -167,6 +167,17 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
 
     fills_by_order: Dict[str, float] = {}
     order_by_clob_id: Dict[str, OrderRecord] = {}
+    position_basis: Dict[str, Dict[str, float]] = {}
+    for row in load_open_position_rows(cfg):
+        market_id = str(row.get("market_id", "") or "")
+        token_id = str(row.get("token_id", "") or "")
+        outcome_index = int(row.get("outcome_index", 0) or 0)
+        if not market_id or not token_id:
+            continue
+        position_basis[f"{market_id}|{token_id}|{outcome_index}"] = {
+            "open_shares": float(row.get("filled_shares", 0.0) or 0.0),
+            "open_cost_usdc": float(row.get("filled_amount_usdc", 0.0) or 0.0),
+        }
     for order in latest_orders.values():
         clob_id = order.get("clob_order_id")
         if clob_id:
@@ -190,6 +201,21 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
             price = float(order.get("price_limit", 0.0))
             size = 0.0
         amount_usdc = price * size if size > 0 else float(order.get("amount_usdc", 0.0))
+        action = str(order.get("action", "") or "").upper()
+        outcome_index = int(order.get("outcome_index", 0) or 0)
+        position_key = f"{order.get('market_id', '')}|{order.get('token_id', '')}|{outcome_index}"
+        pnl_usdc = 0.0
+        basis = position_basis.setdefault(position_key, {"open_shares": 0.0, "open_cost_usdc": 0.0})
+        shares = size if size > 0 else (amount_usdc / price if price > 0 else 0.0)
+        if action == "SELL" and shares > 0 and basis["open_shares"] > 0:
+            avg_cost = basis["open_cost_usdc"] / basis["open_shares"] if basis["open_shares"] > 0 else 0.0
+            closed_shares = min(basis["open_shares"], shares)
+            pnl_usdc = amount_usdc - (avg_cost * closed_shares)
+            basis["open_shares"] = max(0.0, basis["open_shares"] - closed_shares)
+            basis["open_cost_usdc"] = max(0.0, basis["open_cost_usdc"] - (avg_cost * closed_shares))
+        elif action == "BUY" and shares > 0:
+            basis["open_shares"] += shares
+            basis["open_cost_usdc"] += amount_usdc
 
         fill_record: FillRecord = {
             "fill_id": str(trade_id) if trade_id else f"{clob_order_id}:{to_iso(utc_now())}",
@@ -198,17 +224,20 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
             "decision_id": order.get("decision_id"),
             "run_id": order.get("run_id"),
             "market_id": order.get("market_id"),
-            "outcome_index": order.get("outcome_index"),
+            "outcome_index": outcome_index,
             "action": order.get("action"),
             "amount_usdc": amount_usdc,
             "price": price,
-            "shares": size if size > 0 else (amount_usdc / price if price > 0 else 0.0),
+            "shares": shares,
+            "pnl_usdc": pnl_usdc,
             "filled_at_utc": str(_extract_field(trade, ["timestamp", "time", "created_at"]) or to_iso(utc_now())),
             "category": order.get("category"),
             "domain": order.get("domain"),
             "position_side": order.get("position_side"),
             "token_id": order.get("token_id"),
             "outcome_label": order.get("outcome_label"),
+            "execution_phase": order.get("execution_phase", "ENTRY"),
+            "parent_order_attempt_id": order.get("parent_order_attempt_id"),
         }
         append_jsonl(cfg.fills_path, fill_record)
         log_structured(cfg.logs_path, {"type": "fill", **fill_record})
@@ -233,21 +262,6 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
                 increment_metric(cfg.metrics_path, "orders_filled", 1)
             elif target == "PARTIALLY_FILLED":
                 increment_metric(cfg.metrics_path, "orders_partially_filled", 1)
-                cancel_requested = transition_order(updated, "CANCEL_REQUESTED", "PARTIAL_FILL_EXIT")
-                append_jsonl(cfg.orders_path, cancel_requested)
-                log_structured(cfg.logs_path, {"type": "order_state", **cancel_requested})
-                if clob_order_id:
-                    try:
-                        client.cancel_order(str(clob_order_id))
-                        canceled = transition_order(cancel_requested, "CANCELED", "PARTIAL_FILL_EXIT")
-                        append_jsonl(cfg.orders_path, canceled)
-                        log_structured(cfg.logs_path, {"type": "order_state", **canceled})
-                        increment_metric(cfg.metrics_path, "orders_canceled", 1)
-                    except Exception:
-                        error = transition_order(cancel_requested, "ERROR", "CANCEL_FAILED")
-                        append_jsonl(cfg.orders_path, error)
-                        log_structured(cfg.logs_path, {"type": "order_state", **error})
-                        increment_metric(cfg.metrics_path, "orders_error", 1)
             continue
         if clob_order_id and str(clob_order_id) not in open_ids:
             updated = transition_order(order, "CANCEL_REQUESTED", "NOT_IN_OPEN_ORDERS")
@@ -284,6 +298,7 @@ def submit_order(
         "price_limit": decision.get("price_limit"),
         "amount_usdc": decision.get("amount_usdc"),
         "expiration_seconds": expiration_seconds,
+        "market_close_time_utc": decision.get("market_close_time_utc"),
         "status": "DRY_RUN_SUBMITTED" if cfg.dry_run else "NEW",
         "created_at_utc": to_iso(now),
         "updated_at_utc": to_iso(now),
@@ -306,6 +321,8 @@ def submit_order(
         "best_bid_at_submit": decision.get("best_bid_at_submit"),
         "best_ask_at_submit": decision.get("best_ask_at_submit"),
         "tick_size": decision.get("tick_size"),
+        "execution_phase": decision.get("execution_phase", "ENTRY"),
+        "parent_order_attempt_id": decision.get("parent_order_attempt_id"),
     }
 
     if cfg.dry_run:

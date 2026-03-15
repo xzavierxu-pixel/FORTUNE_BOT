@@ -59,53 +59,90 @@ def _write_open_positions(cfg: PegConfig, positions: List[Dict[str, Any]]) -> No
 
 
 def _build_open_positions_from_fills(fills: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    fills_by_market: Dict[str, List[Dict[str, Any]]] = {}
-    for fill in fills:
+    positions_by_key: Dict[str, Dict[str, Any]] = {}
+    for fill in sorted(fills, key=lambda row: str(row.get("filled_at_utc") or "")):
         market_id = str(fill.get("market_id", "") or "")
-        if not market_id:
+        token_id = str(fill.get("token_id", "") or "")
+        outcome_index = int(fill.get("outcome_index", 0) or 0)
+        if not market_id or not token_id:
             continue
-        fills_by_market.setdefault(market_id, []).append(fill)
+        key = f"{market_id}|{token_id}|{outcome_index}"
+        action = str(fill.get("action", "") or "BUY").upper()
+        try:
+            shares = float(fill.get("shares", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            shares = 0.0
+        try:
+            amount_usdc = float(fill.get("amount_usdc", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            amount_usdc = 0.0
+        try:
+            price = float(fill.get("price", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            price = 0.0
 
-    positions: List[Dict[str, Any]] = []
-    for market_id, market_fills in sorted(fills_by_market.items()):
-        market_fills = sorted(
-            market_fills,
-            key=lambda row: str(row.get("filled_at_utc") or ""),
-        )
-        first_fill = market_fills[0]
-        total_amount_usdc = 0.0
-        total_shares = 0.0
-        last_price = 0.0
-        for fill in market_fills:
-            try:
-                total_amount_usdc += float(fill.get("amount_usdc", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                total_shares += float(fill.get("shares", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                pass
-            try:
-                price = float(fill.get("price", 0.0) or 0.0)
-                if price > 0:
-                    last_price = price
-            except (TypeError, ValueError):
-                continue
-
-        positions.append(
+        position = positions_by_key.setdefault(
+            key,
             {
                 "market_id": market_id,
-                "token_id": str(first_fill.get("token_id", "") or ""),
-                "outcome_label": str(first_fill.get("outcome_label", "") or ""),
-                "entry_run_id": str(first_fill.get("run_id", "") or ""),
-                "entry_order_attempt_id": str(first_fill.get("order_attempt_id", "") or ""),
-                "entry_price": last_price,
-                "filled_amount_usdc": total_amount_usdc,
-                "filled_shares": total_shares,
-                "opened_at_utc": str(first_fill.get("filled_at_utc", "") or ""),
+                "token_id": token_id,
+                "outcome_index": outcome_index,
+                "outcome_label": str(fill.get("outcome_label", "") or ""),
+                "category": str(fill.get("category", "") or ""),
+                "domain": str(fill.get("domain", "") or ""),
+                "entry_run_id": str(fill.get("run_id", "") or ""),
+                "entry_order_attempt_id": str(fill.get("order_attempt_id", "") or ""),
+                "opened_at_utc": str(fill.get("filled_at_utc", "") or ""),
+                "open_shares": 0.0,
+                "open_cost_usdc": 0.0,
+                "entry_price": 0.0,
+            },
+        )
+
+        if action == "SELL":
+            if position["open_shares"] <= 0 or shares <= 0:
+                continue
+            avg_cost = position["open_cost_usdc"] / position["open_shares"] if position["open_shares"] > 0 else 0.0
+            closed_shares = min(float(position["open_shares"]), shares)
+            position["open_shares"] = max(0.0, float(position["open_shares"]) - closed_shares)
+            position["open_cost_usdc"] = max(0.0, float(position["open_cost_usdc"]) - avg_cost * closed_shares)
+            if position["open_shares"] <= 1e-9:
+                position["open_shares"] = 0.0
+                position["open_cost_usdc"] = 0.0
+            continue
+
+        position["open_shares"] = float(position["open_shares"]) + max(shares, 0.0)
+        position["open_cost_usdc"] = float(position["open_cost_usdc"]) + max(amount_usdc, 0.0)
+        if price > 0:
+            position["entry_price"] = (
+                float(position["open_cost_usdc"]) / float(position["open_shares"])
+                if float(position["open_shares"]) > 0
+                else price
+            )
+
+    positions: List[Dict[str, Any]] = []
+    for position in positions_by_key.values():
+        open_shares = float(position.get("open_shares", 0.0) or 0.0)
+        if open_shares <= 1e-9:
+            continue
+        positions.append(
+            {
+                "market_id": str(position.get("market_id") or ""),
+                "token_id": str(position.get("token_id") or ""),
+                "outcome_index": int(position.get("outcome_index", 0) or 0),
+                "outcome_label": str(position.get("outcome_label") or ""),
+                "category": str(position.get("category") or ""),
+                "domain": str(position.get("domain") or ""),
+                "entry_run_id": str(position.get("entry_run_id") or ""),
+                "entry_order_attempt_id": str(position.get("entry_order_attempt_id") or ""),
+                "entry_price": float(position.get("entry_price", 0.0) or 0.0),
+                "filled_amount_usdc": round(float(position.get("open_cost_usdc", 0.0) or 0.0), 6),
+                "filled_shares": round(open_shares, 6),
+                "opened_at_utc": str(position.get("opened_at_utc") or ""),
                 "status": "OPEN",
             }
         )
+    positions.sort(key=lambda row: str(row.get("opened_at_utc") or ""))
     return positions
 
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Fortune Bot healthcheck every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=fortune-bot-healthcheck.service
+
+[Install]
+WantedBy=timers.target

@@ -71,5 +71,7 @@ def build_decision_from_signal(
         "best_bid_at_submit": signal.get("best_bid_at_submit"),
         "best_ask_at_submit": signal.get("best_ask_at_submit"),
         "tick_size": signal.get("tick_size"),
+        "execution_phase": signal.get("execution_phase", "ENTRY"),
+        "parent_order_attempt_id": signal.get("parent_order_attempt_id"),
     }
     return decision, "OK"
