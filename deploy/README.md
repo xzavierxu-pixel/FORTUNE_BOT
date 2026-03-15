@@ -7,7 +7,12 @@
 
 ## 1. 现在这套真实交易工作流是什么
 
-你现在要走的是 Polymarket 的 proxy wallet 路径，不是直接用 EOA 余额交易。
+你当前要走的是：
+
+- Polymarket 邮箱登录账户
+- 账户下有一个 proxy wallet
+- 资金在 proxy wallet 里
+- API 签名按邮箱登录路径处理
 
 当前正确流程是：
 
@@ -15,9 +20,9 @@
 2. 在 Polymarket UI 里抄下 proxy wallet 地址。
 3. 把 `USDC.e` 转到这个 proxy wallet。
 4. 代码里用：
-   - `signature_type=2`
+   - `signature_type=1`
    - `funder=proxy wallet 地址`
-5. 用你的 MetaMask 私钥做签名。
+5. 私钥使用这个邮箱登录 Polymarket 账户对应的导出私钥。
 6. 执行 `create_or_derive_api_creds()`，拿到 CLOB API 凭证。
 7. 做一次 approve / allowance 更新。
 8. 下一个极小测试单。
@@ -26,14 +31,13 @@
 
 仓库现在已经按这条路径改好了：
 
-- 默认 `PEG_CLOB_SIGNATURE_TYPE=2`
-- 缺少 `PEG_CLOB_FUNDER` 时，live client 会直接报错
+- 默认 `PEG_CLOB_SIGNATURE_TYPE=1`
 - 已新增一次性测试脚本：
   - `execution_engine/app/scripts/manual/proxy_wallet_smoketest.py`
 
 ## 2. 你现在这个状态下，还需要存 POL 吗
 
-如果你走的是这条 proxy wallet 路径，一般不需要额外往 Polymarket 里存 `POL` 才能开始这套 API 交易流程。
+如果你走的是这条邮箱登录 + proxy wallet 路径，一般不需要额外往 Polymarket 里存 `POL` 才能开始这套 API 交易流程。
 
 你现在更关键的是这几件事：
 
@@ -42,22 +46,22 @@
 - 确认服务器上填的是：
   - `PEG_CLOB_PRIVATE_KEY`
   - `PEG_CLOB_FUNDER`
-  - `PEG_CLOB_SIGNATURE_TYPE=2`
+  - `PEG_CLOB_SIGNATURE_TYPE=1`
 - 先跑一次 smoke test，把 API creds 和 allowance 跑通
 
-只有在你自己额外做需要链上 gas 的 EOA 操作时，才需要单独考虑 `POL`。
+只有在你自己额外做需要链上 gas 的钱包操作时，才需要单独考虑 `POL`。
 
 ## 3. 你现在还没配完的关键配置
 
 如果你已经把 USDC 存进 Polymarket，但还没跑通 API，下列值通常还没配完整：
 
 - `PEG_CLOB_PRIVATE_KEY`
-  - 这是你的 MetaMask / 浏览器钱包私钥
-  - 不是 API key，但必须有
+  - 这是邮箱登录 Polymarket 账户对应的导出私钥
+  - 不是给它转钱的 MetaMask 私钥
 - `PEG_CLOB_FUNDER`
   - 这里必须填 Polymarket UI 里看到的 proxy wallet 地址
-- `PEG_CLOB_SIGNATURE_TYPE=2`
-  - proxy wallet 路径必须是 2
+- `PEG_CLOB_SIGNATURE_TYPE=1`
+  - 邮箱登录路径应该用 1
 - `PEG_CLOB_API_KEY`
 - `PEG_CLOB_API_SECRET`
 - `PEG_CLOB_API_PASSPHRASE`
@@ -82,7 +86,7 @@
 - `execution_engine/app/scripts/linux/*.sh`
   - Linux 专用的 execution 工作流启动脚本
 - `execution_engine/app/scripts/manual/proxy_wallet_smoketest.py`
-  - proxy wallet 一次性联调脚本
+  - 邮箱登录 proxy wallet 一次性联调脚本
 
 ## 5. 服务器依赖
 
@@ -172,9 +176,9 @@ nano /tmp/fortune_bot.env
 - `PEG_BALANCES_PATH=/var/lib/fortune_bot/execution_engine_data/shared/balances.json`
 - `PEG_DRY_RUN=0`
 - `PEG_CLOB_ENABLED=1`
-- `PEG_CLOB_PRIVATE_KEY=你的MetaMask私钥`
+- `PEG_CLOB_PRIVATE_KEY=你的Polymarket邮箱账户导出私钥`
 - `PEG_CLOB_FUNDER=你的Polymarket proxy wallet地址`
-- `PEG_CLOB_SIGNATURE_TYPE=2`
+- `PEG_CLOB_SIGNATURE_TYPE=1`
 - `PEG_CLOB_API_KEY=先留空或临时占位`
 - `PEG_CLOB_API_SECRET=先留空或临时占位`
 - `PEG_CLOB_API_PASSPHRASE=先留空或临时占位`
@@ -245,7 +249,7 @@ bash execution_engine/app/scripts/linux/bootstrap_venv.sh
 /opt/fortune_bot/.venv-execution/bin/python --version
 ```
 
-## 11. 先跑 proxy wallet smoke test
+## 11. 先跑邮箱登录 proxy wallet smoke test
 
 这一步是现在最关键的。
 
@@ -266,7 +270,7 @@ cd /opt/fortune_bot
 
 这个脚本会做：
 
-1. 用 `signature_type=2 + funder=proxy wallet` 初始化 client
+1. 用 `signature_type=1 + funder=proxy wallet` 初始化 client
 2. 执行 `create_or_derive_api_creds()`
 3. 查询 approve 前余额和 allowance
 4. 执行 collateral / conditional allowance 更新
@@ -459,11 +463,12 @@ sudo systemctl start fortune-bot-hourly-cycle.timer
 如果你已经把 USDC 存进 Polymarket，那么推荐顺序就是：
 
 1. 去 Polymarket UI 再确认一次 proxy wallet 地址。
-2. 把 `PEG_CLOB_PRIVATE_KEY` 和 `PEG_CLOB_FUNDER` 写进 `/etc/fortune-bot/fortune_bot.env`。
-3. 保持 `PEG_CLOB_SIGNATURE_TYPE=2`。
-4. 先跑 `proxy_wallet_smoketest.py`。
-5. 把脚本打印出来的 `PEG_CLOB_API_KEY / SECRET / PASSPHRASE` 回填到 env 文件。
-6. 再手动试跑 `refresh_universe` 和 `hourly_cycle`。
-7. 没问题后再启 `tmux` market stream 和 `systemd` timers。
+2. 去账户设置确认并导出邮箱登录账户对应的私钥。
+3. 把 `PEG_CLOB_PRIVATE_KEY` 和 `PEG_CLOB_FUNDER` 写进 `/etc/fortune-bot/fortune_bot.env`。
+4. 保持 `PEG_CLOB_SIGNATURE_TYPE=1`。
+5. 先跑 `proxy_wallet_smoketest.py`。
+6. 把脚本打印出来的 `PEG_CLOB_API_KEY / SECRET / PASSPHRASE` 回填到 env 文件。
+7. 再手动试跑 `refresh_universe` 和 `hourly_cycle`。
+8. 没问题后再启 `tmux` market stream 和 `systemd` timers。
 
 这就是你当前最短、最稳的上线路径。

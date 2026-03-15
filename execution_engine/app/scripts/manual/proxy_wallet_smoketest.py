@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-off Polymarket proxy wallet smoke test."""
+"""One-off Polymarket email-login proxy wallet smoke test."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 
 DEFAULT_HOST = "https://clob.polymarket.com"
 DEFAULT_CHAIN_ID = 137
-DEFAULT_SIGNATURE_TYPE = 2
+DEFAULT_SIGNATURE_TYPE = 1
 DEFAULT_TOKEN_ID = "83155705733555118569646804738526000527065734405672442364016752623981274522859"
 DEFAULT_PRICE = 0.55
 DEFAULT_SIZE = 1.0
@@ -91,7 +91,7 @@ def create_or_derive_api_key(client: Any) -> Any:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Polymarket proxy wallet one-off smoke test.")
+    parser = argparse.ArgumentParser(description="Polymarket email-login proxy wallet one-off smoke test.")
     parser.add_argument("--host", default=env_or_default("PEG_CLOB_HOST", DEFAULT_HOST))
     parser.add_argument("--chain-id", type=int, default=int(env_or_default("PEG_CLOB_CHAIN_ID", str(DEFAULT_CHAIN_ID))))
     parser.add_argument("--private-key", default=os.getenv("PEG_CLOB_PRIVATE_KEY", ""))
@@ -120,8 +120,8 @@ def main() -> None:
     private_key = require(args.private_key, "PEG_CLOB_PRIVATE_KEY or --private-key")
     funder = require(args.funder, "PEG_CLOB_FUNDER or --funder")
 
-    if args.signature_type != 2:
-        raise SystemExit("This smoke test is intended for proxy wallet trading. Use --signature-type 2.")
+    if args.signature_type not in {1, 2}:
+        raise SystemExit("This smoke test only supports proxy wallet trading with --signature-type 1 or 2.")
 
     types = import_py_clob_client()
     client = types["ClobClient"](

@@ -479,7 +479,7 @@ def load_config() -> PegConfig:
         clob_api_key=_get_env("PEG_CLOB_API_KEY", ""),
         clob_api_secret=_get_env("PEG_CLOB_API_SECRET", ""),
         clob_api_passphrase=_get_env("PEG_CLOB_API_PASSPHRASE", ""),
-        clob_signature_type=_get_int("PEG_CLOB_SIGNATURE_TYPE", 2),
+        clob_signature_type=_get_int("PEG_CLOB_SIGNATURE_TYPE", 1),
         clob_request_timeout_sec=_get_int("PEG_CLOB_TIMEOUT_SEC", 20),
         clob_derive_api_key=_get_bool("PEG_CLOB_DERIVE_API_KEY", False),
         gamma_base_url=_get_env("PEG_GAMMA_BASE_URL", "https://gamma-api.polymarket.com"),
