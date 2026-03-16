@@ -10,6 +10,9 @@ polymarket_rule_engine/data/offline/edge/*
 !polymarket_rule_engine/data/offline/models/
 polymarket_rule_engine/data/offline/models/*
 !polymarket_rule_engine/data/offline/models/ensemble_snapshot_q.pkl
+!polymarket_rule_engine/data/domain/
+polymarket_rule_engine/data/domain/*
+!polymarket_rule_engine/data/domain/market_domain_features.csv
 execution_engine/data/
 
 # Python ignore patterns
