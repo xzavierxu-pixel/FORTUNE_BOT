@@ -472,3 +472,83 @@ sudo systemctl start fortune-bot-hourly-cycle.timer
 8. 没问题后再启 `tmux` market stream 和 `systemd` timers。
 
 这就是你当前最短、最稳的上线路径。
+---
+
+## 19. Pipeline Maintenance Scripts
+
+If you are running the production workflow with `tmux + systemd timers` as described above, you can now use these helper scripts.
+
+Files:
+
+- `execution_engine/app/scripts/linux/stop_pipeline.sh`
+- `execution_engine/app/scripts/linux/restart_pipeline.sh`
+
+### Stop the whole pipeline
+
+This will stop:
+
+- tmux session `fortune-stream`
+- `fortune-bot-refresh-universe.timer`
+- `fortune-bot-hourly-cycle.timer`
+- `fortune-bot-label-analysis.timer`
+- `fortune-bot-healthcheck.timer`
+- and their corresponding `service` units
+
+Usage:
+
+```bash
+cd /opt/fortune_bot
+bash execution_engine/app/scripts/linux/stop_pipeline.sh
+```
+
+### Pull latest code and restart the whole workflow
+
+This will:
+
+1. stop the full pipeline
+2. run `git pull --ff-only`
+3. reload `/etc/fortune-bot/fortune_bot.env`
+4. run `bootstrap_venv.sh`
+5. recreate tmux stream session
+6. restart all `fortune-bot-*` timers
+
+Usage:
+
+```bash
+cd /opt/fortune_bot
+bash execution_engine/app/scripts/linux/restart_pipeline.sh
+```
+
+Optional flags:
+
+```bash
+# restart without pulling new code
+bash execution_engine/app/scripts/linux/restart_pipeline.sh --no-pull
+
+# restart without rebuilding / validating the virtualenv
+bash execution_engine/app/scripts/linux/restart_pipeline.sh --skip-bootstrap
+```
+
+### Custom tmux session name
+
+By default the scripts manage:
+
+```bash
+fortune-stream
+```
+
+If your tmux session uses a different name:
+
+```bash
+export FORTUNE_BOT_STREAM_TMUX_SESSION=your-session-name
+cd /opt/fortune_bot
+bash execution_engine/app/scripts/linux/restart_pipeline.sh
+```
+
+### Recommended verification after restart
+
+```bash
+tmux ls
+systemctl list-timers --all | grep fortune-bot
+journalctl -u fortune-bot-hourly-cycle.service -n 100 --no-pager
+```
