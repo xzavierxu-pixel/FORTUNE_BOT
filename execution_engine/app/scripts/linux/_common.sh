@@ -28,7 +28,7 @@ extract_arg_value() {
 
 ensure_venv() {
     if [[ ! -x "$VENV_PYTHON" ]]; then
-        "$SCRIPT_DIR/bootstrap_venv.sh"
+        bash "$SCRIPT_DIR/bootstrap_venv.sh"
     fi
 }
 

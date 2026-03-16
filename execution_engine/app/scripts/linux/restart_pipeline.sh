@@ -70,11 +70,11 @@ bootstrap_env() {
         return 0
     fi
     echo "[INFO] Ensuring virtualenv is ready."
-    "$SCRIPT_DIR/bootstrap_venv.sh"
+    bash "$SCRIPT_DIR/bootstrap_venv.sh"
 }
 
 stop_pipeline() {
-    "$STOP_SCRIPT"
+    bash "$STOP_SCRIPT"
 }
 
 clear_running_services() {
@@ -93,7 +93,7 @@ start_tmux_stream() {
         tmux kill-session -t "$TMUX_SESSION"
     fi
     echo "[INFO] Starting tmux session: $TMUX_SESSION"
-    tmux new-session -d -s "$TMUX_SESSION" "bash -lc 'set -euo pipefail; cd \"$REPO_ROOT\"; if [[ -f \"$ENV_FILE\" ]]; then set -a; source \"$ENV_FILE\"; set +a; fi; exec \"$STREAM_SCRIPT\"'"
+    tmux new-session -d -s "$TMUX_SESSION" "bash -lc 'set -euo pipefail; cd \"$REPO_ROOT\"; if [[ -f \"$ENV_FILE\" ]]; then set -a; source \"$ENV_FILE\"; set +a; fi; exec bash \"$STREAM_SCRIPT\"'"
 }
 
 start_timers() {
