@@ -127,11 +127,15 @@ def run_hourly_cycle(
 
             stream_result = None
             if not skip_stream:
-                asset_ids = [
-                    str(token_id)
-                    for token_id in batch_frame["selected_reference_token_id"].astype(str).tolist()
-                    if str(token_id).strip()
-                ]
+                asset_ids = []
+                for column in ["token_0_id", "token_1_id", "selected_reference_token_id"]:
+                    if column not in batch_frame.columns:
+                        continue
+                    asset_ids.extend(
+                        str(token_id)
+                        for token_id in batch_frame[column].astype(str).tolist()
+                        if str(token_id).strip()
+                    )
                 if asset_ids:
                     stream_result = asyncio.run(
                         stream_market_data(

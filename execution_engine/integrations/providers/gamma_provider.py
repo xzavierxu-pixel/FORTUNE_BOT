@@ -26,6 +26,45 @@ class GammaMarketProvider:
             return data["data"] or []
         return []
 
+    def _fetch_paginated(self, endpoint: str, query: Dict[str, str], max_records: int) -> List[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        offset = 0
+        limit = int(query.get("limit", "500") or 500)
+        while len(records) < max_records:
+            page_query = dict(query)
+            page_query["offset"] = str(offset)
+            params = urllib.parse.urlencode(page_query)
+            url = f"{self.base_url}/{endpoint}?{params}"
+            request = urllib.request.Request(url, headers={"User-Agent": "PEG/0.3"})
+            with urllib.request.urlopen(request, timeout=self.timeout_sec) as resp:
+                payload = resp.read().decode("utf-8")
+            data = json.loads(payload)
+            batch = data if isinstance(data, list) else data.get("data", []) if isinstance(data, dict) else []
+            if not batch:
+                break
+            records.extend(batch)
+            if len(batch) < limit:
+                break
+            offset += limit
+        return records[:max_records]
+
+    def fetch_open_events(
+        self,
+        limit: int = 500,
+        max_events: int = 5000,
+        *,
+        order: str = "endDate",
+        ascending: bool = True,
+    ) -> List[Dict[str, Any]]:
+        query: Dict[str, str] = {
+            "active": "true",
+            "closed": "false",
+            "order": order,
+            "ascending": "true" if ascending else "false",
+            "limit": str(limit),
+        }
+        return self._fetch_paginated("events", query, max_events)
+
     def fetch_open_markets(
         self,
         limit: int = 500,
@@ -36,34 +75,17 @@ class GammaMarketProvider:
         end_date_min: str | None = None,
         end_date_max: str | None = None,
     ) -> List[Dict[str, Any]]:
-        markets: List[Dict[str, Any]] = []
-        offset = 0
-        while len(markets) < max_markets:
-            query: Dict[str, str] = {
-                "active": "true",
-                "closed": "false",
-                "archived": "false",
-                "accepting_orders": "true",
-                "order": order,
-                "ascending": "true" if ascending else "false",
-                "limit": str(limit),
-                "offset": str(offset),
-            }
-            if end_date_min:
-                query["end_date_min"] = end_date_min
-            if end_date_max:
-                query["end_date_max"] = end_date_max
-            params = urllib.parse.urlencode(query)
-            url = f"{self.base_url}/markets?{params}"
-            request = urllib.request.Request(url, headers={"User-Agent": "PEG/0.3"})
-            with urllib.request.urlopen(request, timeout=self.timeout_sec) as resp:
-                payload = resp.read().decode("utf-8")
-            data = json.loads(payload)
-            batch = data if isinstance(data, list) else data.get("data", []) if isinstance(data, dict) else []
-            if not batch:
-                break
-            markets.extend(batch)
-            if len(batch) < limit:
-                break
-            offset += limit
-        return markets[:max_markets]
+        query: Dict[str, str] = {
+            "active": "true",
+            "closed": "false",
+            "archived": "false",
+            "accepting_orders": "true",
+            "order": order,
+            "ascending": "true" if ascending else "false",
+            "limit": str(limit),
+        }
+        if end_date_min:
+            query["end_date_min"] = end_date_min
+        if end_date_max:
+            query["end_date_max"] = end_date_max
+        return self._fetch_paginated("markets", query, max_markets)

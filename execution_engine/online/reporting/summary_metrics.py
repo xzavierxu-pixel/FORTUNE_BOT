@@ -16,10 +16,16 @@ from execution_engine.online.reporting.summary_io import (
     safe_float,
     safe_int,
 )
-from execution_engine.shared.io import list_run_artifact_paths, read_jsonl, read_jsonl_many
+from execution_engine.shared.io import list_artifact_paths_recursive, list_run_artifact_paths, read_jsonl, read_jsonl_many
+
+
+def _count_csv_rows_many(paths: List[Any]) -> int:
+    return sum(count_csv_rows(path) for path in paths)
 
 
 def build_counts(cfg: PegConfig) -> Dict[str, int]:
+    run_submit_attempt_paths = list_artifact_paths_recursive(cfg.data_dir, "submission_attempts.csv")
+    run_orders_submitted_paths = list_artifact_paths_recursive(cfg.data_dir, "orders_submitted.jsonl")
     return {
         "decisions": count_jsonl(cfg.decisions_path),
         "orders": count_jsonl(cfg.orders_path),
@@ -33,8 +39,8 @@ def build_counts(cfg: PegConfig) -> Dict[str, int]:
         "rule_hits": count_csv_rows(cfg.run_snapshot_rule_hits_path),
         "model_outputs": count_csv_rows(cfg.run_snapshot_model_outputs_path),
         "selection_decisions": count_csv_rows(cfg.run_snapshot_selection_path),
-        "submission_attempts": count_csv_rows(cfg.run_submit_attempts_path),
-        "orders_submitted": count_jsonl(cfg.run_submit_orders_submitted_path),
+        "submission_attempts": _count_csv_rows_many(run_submit_attempt_paths),
+        "orders_submitted": sum(count_jsonl(path) for path in run_orders_submitted_paths),
     }
 
 
@@ -167,6 +173,7 @@ def build_execution_metrics(cfg: PegConfig) -> Dict[str, Any]:
     all_fills = read_jsonl_many(list_run_artifact_paths(cfg.runs_root_dir, "fills.jsonl"))
     run_orders = read_jsonl(cfg.orders_path)
     run_fills = read_jsonl(cfg.fills_path)
+    run_dry_orders = read_jsonl_many(list_artifact_paths_recursive(cfg.data_dir, "orders_submitted.jsonl"))
 
     latest_orders = latest_orders_by_attempt(all_orders)
     run_latest_orders = latest_orders_by_attempt(run_orders)
@@ -227,6 +234,11 @@ def build_execution_metrics(cfg: PegConfig) -> Dict[str, Any]:
             continue
 
     run_submitted_notional = sum(safe_float(row.get("amount_usdc")) for row in run_orders)
+    if not run_orders and run_dry_orders:
+        run_submitted_notional = sum(
+            safe_float(row.get("submitted_amount_usdc") or row.get("amount_usdc"))
+            for row in run_dry_orders
+        )
     run_fill_notional = sum(safe_float(row.get("amount_usdc")) for row in run_fills)
     total_open_notional = sum(safe_float(row.get("amount_usdc")) for row in open_orders)
     total_fill_notional = sum(safe_float(row.get("amount_usdc")) for row in all_fills)
@@ -286,11 +298,13 @@ def build_execution_metrics(cfg: PegConfig) -> Dict[str, Any]:
     )[:25]
 
     return {
-        "run_orders_count": len(run_orders),
+        "run_orders_count": len(run_orders) if run_orders else len(run_dry_orders),
         "run_fills_count": len(run_fills),
         "run_submitted_notional_usdc": round(run_submitted_notional, 4),
         "run_filled_notional_usdc": round(run_fill_notional, 4),
-        "run_avg_order_usdc": round(run_submitted_notional / len(run_orders), 4) if run_orders else 0.0,
+        "run_avg_order_usdc": round(run_submitted_notional / (len(run_orders) if run_orders else len(run_dry_orders)), 4)
+        if (run_orders or run_dry_orders)
+        else 0.0,
         "run_latest_order_status_counts": dict(sorted(run_status_counts.items(), key=lambda item: item[0])),
         "latest_order_status_counts": dict(sorted(latest_status_counts.items(), key=lambda item: item[0])),
         "order_lifecycle": {

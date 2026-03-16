@@ -10,6 +10,7 @@ import json
 import math
 import urllib.parse
 import urllib.request
+import bisect
 
 from execution_engine.runtime.config import PegConfig
 
@@ -219,14 +220,85 @@ def merge_price_points(
     return [merged[key] for key in sorted(merged)]
 
 
-def _latest_price_at_or_before(points: List[PricePoint], target_ts: int) -> float | None:
-    selected = None
-    for point in points:
-        if point.ts <= target_ts:
-            selected = point.price
-        else:
-            break
-    return selected
+def _find_prices_batch(
+    timestamps: List[int],
+    prices: List[float],
+    target_ts_list: List[int],
+    window_sec: int,
+) -> List[Dict[str, float | int | str | bool | None]]:
+    if not timestamps:
+        return [
+            {
+                "price": None,
+                "selected_ts": None,
+                "point_side": None,
+                "offset_sec": None,
+                "points_in_window": 0,
+                "left_gap_sec": None,
+                "right_gap_sec": None,
+                "local_gap_sec": None,
+                "stale_quote_flag": True,
+            }
+            for _ in target_ts_list
+        ]
+
+    results: List[Dict[str, float | int | str | bool | None]] = []
+    length = len(timestamps)
+    for target_ts in target_ts_list:
+        idx = bisect.bisect_left(timestamps, target_ts)
+        left_window = bisect.bisect_left(timestamps, target_ts - window_sec)
+        right_window = bisect.bisect_right(timestamps, target_ts + window_sec)
+        points_in_window = max(right_window - left_window, 0)
+        best_price = None
+        best_ts = None
+        point_side = None
+        offset_sec = None
+        local_gap_sec = None
+        min_diff = float("inf")
+        if idx > 0:
+            ts_left = timestamps[idx - 1]
+            diff = abs(ts_left - target_ts)
+            if diff <= window_sec:
+                min_diff = diff
+                best_price = prices[idx - 1]
+                best_ts = ts_left
+                point_side = "left"
+                offset_sec = diff
+        if idx < length:
+            ts_right = timestamps[idx]
+            diff = abs(ts_right - target_ts)
+            if diff <= window_sec and diff < min_diff:
+                best_price = prices[idx]
+                best_ts = ts_right
+                point_side = "right"
+                offset_sec = diff
+
+        if best_ts is not None:
+            best_idx = bisect.bisect_left(timestamps, best_ts)
+            candidate_gaps = []
+            if best_idx > 0:
+                candidate_gaps.append(best_ts - timestamps[best_idx - 1])
+            if best_idx + 1 < length:
+                candidate_gaps.append(timestamps[best_idx + 1] - best_ts)
+            local_gap_sec = min(candidate_gaps) if candidate_gaps else None
+
+        left_gap_sec = target_ts - timestamps[idx - 1] if idx > 0 else None
+        right_gap_sec = timestamps[idx] - target_ts if idx < length else None
+        stale_quote_flag = best_price is None
+        results.append(
+            {
+                "price": best_price,
+                "selected_ts": best_ts,
+                "point_side": point_side,
+                "offset_sec": offset_sec,
+                "points_in_window": points_in_window,
+                "left_gap_sec": left_gap_sec,
+                "right_gap_sec": right_gap_sec,
+                "local_gap_sec": local_gap_sec,
+                "stale_quote_flag": stale_quote_flag,
+            }
+        )
+    return results
 
 
 def _safe_diff(left: float | None, right: float | None) -> float | None:
@@ -258,10 +330,13 @@ def build_historical_price_features(
 ) -> Dict[str, float | None]:
     horizons = [1, 2, 4, 6, 12, 24]
     features: Dict[str, float | None] = {}
+    timestamps = [int(point.ts) for point in merged_points]
+    prices = [float(point.price) for point in merged_points]
+    target_times = [int(end_ts - hour * 3600) for hour in horizons]
+    quote_points = _find_prices_batch(timestamps, prices, target_times, window_sec=300)
     horizon_prices: Dict[int, float | None] = {}
-    for hour in horizons:
-        target_ts = int(end_ts - hour * 3600)
-        price = _latest_price_at_or_before(merged_points, target_ts) if target_ts <= now_ts else None
+    for hour, quote_meta, target_ts in zip(horizons, quote_points, target_times):
+        price = float(quote_meta["price"]) if quote_meta["price"] is not None and target_ts <= now_ts else None
         horizon_prices[hour] = price
         features[f"p_{hour}h"] = price
 

@@ -318,7 +318,7 @@ set +a
 
 ```bash
 cd /opt/fortune_bot
-bash execution_engine/app/scripts/linux/refresh_universe.sh --max-markets 1000
+bash execution_engine/app/scripts/linux/refresh_universe.sh --max-markets 5000
 ```
 
 执行一次 hourly cycle：

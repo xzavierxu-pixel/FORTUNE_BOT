@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 import json
+import sys
 
 import pandas as pd
 
 from execution_engine.integrations.providers.gamma_provider import GammaMarketProvider
-from execution_engine.runtime.config import PegConfig
 from execution_engine.online.execution.positions import load_open_market_ids
+from execution_engine.online.scoring.annotations import apply_online_market_annotations
+from execution_engine.runtime.config import PegConfig
 
 UNIVERSE_COLUMNS = [
     "market_id",
@@ -23,19 +25,43 @@ UNIVERSE_COLUMNS = [
     "slug",
     "start_time_utc",
     "end_time_utc",
+    "created_at_utc",
     "resolution_source",
     "game_id",
     "remaining_hours",
     "category",
+    "category_raw",
+    "category_parsed",
+    "category_override_flag",
     "domain",
+    "domain_parsed",
+    "sub_domain",
+    "source_url",
     "market_type",
+    "outcome_pattern",
     "accepting_orders",
+    "volume",
     "best_bid",
     "best_ask",
+    "spread",
     "last_trade_price",
     "liquidity",
     "volume24hr",
+    "volume1wk",
+    "volume24hr_clob",
+    "volume1wk_clob",
     "order_price_min_tick_size",
+    "neg_risk",
+    "rewards_min_size",
+    "rewards_max_spread",
+    "line",
+    "one_hour_price_change",
+    "one_day_price_change",
+    "one_week_price_change",
+    "liquidity_amm",
+    "liquidity_clob",
+    "group_item_title",
+    "market_maker_address",
     "outcome_0_label",
     "outcome_1_label",
     "token_0_id",
@@ -53,6 +79,12 @@ def _utc_now() -> datetime:
 
 def _to_iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _ensure_rule_engine_import_path(cfg: PegConfig) -> None:
+    rule_engine_dir = str(cfg.rule_engine_dir)
+    if rule_engine_dir not in sys.path:
+        sys.path.insert(0, rule_engine_dir)
 
 
 def _parse_maybe_list(value: Any) -> list[Any]:
@@ -118,6 +150,27 @@ def _parse_group_title_as_end_time(value: Any) -> datetime | None:
     return parsed
 
 
+def _load_rule_baseline_helpers(cfg: PegConfig) -> Dict[str, Any]:
+    _ensure_rule_engine_import_path(cfg)
+    from rule_baseline.data_collection.fetch_raw_events import (  # type: ignore
+        is_short_term_crypto_market,
+        resolve_category,
+    )
+    from rule_baseline.domain_extractor.market_annotations import (  # type: ignore
+        MarketSourceParser,
+        infer_category_from_source,
+        normalize_outcomes,
+    )
+
+    return {
+        "is_short_term_crypto_market": is_short_term_crypto_market,
+        "resolve_category": resolve_category,
+        "MarketSourceParser": MarketSourceParser,
+        "infer_category_from_source": infer_category_from_source,
+        "normalize_outcomes": normalize_outcomes,
+    }
+
+
 @dataclass(frozen=True)
 class UniverseRefreshResult:
     fetched_markets: int
@@ -133,9 +186,12 @@ class UniverseRefreshResult:
 
 
 def _build_binary_market_row(
+    cfg: PegConfig,
+    event: Dict[str, Any],
     market: Dict[str, Any],
     now: datetime,
     require_two_token_markets: bool,
+    helpers: Dict[str, Any],
 ) -> tuple[Dict[str, Any] | None, str | None]:
     market_id = str(market.get("id") or market.get("market_id") or "")
     if not market_id:
@@ -163,6 +219,31 @@ def _build_binary_market_row(
     if remaining_hours <= 0:
         return None, "expired_market"
 
+    resolve_category = helpers["resolve_category"]
+    is_short_term_crypto_market = helpers["is_short_term_crypto_market"]
+    MarketSourceParser = helpers["MarketSourceParser"]
+    infer_category_from_source = helpers["infer_category_from_source"]
+    normalize_outcomes = helpers["normalize_outcomes"]
+
+    tags = event.get("tags") or market.get("tags") or []
+    category_raw = str(resolve_category(tags) or "UNKNOWN").upper()
+    if is_short_term_crypto_market(market, category_raw):
+        return None, "filtered_crypto_short_term"
+
+    resolution_source = str(market.get("resolutionSource") or "")
+    description = str(market.get("description") or "")
+    source_url = resolution_source or (MarketSourceParser.extract_url_from_text(description) or "UNKNOWN")
+    domain_parsed, sub_domain, source_url = MarketSourceParser.parse_domain_parts(source_url)
+    category_parsed = str(
+        infer_category_from_source(
+            pd.Series([domain_parsed]),
+            pd.Series([str(market.get("gameId") or event.get("gameId") or "")]),
+        ).iloc[0]
+    )
+    category = category_parsed if category_parsed != "UNKNOWN" else category_raw
+    market_type, outcome_pattern = normalize_outcomes(json.dumps(outcomes, ensure_ascii=True))
+    domain = domain_parsed if domain_parsed not in {"", "UNKNOWN"} else "UNKNOWN"
+
     return {
         "market_id": market_id,
         "condition_id": str(market.get("conditionId") or market.get("condition_id") or ""),
@@ -170,20 +251,43 @@ def _build_binary_market_row(
         "description": str(market.get("description") or ""),
         "slug": str(market.get("slug") or ""),
         "start_time_utc": str(market.get("startDate") or market.get("createdAt") or ""),
+        "created_at_utc": str(market.get("createdAt") or market.get("creationDate") or ""),
         "end_time_utc": _to_iso(end_time),
-        "resolution_source": str(market.get("resolutionSource") or ""),
-        "game_id": str(market.get("gameId") or ""),
+        "resolution_source": resolution_source,
+        "game_id": str(market.get("gameId") or event.get("gameId") or "UNKNOWN"),
         "remaining_hours": round(remaining_hours, 6),
-        "category": str(market.get("category") or "UNKNOWN"),
-        "domain": str(market.get("domain") or "UNKNOWN"),
-        "market_type": str(market.get("market_type") or "UNKNOWN"),
+        "category": category,
+        "category_raw": category_raw,
+        "category_parsed": category_parsed,
+        "domain": domain,
+        "domain_parsed": domain_parsed or "UNKNOWN",
+        "sub_domain": sub_domain or "UNKNOWN",
+        "source_url": source_url or "UNKNOWN",
+        "market_type": market_type or "UNKNOWN",
+        "outcome_pattern": outcome_pattern or "UNKNOWN",
         "accepting_orders": _to_bool(market.get("acceptingOrders") or market.get("accepting_orders")),
+        "volume": _to_float(market.get("volume") or market.get("volumeNum")),
         "best_bid": _to_float(market.get("bestBid")),
         "best_ask": _to_float(market.get("bestAsk")),
+        "spread": _to_float(market.get("spread")),
         "last_trade_price": _to_float(market.get("lastTradePrice"), default=0.0),
-        "liquidity": _to_float(market.get("liquidity")),
+        "liquidity": _to_float(market.get("liquidity") or market.get("liquidityNum")),
         "volume24hr": _to_float(market.get("volume24hr")),
+        "volume1wk": _to_float(market.get("volume1wk")),
+        "volume24hr_clob": _to_float(market.get("volume24hrClob")),
+        "volume1wk_clob": _to_float(market.get("volume1wkClob")),
         "order_price_min_tick_size": _to_float(market.get("orderPriceMinTickSize"), default=0.001),
+        "neg_risk": _to_bool(market.get("negRisk")),
+        "rewards_min_size": _to_float(market.get("rewardsMinSize")),
+        "rewards_max_spread": _to_float(market.get("rewardsMaxSpread")),
+        "line": _to_float(market.get("line")),
+        "one_hour_price_change": _to_float(market.get("oneHourPriceChange")),
+        "one_day_price_change": _to_float(market.get("oneDayPriceChange")),
+        "one_week_price_change": _to_float(market.get("oneWeekPriceChange")),
+        "liquidity_amm": _to_float(market.get("liquidityAmm")),
+        "liquidity_clob": _to_float(market.get("liquidityClob")),
+        "group_item_title": str(market.get("groupItemTitle") or "UNKNOWN"),
+        "market_maker_address": str(market.get("marketMakerAddress") or "UNKNOWN"),
         "outcome_0_label": outcomes[0],
         "outcome_1_label": outcomes[1],
         "token_0_id": token_ids[0],
@@ -211,41 +315,65 @@ def refresh_current_universe(cfg: PegConfig, max_markets: int | None = None) -> 
     provider = GammaMarketProvider(cfg.gamma_base_url, timeout_sec=cfg.clob_request_timeout_sec)
     now = _utc_now()
     window_end = now + pd.Timedelta(hours=cfg.online_universe_window_hours)
-    raw_markets = provider.fetch_open_markets(
+    helpers = _load_rule_baseline_helpers(cfg)
+    raw_events = provider.fetch_open_events(
         limit=cfg.rule_engine_page_size,
-        max_markets=max_markets or cfg.rule_engine_max_markets,
+        max_events=max_markets or cfg.rule_engine_max_markets,
         order="endDate",
         ascending=True,
-        end_date_min=_to_iso(now),
-        end_date_max=_to_iso(window_end),
     )
     opened_market_ids = load_open_market_ids(cfg)
 
     rows: List[Dict[str, Any]] = []
+    seen_market_ids: set[str] = set()
+    fetched_market_count = 0
     excluded_for_expiry = 0
     excluded_for_structure = 0
     excluded_for_positions = 0
     exclusion_breakdown: Dict[str, int] = {}
 
-    for market in raw_markets:
-        parsed, reason = _build_binary_market_row(market, now, cfg.online_require_two_token_markets)
-        if parsed is None:
-            excluded_for_structure += 1
-            key = reason or "structure_filtered"
-            exclusion_breakdown[key] = exclusion_breakdown.get(key, 0) + 1
+    for event in raw_events:
+        markets = event.get("markets") or []
+        if not isinstance(markets, list):
             continue
-        if parsed["remaining_hours"] > cfg.online_universe_window_hours:
-            excluded_for_expiry += 1
-            exclusion_breakdown["outside_expiry_window"] = exclusion_breakdown.get("outside_expiry_window", 0) + 1
-            continue
-        if str(parsed["market_id"]) in opened_market_ids:
-            excluded_for_positions += 1
-            exclusion_breakdown["opened_position_market"] = exclusion_breakdown.get("opened_position_market", 0) + 1
-            continue
-        rows.append(parsed)
+        for market in markets:
+            if not isinstance(market, dict):
+                continue
+            fetched_market_count += 1
+            parsed, reason = _build_binary_market_row(
+                cfg,
+                event,
+                market,
+                now,
+                cfg.online_require_two_token_markets,
+                helpers,
+            )
+            if parsed is None:
+                bucket = reason or "structure_filtered"
+                if bucket in {"expired_market", "outside_expiry_window"}:
+                    excluded_for_expiry += 1
+                else:
+                    excluded_for_structure += 1
+                exclusion_breakdown[bucket] = exclusion_breakdown.get(bucket, 0) + 1
+                continue
+            if parsed["remaining_hours"] > cfg.online_universe_window_hours:
+                excluded_for_expiry += 1
+                exclusion_breakdown["outside_expiry_window"] = exclusion_breakdown.get("outside_expiry_window", 0) + 1
+                continue
+            if str(parsed["market_id"]) in opened_market_ids:
+                excluded_for_positions += 1
+                exclusion_breakdown["opened_position_market"] = exclusion_breakdown.get("opened_position_market", 0) + 1
+                continue
+            market_id = str(parsed["market_id"])
+            if market_id in seen_market_ids:
+                exclusion_breakdown["duplicate_market_id"] = exclusion_breakdown.get("duplicate_market_id", 0) + 1
+                continue
+            seen_market_ids.add(market_id)
+            rows.append(parsed)
 
     universe = pd.DataFrame(rows)
     if not universe.empty:
+        universe = apply_online_market_annotations(cfg, universe)
         universe = universe.sort_values(
             by=["remaining_hours", "end_time_utc", "market_id"],
             ascending=[True, True, True],
@@ -257,14 +385,15 @@ def refresh_current_universe(cfg: PegConfig, max_markets: int | None = None) -> 
         "run_mode": cfg.run_mode,
         "window_hours": cfg.online_universe_window_hours,
         "require_two_token_markets": cfg.online_require_two_token_markets,
-        "fetched_markets": len(raw_markets),
+        "fetched_events": len(raw_events),
+        "fetched_markets": fetched_market_count,
         "eligible_markets": len(universe),
         "excluded_for_expiry": excluded_for_expiry,
         "excluded_for_structure": excluded_for_structure,
         "excluded_for_positions": excluded_for_positions,
         "exclusion_breakdown": exclusion_breakdown,
         "opened_market_ids_count": len(opened_market_ids),
-        "source": "gamma_open_markets",
+        "source": "gamma_open_events",
         "current_universe_path": str(cfg.universe_current_path),
         "run_universe_path": str(cfg.run_universe_path),
     }
@@ -275,7 +404,7 @@ def refresh_current_universe(cfg: PegConfig, max_markets: int | None = None) -> 
     _write_manifest(cfg.run_universe_manifest_path, manifest)
 
     return UniverseRefreshResult(
-        fetched_markets=len(raw_markets),
+        fetched_markets=fetched_market_count,
         eligible_markets=len(universe),
         excluded_for_expiry=excluded_for_expiry,
         excluded_for_structure=excluded_for_structure,
