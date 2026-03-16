@@ -57,6 +57,7 @@ run_online_job() {
     local exit_code=0
     if ! (
         cd "$REPO_ROOT"
+        export PEG_RUN_ID="$run_id"
         exec "$VENV_PYTHON" -m execution_engine.app.cli.online.main "$subcommand" "$@"
     ); then
         exit_code=$?
