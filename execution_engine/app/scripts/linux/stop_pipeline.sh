@@ -7,15 +7,17 @@ source "$SCRIPT_DIR/_common.sh"
 TMUX_SESSION="${FORTUNE_BOT_STREAM_TMUX_SESSION:-fortune-stream}"
 SERVICES=(
     "fortune-bot-refresh-universe.service"
-    "fortune-bot-hourly-cycle.service"
+    "fortune-bot-submit-window.service"
     "fortune-bot-label-analysis.service"
     "fortune-bot-healthcheck.service"
+    "fortune-bot-hourly-cycle.service"
 )
 TIMERS=(
     "fortune-bot-refresh-universe.timer"
-    "fortune-bot-hourly-cycle.timer"
+    "fortune-bot-submit-window.timer"
     "fortune-bot-label-analysis.timer"
     "fortune-bot-healthcheck.timer"
+    "fortune-bot-hourly-cycle.timer"
 )
 
 stop_tmux_stream() {

@@ -33,11 +33,20 @@ def select_target_side(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
     out = frame.copy()
-    direction = pd.to_numeric(out.get("direction_model"), errors="coerce").fillna(0).astype(int)
+    if "direction_model" in out.columns:
+        direction_raw = out["direction_model"]
+    else:
+        direction_raw = pd.Series(0, index=out.index, dtype="int64")
+    direction = pd.to_numeric(direction_raw, errors="coerce").fillna(0).astype(int)
     select_outcome_0 = direction > 0
+    raw_price = pd.to_numeric(out.get("price"), errors="coerce").fillna(0.0) if "price" in out.columns else pd.Series(0.0, index=out.index)
+    raw_q_pred = pd.to_numeric(out.get("q_pred"), errors="coerce").fillna(0.0) if "q_pred" in out.columns else pd.Series(0.0, index=out.index)
     out["selected_token_id"] = out["token_0_id"].where(select_outcome_0, out["token_1_id"])
     out["selected_outcome_label"] = out["outcome_0_label"].where(select_outcome_0, out["outcome_1_label"])
     out["position_side"] = select_outcome_0.map({True: "OUTCOME_0", False: "OUTCOME_1"})
+    out["price"] = raw_price.where(select_outcome_0, 1.0 - raw_price).clip(lower=0.0, upper=1.0)
+    out["q_pred"] = raw_q_pred.where(select_outcome_0, 1.0 - raw_q_pred).clip(lower=0.0, upper=1.0)
+    out["edge_prob"] = out["q_pred"] - out["price"]
     return out
 
 
@@ -105,17 +114,29 @@ def build_selection_decisions(
     if model_outputs.empty:
         return pd.DataFrame()
 
-    selected_outputs = select_target_side(model_outputs)
+    selected_outputs = model_outputs.copy()
+    selected_execution = selected.copy()
     selected_lookup = {
-        (str(row.get("market_id") or ""), str(row.get("snapshot_time") or "")): row
-        for row in selected.to_dict(orient="records")
+        (
+            str(row.get("market_id") or ""),
+            str(row.get("snapshot_time") or ""),
+            str(row.get("rule_group_key") or ""),
+            _to_int(row.get("rule_leaf_id"), default=0),
+        ): row
+        for row in selected_execution.to_dict(orient="records")
     }
 
     records: List[Dict[str, Any]] = []
     for row in selected_outputs.to_dict(orient="records"):
-        key = (str(row.get("market_id") or ""), str(row.get("snapshot_time") or ""))
+        key = (
+            str(row.get("market_id") or ""),
+            str(row.get("snapshot_time") or ""),
+            str(row.get("rule_group_key") or ""),
+            _to_int(row.get("rule_leaf_id"), default=0),
+        )
         picked = selected_lookup.get(key)
-        growth_score = _to_float(row.get("growth_score"), default=0.0)
+        execution_row = picked or row
+        growth_score = _to_float(execution_row.get("growth_score"), default=0.0)
         selected_for_submission = picked is not None
         if selected_for_submission:
             selection_reason = "allocated"
@@ -129,24 +150,26 @@ def build_selection_decisions(
                 "run_id": cfg.run_id,
                 "batch_id": str(row.get("batch_id") or ""),
                 "market_id": str(row.get("market_id") or ""),
-                "selected_token_id": str(row.get("selected_token_id") or ""),
-                "selected_outcome_label": str(row.get("selected_outcome_label") or ""),
+                "selected_token_id": str(execution_row.get("selected_token_id") or ""),
+                "selected_outcome_label": str(execution_row.get("selected_outcome_label") or ""),
                 "selected_for_submission": selected_for_submission,
                 "selection_reason": selection_reason,
                 "stake_usdc": _to_float((picked or {}).get("stake_usdc")),
                 "growth_score": growth_score,
-                "f_exec": _to_float(row.get("f_exec")),
-                "q_pred": _to_float(row.get("q_pred"), default=0.5),
-                "trade_value_pred": _to_float(row.get("trade_value_pred")),
-                "price": _to_float(row.get("price")),
+                "f_exec": _to_float(execution_row.get("f_exec")),
+                "q_pred": _to_float(execution_row.get("q_pred"), default=0.5),
+                "trade_value_pred": _to_float(execution_row.get("trade_value_pred")),
+                "price": _to_float(execution_row.get("price")),
                 "horizon_hours": _to_float(row.get("horizon_hours")),
-                "direction_model": _to_int(row.get("direction_model"), default=0),
-                "position_side": str(row.get("position_side") or ""),
+                "direction_model": _to_int(execution_row.get("direction_model"), default=0),
+                "position_side": str(execution_row.get("position_side") or ""),
                 "category": str(row.get("category") or ""),
                 "domain": str(row.get("domain") or ""),
                 "market_type": str(row.get("market_type") or ""),
                 "rule_group_key": str(row.get("rule_group_key") or ""),
                 "rule_leaf_id": _to_int(row.get("rule_leaf_id"), default=0),
+                "first_seen_at_utc": str(row.get("first_seen_at_utc") or ""),
+                "snapshot_time_utc": str(row.get("snapshot_time") or ""),
                 "market_close_time_utc": str(row.get("closedTime") or ""),
                 "settlement_key": str((picked or {}).get("settlement_key") or ""),
                 "cluster_key": str((picked or {}).get("cluster_key") or ""),

@@ -158,6 +158,8 @@ class PegConfig:
     run_submit_manifest_path: Path
     run_submit_attempts_path: Path
     run_submit_orders_submitted_path: Path
+    run_submit_window_manifest_path: Path
+    run_deferred_reports_path: Path
     run_monitor_manifest_path: Path
     run_hourly_cycle_manifest_path: Path
     run_label_manifest_path: Path
@@ -248,9 +250,12 @@ class PegConfig:
     # Online pipeline settings
     online_universe_window_hours: float
     online_market_batch_size: int
+    online_gamma_event_page_size: int
     online_require_two_token_markets: bool
     online_require_rule_coverage: bool
+    online_coarse_horizon_slack_hours: float
     online_limit_ticks_below_best_bid: int
+    online_stream_duration_sec: int
     online_market_ws_url: str
     online_market_ws_custom_features: bool
     online_market_ws_ping_interval_sec: int
@@ -261,7 +266,9 @@ class PegConfig:
     online_market_ws_raw_flush_events: int
     online_market_ws_state_flush_sec: int
     online_token_state_max_age_sec: int
+    online_capacity_wait_poll_sec: int
     online_price_cap_safety_buffer: float
+    online_deferred_artifacts_enabled: bool
 
     def ensure_dirs(self) -> None:
         self.base_data_dir.mkdir(parents=True, exist_ok=True)
@@ -408,6 +415,12 @@ def load_config() -> PegConfig:
         run_submit_orders_submitted_path=Path(
             _get_env("PEG_RUN_SUBMIT_ORDERS_SUBMITTED_PATH", str(data_dir / "submit_hourly" / "orders_submitted.jsonl"))
         ),
+        run_submit_window_manifest_path=Path(
+            _get_env("PEG_RUN_SUBMIT_WINDOW_MANIFEST_PATH", str(data_dir / "submit_window" / "manifest.json"))
+        ),
+        run_deferred_reports_path=Path(
+            _get_env("PEG_RUN_DEFERRED_REPORTS_PATH", str(data_dir / "deferred" / "reports.jsonl"))
+        ),
         run_monitor_manifest_path=Path(
             _get_env("PEG_RUN_MONITOR_MANIFEST_PATH", str(data_dir / "order_monitor" / "manifest.json"))
         ),
@@ -506,9 +519,12 @@ def load_config() -> PegConfig:
         rule_engine_max_horizon_hours=_get_float("PEG_RULE_ENGINE_MAX_HORIZON_HOURS", 1000.0),
         online_universe_window_hours=_get_float("PEG_ONLINE_UNIVERSE_WINDOW_HOURS", 24.0),
         online_market_batch_size=_get_int("PEG_ONLINE_MARKET_BATCH_SIZE", 20),
+        online_gamma_event_page_size=_get_int("PEG_ONLINE_GAMMA_EVENT_PAGE_SIZE", 50),
         online_require_two_token_markets=_get_bool("PEG_ONLINE_REQUIRE_TWO_TOKEN_MARKETS", True),
         online_require_rule_coverage=_get_bool("PEG_ONLINE_REQUIRE_RULE_COVERAGE", True),
+        online_coarse_horizon_slack_hours=_get_float("PEG_ONLINE_COARSE_HORIZON_SLACK_HOURS", 0.1),
         online_limit_ticks_below_best_bid=_get_int("PEG_ONLINE_LIMIT_TICKS_BELOW_BEST_BID", 1),
+        online_stream_duration_sec=_get_int("PEG_ONLINE_STREAM_DURATION_SEC", 5),
         online_market_ws_url=_get_env(
             "PEG_ONLINE_MARKET_WS_URL",
             "wss://ws-subscriptions-clob.polymarket.com/ws/market",
@@ -522,7 +538,9 @@ def load_config() -> PegConfig:
         online_market_ws_raw_flush_events=_get_int("PEG_ONLINE_MARKET_WS_RAW_FLUSH_EVENTS", 100),
         online_market_ws_state_flush_sec=_get_int("PEG_ONLINE_MARKET_WS_STATE_FLUSH_SEC", 5),
         online_token_state_max_age_sec=_get_int("PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC", 7200),
+        online_capacity_wait_poll_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_POLL_SEC", 30),
         online_price_cap_safety_buffer=_get_float("PEG_ONLINE_PRICE_CAP_SAFETY_BUFFER", 0.01),
+        online_deferred_artifacts_enabled=_get_bool("PEG_ONLINE_DEFERRED_ARTIFACTS_ENABLED", False),
     )
     cfg.ensure_dirs()
     return cfg

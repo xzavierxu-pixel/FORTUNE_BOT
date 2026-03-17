@@ -332,24 +332,21 @@ def submit_order(
         raise ValueError("MISSING_TOKEN_ID")
 
     client = clob_client or NullClobClient()
-    nonce = nonce_manager.next_nonce() if nonce_manager else None
-    if nonce is not None:
-        order["nonce"] = int(nonce)
     price = float(order["price_limit"])
     if price <= 0:
         raise ValueError("INVALID_PRICE")
-    size = float(order["amount_usdc"]) / price
+    size = float(signal.get("order_size_shares", 0.0) or 0.0)
+    if size <= 0:
+        size = float(order["amount_usdc"]) / price
 
-    result = client.place_order(
-        {
-            "token_id": token_id,
-            "side": order["action"],
-            "price": price,
-            "size": size,
-            "nonce": nonce,
-            "client_order_id": order.get("order_attempt_id"),
-        }
-    )
+    payload = {
+        "token_id": token_id,
+        "side": order["action"],
+        "price": price,
+        "size": size,
+        "client_order_id": order.get("order_attempt_id"),
+    }
+    result = client.place_order(payload)
     status_raw = str(result.get("status", "SENT")).upper()
     if status_raw in {"OPEN", "LIVE", "ACTIVE"}:
         order["status"] = "ACKED"

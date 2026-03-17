@@ -1,0 +1,9 @@
+[Unit]
+Description=Fortune Bot submit-window job
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/fortune-bot/fortune_bot.env
+ExecStart=/bin/bash -lc 'cd "$FORTUNE_BOT_REPO_ROOT" && /usr/bin/env bash "$FORTUNE_BOT_REPO_ROOT/execution_engine/app/scripts/linux/run_submit_window.sh"'

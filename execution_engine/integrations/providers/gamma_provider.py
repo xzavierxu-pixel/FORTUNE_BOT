@@ -48,6 +48,37 @@ class GammaMarketProvider:
             offset += limit
         return records[:max_records]
 
+    def _fetch_page(self, endpoint: str, query: Dict[str, str]) -> List[Dict[str, Any]]:
+        params = urllib.parse.urlencode(query)
+        url = f"{self.base_url}/{endpoint}?{params}"
+        request = urllib.request.Request(url, headers={"User-Agent": "PEG/0.3"})
+        with urllib.request.urlopen(request, timeout=self.timeout_sec) as resp:
+            payload = resp.read().decode("utf-8")
+        data = json.loads(payload)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "data" in data:
+            return data["data"] or []
+        return []
+
+    def fetch_open_events_page(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        order: str = "endDate",
+        ascending: bool = True,
+    ) -> List[Dict[str, Any]]:
+        query: Dict[str, str] = {
+            "active": "true",
+            "closed": "false",
+            "order": order,
+            "ascending": "true" if ascending else "false",
+            "limit": str(limit),
+            "offset": str(max(offset, 0)),
+        }
+        return self._fetch_page("events", query)
+
     def fetch_open_events(
         self,
         limit: int = 500,

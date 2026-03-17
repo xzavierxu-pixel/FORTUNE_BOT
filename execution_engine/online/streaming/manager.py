@@ -38,6 +38,7 @@ class StreamRunResult:
     token_state_count: int
     duration_sec: float
     event_counts: Dict[str, int]
+    token_state_records: List[Dict[str, Any]]
 
 
 class MarketStreamManager:
@@ -100,6 +101,7 @@ class MarketStreamManager:
                 token_state_count=0,
                 duration_sec=0.0,
                 event_counts={},
+                token_state_records=[],
             )
 
         tasks = [asyncio.create_task(self._run_shard(shard_id, shard_targets)) for shard_id, shard_targets in enumerate(target_shards)]
@@ -147,6 +149,7 @@ class MarketStreamManager:
             token_state_count=len(frame),
             duration_sec=duration,
             event_counts=dict(sorted(self.event_counts.items())),
+            token_state_records=frame.to_dict(orient="records"),
         )
 
     async def _run_shard(self, shard_id: int, targets: Sequence[TokenSubscriptionTarget]) -> None:

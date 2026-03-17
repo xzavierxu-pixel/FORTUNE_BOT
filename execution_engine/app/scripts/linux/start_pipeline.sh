@@ -7,7 +7,6 @@ source "$SCRIPT_DIR/_common.sh"
 ENV_FILE="${FORTUNE_BOT_ENV_FILE:-/etc/fortune-bot/fortune_bot.env}"
 TMUX_SESSION="${FORTUNE_BOT_STREAM_TMUX_SESSION:-fortune-stream}"
 STREAM_SCRIPT="$SCRIPT_DIR/stream_market_data.sh"
-STOP_SCRIPT="$SCRIPT_DIR/stop_pipeline.sh"
 SERVICES=(
     "fortune-bot-refresh-universe.service"
     "fortune-bot-submit-window.service"
@@ -23,16 +22,11 @@ TIMERS=(
     "fortune-bot-hourly-cycle.timer"
 )
 
-NO_PULL=0
 SKIP_BOOTSTRAP=0
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --no-pull)
-                NO_PULL=1
-                shift
-                ;;
             --skip-bootstrap)
                 SKIP_BOOTSTRAP=1
                 shift
@@ -57,15 +51,6 @@ load_env_file() {
     fi
 }
 
-update_repo() {
-    if [[ "$NO_PULL" -eq 1 ]]; then
-        echo "[INFO] Skipping git pull."
-        return 0
-    fi
-    echo "[INFO] Pulling latest code from git."
-    git -C "$REPO_ROOT" pull --ff-only
-}
-
 bootstrap_env() {
     if [[ "$SKIP_BOOTSTRAP" -eq 1 ]]; then
         echo "[INFO] Skipping virtualenv bootstrap."
@@ -75,12 +60,14 @@ bootstrap_env() {
     bash "$SCRIPT_DIR/bootstrap_venv.sh"
 }
 
-stop_pipeline() {
-    bash "$STOP_SCRIPT"
-}
-
 clear_running_services() {
     local unit
+    for unit in "${TIMERS[@]}"; do
+        if systemctl is-active --quiet "$unit"; then
+            echo "[INFO] Stopping timer before start: $unit"
+            sudo systemctl stop "$unit" || true
+        fi
+    done
     for unit in "${SERVICES[@]}"; do
         if systemctl is-active --quiet "$unit"; then
             echo "[INFO] Waiting for service to stop: $unit"
@@ -106,6 +93,8 @@ start_timers() {
         if systemctl list-unit-files "$unit" --no-legend 2>/dev/null | grep -q "^$unit"; then
             echo "[INFO] Starting timer: $unit"
             sudo systemctl start "$unit"
+        else
+            echo "[WARN] Timer not installed: $unit"
         fi
     done
 }
@@ -113,14 +102,12 @@ start_timers() {
 main() {
     parse_args "$@"
     echo "[INFO] Repo root: $REPO_ROOT"
-    stop_pipeline
-    update_repo
     load_env_file
     bootstrap_env
     clear_running_services
     start_tmux_stream
     start_timers
-    echo "[INFO] Pipeline restart sequence completed."
+    echo "[INFO] Pipeline start sequence completed."
     echo "[INFO] Verify with: tmux ls && systemctl list-timers --all | grep fortune-bot"
 }
 

@@ -12,6 +12,7 @@ import pandas as pd
 from execution_engine.runtime.config import PegConfig
 
 _RULE_RUNTIME_CACHE: dict[str, "RuleRuntime"] = {}
+_MODEL_PAYLOAD_CACHE: dict[str, dict[str, Any]] = {}
 
 
 def _ensure_rule_engine_import_path(cfg: PegConfig) -> None:
@@ -30,12 +31,43 @@ class RuleRuntime:
     predict_candidates: Any
     preprocess_features: Any
 
+
+@dataclass(frozen=True)
+class FeatureContract:
+    feature_columns: tuple[str, ...]
+    numeric_columns: tuple[str, ...]
+    categorical_columns: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class RuleModelResult:
     rule_hits: pd.DataFrame
     feature_inputs: pd.DataFrame
     model_outputs: pd.DataFrame
     viable_candidates: pd.DataFrame
+
+
+def load_model_payload(cfg: PegConfig) -> dict[str, Any]:
+    cache_key = str(cfg.rule_engine_model_path.resolve())
+    cached = _MODEL_PAYLOAD_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    payload = joblib.load(cfg.rule_engine_model_path)
+    if not isinstance(payload, dict):
+        raise TypeError(f"Expected dict model payload at {cfg.rule_engine_model_path}, got {type(payload)!r}.")
+    _MODEL_PAYLOAD_CACHE[cache_key] = payload
+    return payload
+
+
+def get_feature_contract(payload: dict[str, Any]) -> FeatureContract:
+    feature_columns = tuple(str(value) for value in (payload.get("feature_columns") or ()))
+    numeric_columns = tuple(str(value) for value in (payload.get("numeric_columns") or ()))
+    categorical_columns = tuple(str(value) for value in (payload.get("categorical_columns") or ()))
+    return FeatureContract(
+        feature_columns=feature_columns,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+    )
 
 
 def load_rule_runtime(cfg: PegConfig) -> RuleRuntime:
@@ -128,6 +160,8 @@ def evaluate_matched_snapshots(
     matched: pd.DataFrame,
     market_feature_cache: pd.DataFrame,
     rules_frame: pd.DataFrame,
+    *,
+    payload: dict[str, Any] | None = None,
 ) -> RuleModelResult:
     _ = rules_frame
     if matched.empty:
@@ -146,8 +180,8 @@ def evaluate_matched_snapshots(
         runtime.preprocess_features,
     )
 
-    payload = joblib.load(cfg.rule_engine_model_path)
-    predicted = runtime.predict_candidates(rule_hits, market_feature_cache, payload)
+    resolved_payload = payload if payload is not None else load_model_payload(cfg)
+    predicted = runtime.predict_candidates(rule_hits, market_feature_cache, resolved_payload)
     viable = runtime.compute_growth_and_direction(predicted, runtime.backtest_config)
 
     if viable.empty:

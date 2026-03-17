@@ -325,7 +325,7 @@ bash execution_engine/app/scripts/linux/refresh_universe.sh --max-markets 5000
 
 ```bash
 cd /opt/fortune_bot
-bash execution_engine/app/scripts/linux/run_hourly_cycle.sh --skip-refresh-universe
+bash execution_engine/app/scripts/linux/run_submit_window.sh
 ```
 
 执行 label analysis：
@@ -392,7 +392,7 @@ sudo systemctl daemon-reload
 
 ```bash
 sudo systemctl enable --now fortune-bot-refresh-universe.timer
-sudo systemctl enable --now fortune-bot-hourly-cycle.timer
+sudo systemctl enable --now fortune-bot-submit-window.timer
 sudo systemctl enable --now fortune-bot-label-analysis.timer
 sudo systemctl enable --now fortune-bot-healthcheck.timer
 ```
@@ -409,7 +409,7 @@ systemctl list-timers --all | grep fortune-bot
 
 ```bash
 journalctl -u fortune-bot-refresh-universe.service -n 100 --no-pager
-journalctl -u fortune-bot-hourly-cycle.service -n 100 --no-pager
+journalctl -u fortune-bot-submit-window.service -n 100 --no-pager
 journalctl -u fortune-bot-label-analysis.service -n 100 --no-pager
 journalctl -u fortune-bot-healthcheck.service -n 100 --no-pager
 ```
@@ -418,7 +418,7 @@ journalctl -u fortune-bot-healthcheck.service -n 100 --no-pager
 
 ```bash
 systemctl status fortune-bot-refresh-universe.service
-systemctl status fortune-bot-hourly-cycle.service
+systemctl status fortune-bot-submit-window.service
 systemctl status fortune-bot-label-analysis.service
 systemctl status fortune-bot-healthcheck.service
 ```
@@ -444,7 +444,7 @@ python3 deploy/monitor/check_jobs.py
 如果想强制测试邮件告警：
 
 ```bash
-sudo systemctl stop fortune-bot-hourly-cycle.timer
+sudo systemctl stop fortune-bot-submit-window.timer
 cd /opt/fortune_bot
 set -a
 source /etc/fortune-bot/fortune_bot.env
@@ -455,7 +455,7 @@ python3 deploy/monitor/check_jobs.py
 然后恢复：
 
 ```bash
-sudo systemctl start fortune-bot-hourly-cycle.timer
+sudo systemctl start fortune-bot-submit-window.timer
 ```
 
 ## 18. 现在你接下来应该做什么
@@ -468,7 +468,7 @@ sudo systemctl start fortune-bot-hourly-cycle.timer
 4. 保持 `PEG_CLOB_SIGNATURE_TYPE=1`。
 5. 先跑 `proxy_wallet_smoketest.py`。
 6. 把脚本打印出来的 `PEG_CLOB_API_KEY / SECRET / PASSPHRASE` 回填到 env 文件。
-7. 再手动试跑 `refresh_universe` 和 `hourly_cycle`。
+7. 再手动试跑 `refresh_universe` 和 `submit_window`。
 8. 没问题后再启 `tmux` market stream 和 `systemd` timers。
 
 这就是你当前最短、最稳的上线路径。
@@ -480,6 +480,7 @@ If you are running the production workflow with `tmux + systemd timers` as descr
 
 Files:
 
+- `execution_engine/app/scripts/linux/start_pipeline.sh`
 - `execution_engine/app/scripts/linux/stop_pipeline.sh`
 - `execution_engine/app/scripts/linux/restart_pipeline.sh`
 
@@ -489,7 +490,7 @@ This will stop:
 
 - tmux session `fortune-stream`
 - `fortune-bot-refresh-universe.timer`
-- `fortune-bot-hourly-cycle.timer`
+- `fortune-bot-submit-window.timer`
 - `fortune-bot-label-analysis.timer`
 - `fortune-bot-healthcheck.timer`
 - and their corresponding `service` units
@@ -499,6 +500,29 @@ Usage:
 ```bash
 cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/stop_pipeline.sh
+```
+
+### Start the whole pipeline
+
+This will:
+
+1. reload `/etc/fortune-bot/fortune_bot.env`
+2. run `bootstrap_venv.sh`
+3. recreate tmux stream session
+4. start all `fortune-bot-*` timers for the online workflow
+
+Usage:
+
+```bash
+cd /opt/fortune_bot
+bash execution_engine/app/scripts/linux/start_pipeline.sh
+```
+
+Optional flag:
+
+```bash
+# start without rebuilding / validating the virtualenv
+bash execution_engine/app/scripts/linux/start_pipeline.sh --skip-bootstrap
 ```
 
 ### Pull latest code and restart the whole workflow
@@ -550,5 +574,5 @@ bash execution_engine/app/scripts/linux/restart_pipeline.sh
 ```bash
 tmux ls
 systemctl list-timers --all | grep fortune-bot
-journalctl -u fortune-bot-hourly-cycle.service -n 100 --no-pager
+journalctl -u fortune-bot-submit-window.service -n 100 --no-pager
 ```

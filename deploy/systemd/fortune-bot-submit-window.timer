@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Fortune Bot submit-window every hour
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=fortune-bot-submit-window.service
+
+[Install]
+WantedBy=timers.target

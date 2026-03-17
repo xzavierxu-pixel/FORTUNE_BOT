@@ -31,7 +31,7 @@ The online pipeline is now organized by job responsibility instead of a single f
 
 - `execution_engine/online/universe/`: rolling 24h market universe refresh
 - `execution_engine/online/streaming/`: WebSocket market ingestion and token-state persistence
-- `execution_engine/online/scoring/`: hourly snapshot building, rule matching, model scoring, and selection
+- `execution_engine/online/scoring/`: live snapshot building, rule matching, model scoring, and selection
 - `execution_engine/online/execution/`: passive order submission, monitoring, and position state
 - `execution_engine/online/analysis/`: resolved labels, lifecycle joins, executed/opportunity analysis
 - `execution_engine/online/pipeline/`: cross-job orchestration and eligibility flow
@@ -59,22 +59,10 @@ Stream reference-token market data into the shared token-state store:
 powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\stream_market_data.ps1 -RunId STREAM_001 -DurationSec 60 -MarketLimit 20
 ```
 
-Run the hourly snapshot scoring job:
+Run the direct page-based submit window:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\score_hourly.ps1 -RunId SCORE_001
-```
-
-Submit hourly selections as passive limit orders:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\submit_hourly.ps1 -RunId SUBMIT_001
-```
-
-Run the full hourly online cycle in batch order:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\run_hourly_cycle.ps1 -RunId CYCLE_001
+powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\run_submit_window.ps1 -RunId SUBMIT_WINDOW_001
 ```
 
 Run standalone order lifecycle monitoring and reconciliation:
@@ -91,13 +79,14 @@ powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\lab
 
 ## Online pipeline flow
 
-1. Refresh a rolling 24h market universe
-2. Stream reference-token market data into shared token state
-3. Build hourly market-level snapshots
-4. Reuse `rule_baseline` rules, feature preprocessing, model scoring, and stake sizing
-5. Submit passive limit orders at `best_bid - 1 tick`
-6. Monitor 5-minute TTL outcomes and rebuild shared open-position state
-7. Sync resolved labels and run executed/opportunity analysis
+1. Start the prewarmed runtime once
+2. Fetch Gamma event pages directly in expiry order
+3. Expand markets into a narrow execution schema and apply Stage 1 structural filtering
+4. Stream one reference token per market and apply Stage 2 live-price filtering
+5. Reuse `rule_baseline` rules, feature preprocessing, model scoring, and stake sizing
+6. Submit passive limit orders per selected market as `final quote -> execution gate -> submit`
+7. Monitor TTL outcomes and rebuild shared open-position state
+8. Sync resolved labels and run executed/opportunity analysis
 
 ## Environment layout
 
@@ -127,10 +116,14 @@ Online pipeline:
 
 - `PEG_ONLINE_UNIVERSE_WINDOW_HOURS`
 - `PEG_ONLINE_MARKET_BATCH_SIZE`
+- `PEG_ONLINE_GAMMA_EVENT_PAGE_SIZE`
 - `PEG_ONLINE_REQUIRE_TWO_TOKEN_MARKETS`
 - `PEG_ONLINE_REQUIRE_RULE_COVERAGE`
+- `PEG_ONLINE_COARSE_HORIZON_SLACK_HOURS`
 - `PEG_ONLINE_LIMIT_TICKS_BELOW_BEST_BID`
+- `PEG_ONLINE_STREAM_DURATION_SEC`
 - `PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC`
+- `PEG_ONLINE_CAPACITY_WAIT_POLL_SEC`
 - `PEG_MARKET_STATE_CACHE_PATH`
 - `PEG_SHARED_STATE_DIR`
 - `PEG_STATE_SNAPSHOT_PATH`
@@ -172,38 +165,16 @@ Online streaming shared artifacts under [execution_engine/data/shared](C:\Users\
 - `token_state/current_token_state.json`
 - `ws_raw/YYYY-MM-DD/HH/shard_XX.jsonl`
 
-Per-run hourly scoring artifacts:
-
-- `snapshot_score/processed_markets.csv`
-- `snapshot_score/raw_snapshot_inputs.jsonl`
-- `snapshot_score/normalized_snapshots.csv`
-- `snapshot_score/feature_inputs.csv`
-- `snapshot_score/rule_hits.csv`
-- `snapshot_score/model_outputs.csv`
-- `snapshot_score/selection_decisions.csv`
-- `snapshot_score/manifest.json`
-
-Per-run hourly submission artifacts:
+Per-run direct submission artifacts:
 
 - `submit_hourly/submission_attempts.csv`
 - `submit_hourly/orders_submitted.jsonl`
-- `submit_hourly/fills.jsonl`
-- `submit_hourly/cancels.jsonl`
-- `submit_hourly/opened_positions.jsonl`
-- `submit_hourly/opened_position_events.jsonl`
 - `submit_hourly/manifest.json`
+- `submit_window/manifest.json`
 
 Per-run order monitoring artifacts:
 
 - `order_monitor/manifest.json`
-
-Per-run hourly cycle artifacts:
-
-- `hourly_cycle/manifest.json`
-- `hourly_cycle/batches/batch_XXX/universe.csv`
-- `hourly_cycle/batches/batch_XXX/market_stream/*`
-- `hourly_cycle/batches/batch_XXX/snapshot_score/*`
-- `hourly_cycle/batches/batch_XXX/submit_hourly/*`
 
 Per-run label analysis artifacts:
 
@@ -216,7 +187,7 @@ Per-run label analysis artifacts:
 
 `label_analysis/order_lifecycle.csv` is the canonical daily lifecycle table for submitted orders. It drives fill/cancel/reject rates, average order lifetime, and average fill-latency metrics in the daily summary.
 
-Hourly scoring also recomputes `remaining_hours` from `end_time_utc` at run time before horizon filtering. This prevents stale 6-hour universe snapshots from leaking expired markets into hourly scoring between universe refreshes.
+The submit window recomputes `remaining_hours` at page expansion time before Stage 1 filtering. This prevents stale cached universe rows from leaking expired markets into the live submit path.
 
 ## Current behavior note
 

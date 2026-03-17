@@ -1,9 +1,6 @@
-﻿param(
-    [string]$RunId = "SUBMIT_HOURLY",
-    [string]$SelectionCsv = "",
-    [string]$TokenStateCsv = "",
-    [int]$MaxOrders = 0,
-    [int]$PrintHead = 5
+param(
+    [string]$RunId = "SUBMIT_WINDOW",
+    [int]$MaxPages = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,26 +17,14 @@ if (-not (Test-Path $venvPython)) {
 $args = @(
     "-m",
     "execution_engine.app.cli.online.main",
-    "submit-hourly",
+    "run-submit-window",
     "--run-id",
-    $RunId,
-    "--print-head",
-    $PrintHead
+    $RunId
 )
 
-if ($SelectionCsv) {
-    $args += "--selection-csv"
-    $args += $SelectionCsv
-}
-
-if ($TokenStateCsv) {
-    $args += "--token-state-csv"
-    $args += $TokenStateCsv
-}
-
-if ($MaxOrders -gt 0) {
-    $args += "--max-orders"
-    $args += $MaxOrders
+if ($MaxPages -gt 0) {
+    $args += "--max-pages"
+    $args += $MaxPages
 }
 
 Push-Location $repoRoot
@@ -48,4 +33,3 @@ try {
 } finally {
     Pop-Location
 }
-

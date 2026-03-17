@@ -9,6 +9,12 @@ from execution_engine.runtime.config import PegConfig
 from execution_engine.runtime.models import SignalPayload, ensure_ids
 from execution_engine.shared.time import parse_utc, to_iso, utc_now
 
+MIN_EXECUTION_TICK_SIZE = 0.01
+MIN_EXECUTION_ORDER_SHARES = 5.0
+ABNORMAL_BOOK_MIN_BID = 0.01
+ABNORMAL_BOOK_MAX_ASK = 0.99
+ABNORMAL_BOOK_MAX_SPREAD = 0.50
+
 
 def to_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -24,6 +30,14 @@ def round_down_to_tick(price: float, tick_size: float) -> float:
         return round(price, 6)
     ticks = int(price / tick_size)
     return round(ticks * tick_size, 6)
+
+
+def normalize_tick_size(value: Any) -> float:
+    return max(to_float(value, default=MIN_EXECUTION_TICK_SIZE), MIN_EXECUTION_TICK_SIZE)
+
+
+def normalize_min_order_shares(value: Any) -> float:
+    return max(to_float(value, default=MIN_EXECUTION_ORDER_SHARES), MIN_EXECUTION_ORDER_SHARES)
 
 
 def price_cap(row: Dict[str, Any], cfg: PegConfig, fee_rate: float) -> float:
@@ -48,9 +62,17 @@ def build_submission_signal(
 
     best_bid = to_float(quote.get("best_bid"))
     best_ask = to_float(quote.get("best_ask"))
-    tick_size = to_float(quote.get("tick_size"), default=0.001)
+    tick_size = normalize_tick_size(quote.get("tick_size"))
+    spread = best_ask - best_bid if best_bid > 0 and best_ask > 0 and best_ask >= best_bid else None
     if best_bid <= 0:
         return None, "BEST_BID_MISSING"
+    if best_ask <= 0:
+        return None, "BEST_ASK_MISSING"
+    if (
+        best_bid <= ABNORMAL_BOOK_MIN_BID
+        and best_ask >= ABNORMAL_BOOK_MAX_ASK
+    ) or (spread is not None and spread >= ABNORMAL_BOOK_MAX_SPREAD):
+        return None, "ABNORMAL_TOP_OF_BOOK"
 
     limit_price = round_down_to_tick(
         best_bid - cfg.online_limit_ticks_below_best_bid * tick_size,
@@ -66,8 +88,8 @@ def build_submission_signal(
         return None, "LIMIT_PRICE_ABOVE_CAP"
 
     planned_amount_usdc = to_float(row.get("stake_usdc"))
-    min_order_size = to_float(quote.get("min_order_size"))
-    required_amount_usdc = min_order_size * limit_price if min_order_size > 0 and limit_price > 0 else 0.0
+    min_order_size = normalize_min_order_shares(quote.get("min_order_size"))
+    required_amount_usdc = min_order_size * limit_price if limit_price > 0 else 0.0
     amount_usdc = max(planned_amount_usdc, required_amount_usdc)
     if amount_usdc <= 0:
         return None, "INVALID_ORDER_SIZE"
@@ -114,6 +136,7 @@ def build_submission_signal(
         "best_bid_at_submit": best_bid,
         "best_ask_at_submit": best_ask,
         "min_order_size": min_order_size,
+        "order_size_shares": min_order_size if amount_usdc <= required_amount_usdc + 1e-9 else amount_usdc / limit_price,
         "required_amount_usdc": required_amount_usdc,
         "planned_amount_usdc": planned_amount_usdc,
         "tick_size": tick_size,

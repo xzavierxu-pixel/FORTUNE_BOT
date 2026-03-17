@@ -7,6 +7,8 @@ from typing import Any, Dict
 from execution_engine.integrations.trading.clob_client import NullClobClient
 from execution_engine.shared.time import to_iso, utc_now
 
+MIN_EXECUTION_TICK_SIZE = 0.01
+
 
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -37,7 +39,7 @@ def quote_from_token_state(
         return None
     best_bid = _to_float(row.get("best_bid"))
     best_ask = _to_float(row.get("best_ask"))
-    tick_size = _to_float(row.get("tick_size"), default=0.001)
+    tick_size = max(_to_float(row.get("tick_size"), default=MIN_EXECUTION_TICK_SIZE), MIN_EXECUTION_TICK_SIZE)
     mid = _to_float(row.get("mid_price"))
     if mid <= 0 and best_bid > 0 and best_ask > 0:
         mid = (best_bid + best_ask) / 2.0

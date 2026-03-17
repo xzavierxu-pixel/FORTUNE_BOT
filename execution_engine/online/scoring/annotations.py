@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Any
 import json
 import sys
@@ -12,6 +13,7 @@ import pandas as pd
 from execution_engine.runtime.config import PegConfig
 
 _RULE_IMPORTS_READY = False
+_OFFLINE_ANNOTATIONS_CACHE: dict[tuple[str, float | None], pd.DataFrame] = {}
 _ANNOTATION_COLUMNS = [
     "market_id",
     "domain",
@@ -69,10 +71,9 @@ def _build_annotation_input_frame(markets: pd.DataFrame) -> pd.DataFrame:
 
 def _normalize_domains_against_offline_reference(
     annotations: pd.DataFrame,
-    load_market_annotations,
+    offline_annotations: pd.DataFrame,
     rule_config,
 ) -> pd.DataFrame:
-    offline_annotations = load_market_annotations(rebuild_if_missing=False)
     if offline_annotations.empty or "domain_parsed" not in offline_annotations.columns:
         return annotations
 
@@ -97,6 +98,23 @@ def _normalize_domains_against_offline_reference(
     return out
 
 
+def _load_cached_offline_annotations(load_market_annotations, rule_config) -> pd.DataFrame:
+    target = Path(rule_config.MARKET_DOMAIN_FEATURES_PATH)
+    mtime = target.stat().st_mtime if target.exists() else None
+    cache_key = (str(target.resolve()), mtime)
+    cached = _OFFLINE_ANNOTATIONS_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    annotations = load_market_annotations(rebuild_if_missing=False)
+    if not annotations.empty:
+        annotations = annotations.copy()
+        annotations["market_id"] = annotations["market_id"].astype(str)
+    _OFFLINE_ANNOTATIONS_CACHE.clear()
+    _OFFLINE_ANNOTATIONS_CACHE[cache_key] = annotations
+    return annotations
+
+
 def build_online_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd.DataFrame:
     if markets.empty:
         return pd.DataFrame(columns=_ANNOTATION_COLUMNS)
@@ -117,9 +135,10 @@ def build_online_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd.DataFr
         return pd.DataFrame(columns=_ANNOTATION_COLUMNS)
 
     annotations["market_id"] = annotations["market_id"].astype(str)
+    offline_annotations = _load_cached_offline_annotations(load_market_annotations, rule_config)
     annotations = _normalize_domains_against_offline_reference(
         annotations,
-        load_market_annotations=load_market_annotations,
+        offline_annotations=offline_annotations,
         rule_config=rule_config,
     )
     return annotations.drop_duplicates(subset=["market_id"]).reset_index(drop=True)

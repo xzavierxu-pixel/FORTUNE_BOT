@@ -14,9 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from execution_engine.online.analysis.labels import build_daily_label_analysis
 from execution_engine.online.execution.monitor import monitor_order_lifecycle
-from execution_engine.online.execution.submission import submit_hourly_selection
-from execution_engine.online.pipeline.cycle import run_hourly_cycle
-from execution_engine.online.scoring.hourly import score_hourly_snapshots
+from execution_engine.online.pipeline.submit_window import run_submit_window
 from execution_engine.online.streaming.manager import stream_market_data
 from execution_engine.online.universe.refresh import refresh_current_universe
 from execution_engine.runtime.config import load_config
@@ -88,77 +86,6 @@ def _cmd_stream_market_data(args: argparse.Namespace) -> None:
     _print_frame_head(result.run_token_state_path, args.print_head)
 
 
-def _cmd_score_hourly(args: argparse.Namespace) -> None:
-    os.environ["PEG_RUN_MODE"] = "snapshot_score"
-    if args.run_id:
-        os.environ["PEG_RUN_ID"] = args.run_id
-    if args.universe_csv:
-        os.environ["PEG_UNIVERSE_CURRENT_PATH"] = args.universe_csv
-    if args.token_state_csv:
-        os.environ["PEG_TOKEN_STATE_CURRENT_PATH"] = args.token_state_csv
-
-    cfg = load_config()
-    result = score_hourly_snapshots(
-        cfg,
-        market_limit=args.market_limit or None,
-        market_offset=max(args.market_offset, 0),
-    )
-
-    print(f"source_market_count={result.source_market_count}")
-    print(f"live_universe_market_count={result.live_universe_market_count}")
-    for key, value in sorted(result.live_universe_filter_breakdown.items()):
-        print(f"live_universe_{key}={value}")
-    print(f"rule_horizon_eligible_count={result.horizon_eligible_count}")
-    print(f"rule_coverage_eligible_count={result.rule_coverage_eligible_count}")
-    print(f"processed_market_count={result.processed_market_count}")
-    print(f"snapshot_count={result.snapshot_count}")
-    print(f"rule_hit_count={result.rule_hit_count}")
-    print(f"model_output_count={result.model_output_count}")
-    print(f"selected_count={result.selected_count}")
-    for key, value in sorted(result.processing_reason_counts.items()):
-        print(f"process_{key}={value}")
-    for key, value in sorted(result.selection_reason_counts.items()):
-        print(f"select_{key}={value}")
-    print(f"manifest={result.run_manifest_path}")
-    print(f"processed_markets={result.processed_markets_path}")
-    print(f"normalized_snapshots={result.normalized_snapshots_path}")
-    print(f"feature_inputs={result.feature_inputs_path}")
-    print(f"rule_hits={result.rule_hits_path}")
-    print(f"model_outputs={result.model_outputs_path}")
-    print(f"selection={result.selection_path}")
-    _print_frame_head(result.selection_path, args.print_head)
-
-
-def _cmd_submit_hourly(args: argparse.Namespace) -> None:
-    os.environ["PEG_RUN_MODE"] = "submit_hourly"
-    if args.run_id:
-        os.environ["PEG_RUN_ID"] = args.run_id
-    if args.selection_csv:
-        os.environ["PEG_RUN_SNAPSHOT_SELECTION_PATH"] = args.selection_csv
-    if args.token_state_csv:
-        os.environ["PEG_TOKEN_STATE_CURRENT_PATH"] = args.token_state_csv
-
-    cfg = load_config()
-    selection_path = Path(args.selection_csv) if args.selection_csv else None
-    token_state_path = Path(args.token_state_csv) if args.token_state_csv else None
-    result = submit_hourly_selection(
-        cfg,
-        selection_path=selection_path,
-        token_state_path=token_state_path,
-        max_orders=args.max_orders or None,
-    )
-
-    print(f"total_selected_rows={result.total_selected_rows}")
-    print(f"attempted_count={result.attempted_count}")
-    print(f"submitted_count={result.submitted_count}")
-    print(f"rejection_count={result.rejection_count}")
-    for key, value in sorted(result.status_counts.items()):
-        print(f"status_{key}={value}")
-    print(f"manifest={result.run_manifest_path}")
-    print(f"attempts={result.attempts_path}")
-    _print_frame_head(result.attempts_path, args.print_head)
-
-
 def _cmd_monitor_orders(args: argparse.Namespace) -> None:
     os.environ["PEG_RUN_MODE"] = "order_monitor"
     if args.run_id:
@@ -218,46 +145,28 @@ def _cmd_label_analysis(args: argparse.Namespace) -> None:
     print(f"summary={result.summary_path}")
 
 
-def _cmd_run_hourly_cycle(args: argparse.Namespace) -> None:
-    os.environ["PEG_RUN_MODE"] = "hourly_cycle"
+def _cmd_run_submit_window(args: argparse.Namespace) -> None:
+    os.environ["PEG_RUN_MODE"] = "submit_window"
     if args.run_id:
         os.environ["PEG_RUN_ID"] = args.run_id
-    if args.universe_csv:
-        os.environ["PEG_UNIVERSE_CURRENT_PATH"] = args.universe_csv
 
     cfg = load_config()
-    result = run_hourly_cycle(
+    result = run_submit_window(
         cfg,
-        refresh_universe_enabled=not args.skip_refresh_universe,
-        stream_duration_sec=max(args.stream_duration_sec, 0),
-        max_batches=args.max_batches or None,
-        market_limit=args.market_limit or None,
-        submit_enabled=not args.skip_submit,
-        run_monitor_enabled=not args.skip_monitor,
-        monitor_sleep_sec=max(args.monitor_sleep_sec, 0),
-        skip_stream=args.skip_stream,
+        max_pages=args.max_pages or None,
     )
 
-    print(f"source_market_count={result.source_market_count}")
-    print(f"after_state_filter_count={result.after_state_filter_count}")
-    print(f"rule_horizon_eligible_count={result.horizon_eligible_count}")
-    print(f"rule_coverage_eligible_count={result.rule_coverage_eligible_count}")
-    print(f"eligible_market_count={result.eligible_market_count}")
-    print(f"batch_count={result.batch_count}")
-    print(f"processed_market_count={result.processed_market_count}")
-    print(f"selected_market_count={result.selected_market_count}")
+    print(f"page_count={result.page_count}")
+    print(f"expanded_market_count={result.expanded_market_count}")
+    print(f"direct_candidate_count={result.direct_candidate_count}")
     print(f"submitted_order_count={result.submitted_order_count}")
-    print(f"skipped_submit={'1' if result.skipped_submit else '0'}")
-    if result.universe_result is not None:
-        print(f"refreshed_eligible_markets={result.universe_result.eligible_markets}")
-    for batch in result.batches:
-        print(f"{batch.batch_id}_markets={batch.market_count}")
-        print(f"{batch.batch_id}_selected={batch.score_result.selected_count}")
-        print(f"{batch.batch_id}_submitted={0 if batch.submit_result is None else batch.submit_result.submitted_count}")
-        print(f"{batch.batch_id}_dir={batch.batch_dir}")
-    if result.monitor_result is not None:
-        print(f"monitor_open_orders={result.monitor_result.open_order_count}")
-        print(f"monitor_open_positions={result.monitor_result.open_position_count}")
+    print(f"underfilled_batch_count={result.underfilled_batch_count}")
+    print(f"underfilled_batch_avg_size={result.underfilled_batch_avg_size:.3f}")
+    for page in result.pages:
+        print(f"page_{page.page_offset}_events={page.event_count}")
+        print(f"page_{page.page_offset}_expanded={page.expanded_market_count}")
+        print(f"page_{page.page_offset}_candidates={page.direct_candidate_count}")
+        print(f"page_{page.page_offset}_submitted={page.submitted_count}")
     print(f"manifest={result.run_manifest_path}")
 
 
@@ -280,23 +189,6 @@ def build_parser() -> argparse.ArgumentParser:
     stream.add_argument("--print-head", type=int, default=5)
     stream.set_defaults(handler=_cmd_stream_market_data)
 
-    score = subparsers.add_parser("score-hourly", description="Run the hourly snapshot scoring job.")
-    score.add_argument("--run-id", default=None)
-    score.add_argument("--market-limit", type=int, default=0)
-    score.add_argument("--market-offset", type=int, default=0)
-    score.add_argument("--universe-csv", default=None)
-    score.add_argument("--token-state-csv", default=None)
-    score.add_argument("--print-head", type=int, default=5)
-    score.set_defaults(handler=_cmd_score_hourly)
-
-    submit = subparsers.add_parser("submit-hourly", description="Submit hourly selection decisions.")
-    submit.add_argument("--run-id", default=None)
-    submit.add_argument("--selection-csv", default=None)
-    submit.add_argument("--token-state-csv", default=None)
-    submit.add_argument("--max-orders", type=int, default=0)
-    submit.add_argument("--print-head", type=int, default=5)
-    submit.set_defaults(handler=_cmd_submit_hourly)
-
     monitor = subparsers.add_parser("monitor-orders", description="Monitor and reconcile order lifecycle state.")
     monitor.add_argument("--run-id", default=None)
     monitor.add_argument("--sleep-sec", type=int, default=0)
@@ -307,18 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
     labels.add_argument("--scope", choices=["run", "all"], default="run")
     labels.set_defaults(handler=_cmd_label_analysis)
 
-    cycle = subparsers.add_parser("run-hourly-cycle", description="Run the end-to-end hourly online cycle.")
-    cycle.add_argument("--run-id", default=None)
-    cycle.add_argument("--universe-csv", default=None)
-    cycle.add_argument("--stream-duration-sec", type=int, default=20)
-    cycle.add_argument("--max-batches", type=int, default=0)
-    cycle.add_argument("--market-limit", type=int, default=0)
-    cycle.add_argument("--monitor-sleep-sec", type=int, default=0)
-    cycle.add_argument("--skip-refresh-universe", action="store_true")
-    cycle.add_argument("--skip-stream", action="store_true")
-    cycle.add_argument("--skip-submit", action="store_true")
-    cycle.add_argument("--skip-monitor", action="store_true")
-    cycle.set_defaults(handler=_cmd_run_hourly_cycle)
+    submit_window = subparsers.add_parser("run-submit-window", description="Run the direct page-based online submit loop.")
+    submit_window.add_argument("--run-id", default=None)
+    submit_window.add_argument("--max-pages", type=int, default=0)
+    submit_window.set_defaults(handler=_cmd_run_submit_window)
 
     return parser
 
