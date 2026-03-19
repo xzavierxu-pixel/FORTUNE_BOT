@@ -60,6 +60,7 @@ EXECUTION_SOURCE_COLUMNS = [
     "selected_reference_token_id",
     "selected_reference_outcome_label",
     "selected_reference_side_index",
+    "uma_resolution_statuses",
     "start_time_utc",
     "created_at_utc",
     "end_time_utc",

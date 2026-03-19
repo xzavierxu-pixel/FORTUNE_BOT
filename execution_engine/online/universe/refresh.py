@@ -69,6 +69,7 @@ UNIVERSE_COLUMNS = [
     "selected_reference_token_id",
     "selected_reference_outcome_label",
     "selected_reference_side_index",
+    "uma_resolution_statuses",
     "source_market_updated_at_utc",
 ]
 
@@ -295,6 +296,7 @@ def _build_binary_market_row(
         "selected_reference_token_id": token_ids[0],
         "selected_reference_outcome_label": outcomes[0],
         "selected_reference_side_index": 0,
+        "uma_resolution_statuses": json.dumps(_parse_maybe_list(market.get("umaResolutionStatuses")), ensure_ascii=True),
         "source_market_updated_at_utc": str(market.get("updatedAt") or ""),
     }, None
 

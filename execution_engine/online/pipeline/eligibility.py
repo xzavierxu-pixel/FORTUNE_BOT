@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Set
+import json
 
 import pandas as pd
 
@@ -17,6 +18,7 @@ DIRECT_CANDIDATE = "DIRECT_CANDIDATE"
 
 LIVE_ELIGIBLE = "LIVE_ELIGIBLE"
 LIVE_PRICE_MISS = "LIVE_PRICE_MISS"
+LIVE_SPREAD_TOO_WIDE = "LIVE_SPREAD_TOO_WIDE"
 LIVE_STATE_MISSING = "LIVE_STATE_MISSING"
 LIVE_STATE_STALE = "LIVE_STATE_STALE"
 INVALID_PRICE = "INVALID_PRICE"
@@ -54,6 +56,25 @@ def _best_live_mid(row: Dict[str, Any]) -> float:
     if best_bid > 0 and best_ask > 0 and best_ask >= best_bid:
         return round((best_bid + best_ask) / 2.0, 6)
     return _to_float(row.get("last_trade_price"))
+
+
+def _parse_resolution_statuses(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return set()
+        try:
+            parsed = json.loads(raw)
+            items = parsed if isinstance(parsed, list) else [raw]
+        except Exception:
+            items = [part.strip() for part in raw.split(",")]
+    else:
+        items = [value]
+    return {str(item).strip().lower() for item in items if str(item).strip()}
 
 
 @dataclass(frozen=True)
@@ -104,6 +125,8 @@ def apply_structural_coarse_filter(
         candidates["market_id"] = ""
     if "accepting_orders" not in candidates.columns:
         candidates["accepting_orders"] = True
+    if "uma_resolution_statuses" not in candidates.columns:
+        candidates["uma_resolution_statuses"] = ""
 
     missing_end_mask = candidates.get("end_time_utc", pd.Series("", index=candidates.index)).astype(str).str.strip().eq("")
     accepting_orders = candidates["accepting_orders"].astype(str).str.strip().str.lower().isin({"1", "true", "yes", "y", "on"})
@@ -136,6 +159,13 @@ def apply_structural_coarse_filter(
         candidates["market_id"].astype(str).isin(excluded_ids) & candidates["coarse_filter_state"].eq(DIRECT_CANDIDATE),
         ["coarse_filter_state", "coarse_filter_reason"],
     ] = [STATE_REJECT, "open_or_pending_market"]
+    uma_status_hit = candidates["uma_resolution_statuses"].map(
+        lambda value: bool(_parse_resolution_statuses(value) & {"pending", "proposed", "resolved", "disputed"})
+    )
+    candidates.loc[
+        uma_status_hit & candidates["coarse_filter_state"].eq(DIRECT_CANDIDATE),
+        ["coarse_filter_state", "coarse_filter_reason"],
+    ] = [STRUCTURAL_REJECT, "uma_resolution_status_filtered"]
 
     active = candidates[candidates["coarse_filter_state"] == DIRECT_CANDIDATE].copy()
     if not active.empty and not rules_frame.empty:
@@ -256,12 +286,22 @@ def apply_live_price_filter(
             state_row.get("last_trade_price"),
             default=_to_float(row.get("last_trade_price")),
         )
+        live_spread = None
+        if enriched["best_bid"] > 0 and enriched["best_ask"] > 0 and enriched["best_ask"] >= enriched["best_bid"]:
+            live_spread = round(enriched["best_ask"] - enriched["best_bid"], 6)
+        enriched["spread"] = live_spread
         enriched["mid_price"] = _best_live_mid(state_row)
         enriched["raw_event_count"] = _to_float(state_row.get("raw_event_count"), default=1.0)
         enriched["tick_size"] = _to_float(
             state_row.get("tick_size"),
             default=_to_float(row.get("order_price_min_tick_size"), default=0.001),
         )
+        if live_spread is not None and live_spread > 0.5:
+            enriched["live_filter_state"] = LIVE_SPREAD_TOO_WIDE
+            enriched["live_filter_reason"] = "live_spread_above_threshold"
+            stage2_rows.append(enriched)
+            provisional_states[market_id] = LIVE_SPREAD_TOO_WIDE
+            continue
         live_mid = _to_float(enriched.get("mid_price"))
         if not (float(cfg.rule_engine_min_price) < live_mid < float(cfg.rule_engine_max_price)):
             enriched["live_filter_state"] = INVALID_PRICE
@@ -284,6 +324,7 @@ def apply_live_price_filter(
             rules_frame,
             horizon_column="remaining_hours",
             price_column="live_mid_price",
+            price_midpoint_tolerance=0.1,
         )
         miss_mask = ~live_rule_inputs["rule_coverage_exact_match"].fillna(False)
         live_rule_inputs.loc[miss_mask, ["live_filter_state", "live_filter_reason"]] = [

@@ -99,6 +99,7 @@ def score_frame_rule_coverage(
     *,
     horizon_column: str,
     price_column: str,
+    price_midpoint_tolerance: float | None = None,
 ) -> pd.DataFrame:
     out = frame.copy().reset_index(drop=True)
     if out.empty:
@@ -129,12 +130,19 @@ def score_frame_rule_coverage(
     if merged.empty:
         return out
 
-    mask = (
+    horizon_mask = (
         (merged[horizon_column] >= merged["h_min"])
         & (merged[horizon_column] <= merged["h_max"])
-        & (merged[price_column] >= merged["price_min"] - 1e-9)
-        & (merged[price_column] <= merged["price_max"] + 1e-9)
     )
+    if price_midpoint_tolerance is None:
+        price_mask = (
+            (merged[price_column] >= merged["price_min"] - 1e-9)
+            & (merged[price_column] <= merged["price_max"] + 1e-9)
+        )
+    else:
+        midpoint = (pd.to_numeric(merged["price_min"], errors="coerce") + pd.to_numeric(merged["price_max"], errors="coerce")) / 2.0
+        price_mask = (pd.to_numeric(merged[price_column], errors="coerce") - midpoint).abs() <= float(price_midpoint_tolerance) + 1e-9
+    mask = horizon_mask & price_mask
     merged = merged.loc[mask, ["_row_id"]]
     if merged.empty:
         return out

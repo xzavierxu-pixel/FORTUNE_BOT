@@ -158,6 +158,7 @@ class PegConfig:
     run_submit_manifest_path: Path
     run_submit_attempts_path: Path
     run_submit_orders_submitted_path: Path
+    run_submit_post_submit_features_path: Path
     run_submit_window_manifest_path: Path
     run_deferred_reports_path: Path
     run_monitor_manifest_path: Path
@@ -414,6 +415,12 @@ def load_config() -> PegConfig:
         ),
         run_submit_orders_submitted_path=Path(
             _get_env("PEG_RUN_SUBMIT_ORDERS_SUBMITTED_PATH", str(data_dir / "submit_hourly" / "orders_submitted.jsonl"))
+        ),
+        run_submit_post_submit_features_path=Path(
+            _get_env(
+                "PEG_RUN_SUBMIT_POST_SUBMIT_FEATURES_PATH",
+                str(data_dir / "submit_hourly" / "post_submit_model_features.csv"),
+            )
         ),
         run_submit_window_manifest_path=Path(
             _get_env("PEG_RUN_SUBMIT_WINDOW_MANIFEST_PATH", str(data_dir / "submit_window" / "manifest.json"))

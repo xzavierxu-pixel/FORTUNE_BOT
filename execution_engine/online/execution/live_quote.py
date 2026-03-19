@@ -30,6 +30,22 @@ def _extract_price(entry: Any) -> float | None:
     return _to_float(entry, default=0.0) or None
 
 
+def _best_bid_from_levels(levels: Any) -> float | None:
+    if not levels:
+        return None
+    prices = [_extract_price(entry) for entry in levels]
+    prices = [price for price in prices if price is not None]
+    return max(prices) if prices else None
+
+
+def _best_ask_from_levels(levels: Any) -> float | None:
+    if not levels:
+        return None
+    prices = [_extract_price(entry) for entry in levels]
+    prices = [price for price in prices if price is not None]
+    return min(prices) if prices else None
+
+
 def quote_from_token_state(
     token_state_by_token: Dict[str, Dict[str, Any]],
     token_id: str,
@@ -63,8 +79,8 @@ def quote_from_clob(clob_client: Any, token_id: str) -> Dict[str, Any] | None:
         return None
     bids = book.get("bids")
     asks = book.get("asks")
-    best_bid = _extract_price(bids[0]) if bids else None
-    best_ask = _extract_price(asks[0]) if asks else None
+    best_bid = _best_bid_from_levels(bids)
+    best_ask = _best_ask_from_levels(asks)
     mid = clob_client.get_midpoint(token_id)
     if mid is None and best_bid is not None and best_ask is not None:
         mid = (best_bid + best_ask) / 2.0

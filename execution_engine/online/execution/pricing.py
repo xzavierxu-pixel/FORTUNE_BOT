@@ -71,7 +71,7 @@ def build_submission_signal(
     if (
         best_bid <= ABNORMAL_BOOK_MIN_BID
         and best_ask >= ABNORMAL_BOOK_MAX_ASK
-    ) or (spread is not None and spread >= ABNORMAL_BOOK_MAX_SPREAD):
+    ) or (spread is not None and spread > ABNORMAL_BOOK_MAX_SPREAD):
         return None, "ABNORMAL_TOP_OF_BOOK"
 
     limit_price = round_down_to_tick(

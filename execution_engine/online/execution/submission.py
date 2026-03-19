@@ -45,6 +45,7 @@ CAPACITY_WAIT_REASONS = {
 }
 
 SUBMITTED_ORDER_STATUSES = {"DRY_RUN_SUBMITTED", "NEW", "ACKED", "FILLED"}
+EARLY_SPREAD_MAX = 0.50
 
 
 def _submit_error_status(exc: Exception) -> str:
@@ -120,6 +121,16 @@ def _empty_result_noop(cfg: PegConfig, *, status: str = "empty_selection") -> Su
 
 def _selected_outcome_index(row: Dict[str, Any]) -> int:
     return 0 if int(float(row.get("direction_model") or 0)) > 0 else 1
+
+
+def _early_spread_reason(quote: Dict[str, Any]) -> str | None:
+    best_bid = to_float(quote.get("best_bid"))
+    best_ask = to_float(quote.get("best_ask"))
+    if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        return None
+    if (best_ask - best_bid) > EARLY_SPREAD_MAX:
+        return "SPREAD_TOO_WIDE"
+    return None
 
 
 def _submitted_order_record(
@@ -263,6 +274,30 @@ def submit_selected_orders(
                 rejection = {"market_id": market_id, "reason_code": "MISSING_LIVE_QUOTE", "created_at_utc": to_iso(utc_now())}
                 record_rejection(cfg, state, rejection)
                 append_attempt(attempts, status_counts, {"market_id": market_id, "token_id": token_id, "status": "MISSING_LIVE_QUOTE"})
+                break
+
+            early_spread_reason = _early_spread_reason(quote)
+            if early_spread_reason is not None:
+                spread_gate_reject_count += 1
+                rejection = {
+                    "market_id": market_id,
+                    "reason_code": early_spread_reason,
+                    "created_at_utc": to_iso(utc_now()),
+                }
+                record_rejection(cfg, state, rejection)
+                append_attempt(
+                    attempts,
+                    status_counts,
+                    {
+                        "market_id": market_id,
+                        "token_id": token_id,
+                        "status": early_spread_reason,
+                        "best_bid": quote.get("best_bid"),
+                        "best_ask": quote.get("best_ask"),
+                        "tick_size": quote.get("tick_size"),
+                        "quote_source": quote.get("quote_source"),
+                    },
+                )
                 break
 
             signal, reason = build_submission_signal(row, quote, cfg, fee_rate)

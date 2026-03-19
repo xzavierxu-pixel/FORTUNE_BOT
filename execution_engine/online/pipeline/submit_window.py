@@ -34,12 +34,104 @@ def _write_manifest(path, payload: Dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
+def _merge_unique_columns(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    if left.empty:
+        return right.copy()
+    if right.empty:
+        return left.copy()
+    addable = right.loc[:, [column for column in right.columns if column not in left.columns]]
+    return pd.concat([left.reset_index(drop=True), addable.reset_index(drop=True)], axis=1)
+
+
+def _write_post_submit_output(
+    runtime: OnlineRuntimeContainer,
+    inference_result: LiveInferenceResult,
+    selection: pd.DataFrame,
+    attempt_frame: pd.DataFrame,
+) -> None:
+    model_outputs = select_target_side(inference_result.rule_model.model_outputs).reset_index(drop=True)
+    feature_inputs = inference_result.rule_model.feature_inputs.reset_index(drop=True)
+    if model_outputs.empty and feature_inputs.empty:
+        return
+    output = _merge_unique_columns(feature_inputs, model_outputs)
+    if not selection.empty:
+        selection_merge_keys = [
+            column
+            for column in ["run_id", "batch_id", "market_id", "rule_group_key", "rule_leaf_id"]
+            if column in output.columns and column in selection.columns
+        ]
+        if selection_merge_keys:
+            output = output.merge(
+                selection,
+                on=selection_merge_keys,
+                how="left",
+                suffixes=("", "_selection"),
+            )
+        else:
+            output = _merge_unique_columns(output, selection.reset_index(drop=True))
+    if not attempt_frame.empty:
+        attempts = attempt_frame.copy()
+        if "market_id" in attempts.columns and "token_id" in attempts.columns:
+            attempts = attempts.drop_duplicates(subset=["market_id", "token_id"], keep="last")
+            attempts = attempts.rename(
+                columns={
+                    "token_id": "selected_token_id",
+                    "status": "submit_status",
+                    "best_bid": "submit_best_bid",
+                    "best_ask": "submit_best_ask",
+                    "tick_size": "submit_tick_size",
+                    "limit_price": "submit_limit_price",
+                    "reference_price": "submit_reference_price",
+                    "price_cap": "submit_price_cap",
+                    "stake_usdc": "submit_stake_usdc",
+                    "quote_source": "submit_quote_source",
+                }
+            )
+            merge_keys = [column for column in ["market_id", "selected_token_id"] if column in output.columns and column in attempts.columns]
+            if merge_keys:
+                output = output.merge(
+                    attempts[
+                        [
+                            column
+                            for column in [
+                                *merge_keys,
+                                "submit_status",
+                                "submit_best_bid",
+                                "submit_best_ask",
+                                "submit_tick_size",
+                                "submit_limit_price",
+                                "submit_reference_price",
+                                "submit_price_cap",
+                                "submit_stake_usdc",
+                                "submit_quote_source",
+                                "decision_id",
+                                "order_attempt_id",
+                            ]
+                            if column in attempts.columns
+                        ]
+                    ],
+                    on=merge_keys,
+                    how="left",
+                )
+    output["post_submit_recorded_at_utc"] = to_iso(utc_now())
+    existing = pd.DataFrame()
+    if runtime.cfg.run_submit_post_submit_features_path.exists():
+        try:
+            existing = pd.read_csv(runtime.cfg.run_submit_post_submit_features_path, dtype=str)
+        except pd.errors.EmptyDataError:
+            existing = pd.DataFrame()
+    combined = pd.concat([existing, output], ignore_index=True)
+    runtime.cfg.run_submit_post_submit_features_path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(runtime.cfg.run_submit_post_submit_features_path, index=False)
+
+
 @dataclass(frozen=True)
 class SubmitWindowBatchResult:
     batch_id: str
     market_count: int
     live_eligible_count: int
     live_price_miss_count: int
+    live_spread_too_wide_count: int
     live_state_missing_count: int
     live_state_stale_count: int
     invalid_price_count: int
@@ -128,6 +220,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             market_count=int(len(batch.frame)),
             live_eligible_count=0,
             live_price_miss_count=int(live_state_counts.get("LIVE_PRICE_MISS", 0)),
+            live_spread_too_wide_count=int(live_state_counts.get("LIVE_SPREAD_TOO_WIDE", 0)),
             live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
             live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
             invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
@@ -161,6 +254,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             market_count=int(len(batch.frame)),
             live_eligible_count=int(len(inference_result.live_filter.eligible)),
             live_price_miss_count=int(live_state_counts.get("LIVE_PRICE_MISS", 0)),
+            live_spread_too_wide_count=int(live_state_counts.get("LIVE_SPREAD_TOO_WIDE", 0)),
             live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
             live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
             invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
@@ -196,6 +290,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             market_count=int(len(batch.frame)),
             live_eligible_count=int(len(inference_result.live_filter.eligible)),
             live_price_miss_count=int(live_state_counts.get("LIVE_PRICE_MISS", 0)),
+            live_spread_too_wide_count=int(live_state_counts.get("LIVE_SPREAD_TOO_WIDE", 0)),
             live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
             live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
             invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
@@ -254,6 +349,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             reason_column="status",
             token_column="token_id",
         )
+    _write_post_submit_output(runtime, inference_result, selection, latest_batch_attempts if not attempt_frame.empty else pd.DataFrame())
     live_state_counts = inference_result.live_filter.state_counts
     token_age_series = pd.to_numeric(inference_result.live_filter.eligible.get("token_state_age_sec"), errors="coerce")
     return SubmitWindowBatchResult(
@@ -261,6 +357,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
         market_count=int(len(batch.frame)),
         live_eligible_count=int(len(inference_result.live_filter.eligible)),
         live_price_miss_count=int(live_state_counts.get("LIVE_PRICE_MISS", 0)),
+        live_spread_too_wide_count=int(live_state_counts.get("LIVE_SPREAD_TOO_WIDE", 0)),
         live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
         live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
         invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
@@ -390,7 +487,15 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
     critical_path_candidate_column_count = 0
     critical_path_snapshot_column_count = 0
     structural_reject_count = 0
+    state_reject_count = 0
+    live_eligible_count = 0
     live_price_miss_count = 0
+    live_spread_too_wide_count = 0
+    live_state_missing_count = 0
+    live_state_stale_count = 0
+    invalid_price_count = 0
+    selected_count = 0
+    submit_attempted_count = 0
     token_state_age_weighted_sum = 0.0
     token_state_age_weight = 0
     quote_lookup_latency_weighted_sum = 0.0
@@ -400,6 +505,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
     selection_to_submit_latency_weighted_sum = 0.0
     selection_to_submit_latency_weight = 0
     spread_gate_reject_count = 0
+    submit_status_counts: Dict[str, int] = {}
 
     page_limit = max(int(cfg.online_gamma_event_page_size), 1)
     page_offset = 0
@@ -421,6 +527,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
         page_results.append(page_result)
         expanded_market_count += page_result.expanded_market_count
         structural_reject_count += page_result.structural_reject_count
+        state_reject_count += page_result.state_reject_count
         direct_candidate_count += page_result.direct_candidate_count
         submitted_order_count += page_result.submitted_count
         for batch in page_result.batches:
@@ -428,6 +535,13 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
                 underfilled_sizes.append(batch.market_count)
             stream_latencies_ms.append(batch.stream_latency_ms)
             inference_latencies_ms.append(batch.inference_latency_ms)
+            live_eligible_count += batch.live_eligible_count
+            live_spread_too_wide_count += batch.live_spread_too_wide_count
+            live_state_missing_count += batch.live_state_missing_count
+            live_state_stale_count += batch.live_state_stale_count
+            invalid_price_count += batch.invalid_price_count
+            selected_count += batch.selected_count
+            submit_attempted_count += batch.submit_result.attempted_count
             if batch.live_eligible_count > 0:
                 token_state_age_weighted_sum += batch.avg_token_state_age_sec * batch.live_eligible_count
                 token_state_age_weight += batch.live_eligible_count
@@ -435,6 +549,9 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             critical_path_snapshot_column_count = max(critical_path_snapshot_column_count, batch.snapshot_column_count)
             live_price_miss_count += batch.live_price_miss_count
             submit_rejection_count += batch.submit_result.rejection_count
+            for status, count in batch.submit_result.status_counts.items():
+                normalized_status = str(status or "UNKNOWN")
+                submit_status_counts[normalized_status] = submit_status_counts.get(normalized_status, 0) + int(count)
             if batch.submit_result.quote_lookup_count > 0:
                 quote_lookup_latency_weighted_sum += (
                     batch.submit_result.quote_lookup_latency_ms * batch.submit_result.quote_lookup_count
@@ -475,16 +592,37 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
     underfilled_batch_avg_size = (
         sum(underfilled_sizes) / underfilled_batch_count if underfilled_batch_count else 0.0
     )
+    live_rejected_count = (
+        live_price_miss_count
+        + live_spread_too_wide_count
+        + live_state_missing_count
+        + live_state_stale_count
+        + invalid_price_count
+    )
+    unaccounted_live_stage_count = max(
+        direct_candidate_count - live_eligible_count - live_rejected_count,
+        0,
+    )
+    selected_not_attempted_count = max(selected_count - submit_attempted_count, 0)
+    live_eligible_not_selected_count = max(live_eligible_count - selected_count, 0)
     metrics_payload = {
         "gamma_event_page_fetch_latency_ms": sum(fetch_latencies_ms) / len(fetch_latencies_ms) if fetch_latencies_ms else 0.0,
         "expanded_market_count": float(expanded_market_count),
         "structural_reject_count": float(structural_reject_count),
+        "state_reject_count": float(state_reject_count),
         "direct_candidate_count": float(direct_candidate_count),
         "underfilled_batch_count": float(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
         "stream_latency_ms": sum(stream_latencies_ms) / len(stream_latencies_ms) if stream_latencies_ms else 0.0,
         "token_state_age_sec": token_state_age_weighted_sum / token_state_age_weight if token_state_age_weight else 0.0,
+        "live_eligible_count": float(live_eligible_count),
         "live_price_miss_count": float(live_price_miss_count),
+        "live_spread_too_wide_count": float(live_spread_too_wide_count),
+        "live_state_missing_count": float(live_state_missing_count),
+        "live_state_stale_count": float(live_state_stale_count),
+        "invalid_price_count": float(invalid_price_count),
+        "selected_count": float(selected_count),
+        "submit_attempted_count": float(submit_attempted_count),
         "inference_latency_ms": sum(inference_latencies_ms) / len(inference_latencies_ms) if inference_latencies_ms else 0.0,
         "selection_to_submit_latency_ms": (
             selection_to_submit_latency_weighted_sum / selection_to_submit_latency_weight
@@ -503,20 +641,57 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             quote_lookup_latency_weighted_sum / quote_lookup_latency_weight if quote_lookup_latency_weight else 0.0
         ),
         "spread_gate_reject_count": float(spread_gate_reject_count),
+        "live_stage_unaccounted_count": float(unaccounted_live_stage_count),
+        "live_eligible_not_selected_count": float(live_eligible_not_selected_count),
+        "selected_not_attempted_count": float(selected_not_attempted_count),
         "critical_path_candidate_column_count": float(critical_path_candidate_column_count),
         "critical_path_snapshot_column_count": float(critical_path_snapshot_column_count),
         "deferred_artifact_reconstruction_count": 0.0,
+    }
+    funnel_payload = {
+        "stage0_expanded_market_count": int(expanded_market_count),
+        "stage1_structural_reject_count": int(structural_reject_count),
+        "stage1_state_reject_count": int(state_reject_count),
+        "stage1_direct_candidate_count": int(direct_candidate_count),
+        "stage2_live_eligible_count": int(live_eligible_count),
+        "stage2_live_price_miss_count": int(live_price_miss_count),
+        "stage2_live_spread_too_wide_count": int(live_spread_too_wide_count),
+        "stage2_live_state_missing_count": int(live_state_missing_count),
+        "stage2_live_state_stale_count": int(live_state_stale_count),
+        "stage2_invalid_price_count": int(invalid_price_count),
+        "stage2_unaccounted_count": int(unaccounted_live_stage_count),
+        "stage3_selected_count": int(selected_count),
+        "stage3_live_eligible_not_selected_count": int(live_eligible_not_selected_count),
+        "stage4_submit_attempted_count": int(submit_attempted_count),
+        "stage4_selected_not_attempted_count": int(selected_not_attempted_count),
+        "stage4_submit_success_count": int(submitted_order_count),
+        "stage4_submit_rejection_count": int(submit_rejection_count),
+        "stage4_submit_status_counts": {
+            key: int(value)
+            for key, value in sorted(submit_status_counts.items())
+        },
     }
     manifest = {
         "generated_at_utc": to_iso(utc_now()),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
+        "funnel": funnel_payload,
         "page_count": int(len(page_results)),
         "expanded_market_count": int(expanded_market_count),
         "structural_reject_count": int(structural_reject_count),
+        "state_reject_count": int(state_reject_count),
         "direct_candidate_count": int(direct_candidate_count),
+        "live_eligible_count": int(live_eligible_count),
+        "live_price_miss_count": int(live_price_miss_count),
+        "live_spread_too_wide_count": int(live_spread_too_wide_count),
+        "live_state_missing_count": int(live_state_missing_count),
+        "live_state_stale_count": int(live_state_stale_count),
+        "invalid_price_count": int(invalid_price_count),
+        "selected_count": int(selected_count),
+        "submit_attempted_count": int(submit_attempted_count),
         "submitted_order_count": int(submitted_order_count),
         "submit_rejection_count": int(submit_rejection_count),
+        "post_submit_features_path": str(cfg.run_submit_post_submit_features_path),
         "underfilled_batch_count": int(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
         "metrics": metrics_payload,
@@ -536,6 +711,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
                         "market_count": batch.market_count,
                         "live_eligible_count": batch.live_eligible_count,
                         "live_price_miss_count": batch.live_price_miss_count,
+                        "live_spread_too_wide_count": batch.live_spread_too_wide_count,
                         "live_state_missing_count": batch.live_state_missing_count,
                         "live_state_stale_count": batch.live_state_stale_count,
                         "invalid_price_count": batch.invalid_price_count,
