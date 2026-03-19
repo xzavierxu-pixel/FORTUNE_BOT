@@ -162,7 +162,6 @@ class PegConfig:
     run_submit_window_manifest_path: Path
     run_deferred_reports_path: Path
     run_monitor_manifest_path: Path
-    run_hourly_cycle_manifest_path: Path
     run_label_manifest_path: Path
     run_label_resolved_labels_path: Path
     run_label_order_lifecycle_path: Path
@@ -270,6 +269,9 @@ class PegConfig:
     online_capacity_wait_poll_sec: int
     online_price_cap_safety_buffer: float
     online_deferred_artifacts_enabled: bool
+    submit_window_run_monitor_after: bool
+    submit_window_monitor_sleep_sec: int
+    submit_window_fail_on_monitor_error: bool
 
     def ensure_dirs(self) -> None:
         self.base_data_dir.mkdir(parents=True, exist_ok=True)
@@ -431,9 +433,6 @@ def load_config() -> PegConfig:
         run_monitor_manifest_path=Path(
             _get_env("PEG_RUN_MONITOR_MANIFEST_PATH", str(data_dir / "order_monitor" / "manifest.json"))
         ),
-        run_hourly_cycle_manifest_path=Path(
-            _get_env("PEG_RUN_HOURLY_CYCLE_MANIFEST_PATH", str(data_dir / "hourly_cycle" / "manifest.json"))
-        ),
         run_label_manifest_path=Path(
             _get_env("PEG_RUN_LABEL_MANIFEST_PATH", str(data_dir / "label_analysis" / "manifest.json"))
         ),
@@ -548,6 +547,9 @@ def load_config() -> PegConfig:
         online_capacity_wait_poll_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_POLL_SEC", 30),
         online_price_cap_safety_buffer=_get_float("PEG_ONLINE_PRICE_CAP_SAFETY_BUFFER", 0.01),
         online_deferred_artifacts_enabled=_get_bool("PEG_ONLINE_DEFERRED_ARTIFACTS_ENABLED", False),
+        submit_window_run_monitor_after=_get_bool("PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER", True),
+        submit_window_monitor_sleep_sec=_get_int("PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC", 0),
+        submit_window_fail_on_monitor_error=_get_bool("PEG_SUBMIT_WINDOW_FAIL_ON_MONITOR_ERROR", False),
     )
     cfg.ensure_dirs()
     return cfg

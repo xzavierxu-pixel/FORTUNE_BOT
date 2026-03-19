@@ -2,9 +2,9 @@
 
 `execution_engine` is the live execution layer for Polymarket.
 
-Target-state design for the next online pipeline iteration:
+Target-state design for the production submit-window path:
 
-- [ONLINE_EXECUTION_PIPELINE_DESIGN.md](C:\Users\ROG\Desktop\fortune_bot\execution_engine\ONLINE_EXECUTION_PIPELINE_DESIGN.md)
+- [SUBMIT_WINDOW_MAIN_PATH_IMPLEMENTATION_DESIGN.md](C:\Users\ROG\Desktop\fortune_bot\execution_engine\SUBMIT_WINDOW_MAIN_PATH_IMPLEMENTATION_DESIGN.md)
 
 Use the dedicated environment at `C:\Users\ROG\Desktop\fortune_bot\.venv-execution` for live trading and dry-runs. This keeps the official `py-clob-client` isolated from unrelated tools in the global Python environment.
 
@@ -15,7 +15,7 @@ Run artifacts live under [execution_engine/data](C:\Users\ROG\Desktop\fortune_bo
 - `summary/runs_index.jsonl`: run-level summary index
 - `summary/dashboard.html`: local monitoring dashboard
 
-The repository now exposes a single execution model: the online pipeline described in [ONLINE_EXECUTION_PIPELINE_DESIGN.md](C:\Users\ROG\Desktop\fortune_bot\execution_engine\ONLINE_EXECUTION_PIPELINE_DESIGN.md).
+The repository now exposes a single production trading model centered on `run_submit_window`.
 
 ## Top-level layout
 
@@ -29,7 +29,7 @@ The repository now exposes a single execution model: the online pipeline describ
 
 The online pipeline is now organized by job responsibility instead of a single flat module list:
 
-- `execution_engine/online/universe/`: rolling 24h market universe refresh
+- `execution_engine/online/universe/`: Gamma page expansion and shared market helpers
 - `execution_engine/online/streaming/`: WebSocket market ingestion and token-state persistence
 - `execution_engine/online/scoring/`: live snapshot building, rule matching, model scoring, and selection
 - `execution_engine/online/execution/`: passive order submission, monitoring, and position state
@@ -45,12 +45,6 @@ Bootstrap the isolated execution environment:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\env\bootstrap_venv.ps1
-```
-
-Refresh the shared 24h online universe:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\refresh_universe.ps1 -RunId UNIVERSE_001 -MaxMarkets 1000
 ```
 
 Stream reference-token market data into the shared token-state store:
@@ -79,14 +73,13 @@ powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\lab
 
 ## Online pipeline flow
 
-1. Start the prewarmed runtime once
-2. Fetch Gamma event pages directly in expiry order
-3. Expand markets into a narrow execution schema and apply Stage 1 structural filtering
-4. Stream one reference token per market and apply Stage 2 live-price filtering
-5. Reuse `rule_baseline` rules, feature preprocessing, model scoring, and stake sizing
-6. Submit passive limit orders per selected market as `final quote -> execution gate -> submit`
-7. Monitor TTL outcomes and rebuild shared open-position state
-8. Sync resolved labels and run executed/opportunity analysis
+1. Run the submit window directly against Gamma event pages
+2. Expand markets into a narrow execution schema and apply Stage 1 structural filtering
+3. Stream one reference token per market and apply Stage 2 live-price filtering
+4. Reuse `rule_baseline` rules, feature preprocessing, model scoring, and stake sizing
+5. Submit passive limit orders per selected market as `final quote -> execution gate -> submit`
+6. Run post-submit order lifecycle monitoring, reconciliation, and exit handling
+7. Sync resolved labels and run executed/opportunity analysis
 
 ## Environment layout
 
@@ -149,10 +142,8 @@ Core execution outputs under [execution_engine/data/runs](C:\Users\ROG\Desktop\f
 
 Each run directory also gets a `run_summary.json`, and the aggregate dashboard is rebuilt at [dashboard.html](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data\summary\dashboard.html).
 
-Online streaming shared artifacts under [execution_engine/data/shared](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data\shared):
+Online shared artifacts under [execution_engine/data/shared](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data\shared):
 
-- `universe/current_universe.csv`
-- `universe/current_universe_manifest.json`
 - `positions/market_state.json`
 - `positions/open_positions.jsonl`
 - `orders_live/latest_orders.jsonl`
@@ -187,7 +178,7 @@ Per-run label analysis artifacts:
 
 `label_analysis/order_lifecycle.csv` is the canonical daily lifecycle table for submitted orders. It drives fill/cancel/reject rates, average order lifetime, and average fill-latency metrics in the daily summary.
 
-The submit window recomputes `remaining_hours` at page expansion time before Stage 1 filtering. This prevents stale cached universe rows from leaking expired markets into the live submit path.
+The submit window recomputes `remaining_hours` at page expansion time before Stage 1 filtering. This keeps the live submit path tied to direct page fetches instead of cached universe output.
 
 ## Current behavior note
 

@@ -16,7 +16,6 @@ from execution_engine.online.analysis.labels import build_daily_label_analysis
 from execution_engine.online.execution.monitor import monitor_order_lifecycle
 from execution_engine.online.pipeline.submit_window import run_submit_window
 from execution_engine.online.streaming.manager import stream_market_data
-from execution_engine.online.universe.refresh import refresh_current_universe
 from execution_engine.runtime.config import load_config
 
 
@@ -31,28 +30,6 @@ def _print_frame_head(path: Path, print_head: int) -> None:
         frame = pd.DataFrame()
     if not frame.empty:
         print(frame.head(print_head).to_string(index=False))
-
-
-def _cmd_refresh_universe(args: argparse.Namespace) -> None:
-    os.environ["PEG_RUN_MODE"] = "universe_refresh"
-    if args.run_id:
-        os.environ["PEG_RUN_ID"] = args.run_id
-
-    cfg = load_config()
-    result = refresh_current_universe(cfg, max_markets=args.max_markets)
-
-    print(f"fetched_markets={result.fetched_markets}")
-    print(f"eligible_markets={result.eligible_markets}")
-    print(f"excluded_for_expiry={result.excluded_for_expiry}")
-    print(f"excluded_for_structure={result.excluded_for_structure}")
-    print(f"excluded_for_positions={result.excluded_for_positions}")
-    for key, value in sorted(result.exclusion_breakdown.items()):
-        print(f"exclude_{key}={value}")
-    print(f"current_universe={result.current_universe_path}")
-    print(f"current_manifest={result.current_manifest_path}")
-    print(f"run_universe={result.run_universe_path}")
-    print(f"run_manifest={result.run_manifest_path}")
-    _print_frame_head(result.current_universe_path, args.print_head)
 
 
 def _cmd_stream_market_data(args: argparse.Namespace) -> None:
@@ -162,6 +139,11 @@ def _cmd_run_submit_window(args: argparse.Namespace) -> None:
     print(f"submitted_order_count={result.submitted_order_count}")
     print(f"underfilled_batch_count={result.underfilled_batch_count}")
     print(f"underfilled_batch_avg_size={result.underfilled_batch_avg_size:.3f}")
+    print(f"post_submit_monitor_status={result.post_submit_monitor_status}")
+    print(f"post_submit_open_order_count={result.post_submit_open_order_count}")
+    print(f"post_submit_fill_count={result.post_submit_fill_count}")
+    print(f"post_submit_open_position_count={result.post_submit_open_position_count}")
+    print(f"final_status={result.final_status}")
     for page in result.pages:
         print(f"page_{page.page_offset}_events={page.event_count}")
         print(f"page_{page.page_offset}_expanded={page.expanded_market_count}")
@@ -173,12 +155,6 @@ def _cmd_run_submit_window(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified CLI for the online execution pipeline.")
     subparsers = parser.add_subparsers(dest="command", required=True)
-
-    refresh = subparsers.add_parser("refresh-universe", description="Refresh the shared online market universe.")
-    refresh.add_argument("--run-id", default=None)
-    refresh.add_argument("--max-markets", type=int, default=None)
-    refresh.add_argument("--print-head", type=int, default=5)
-    refresh.set_defaults(handler=_cmd_refresh_universe)
 
     stream = subparsers.add_parser("stream-market-data", description="Stream market websocket data.")
     stream.add_argument("--run-id", default=None)

@@ -1,0 +1,9 @@
+{
+  "generated_at_utc": "2026-03-19T10:00:18.539603Z",
+  "run_id": "DRYRUN_SUBMIT_WINDOW_30P_20260319",
+  "run_mode": "submit_window",
+  "candidate_count": 0,
+  "submitted_count": 0,
+  "status_counts": {},
+  "orders_submitted_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\runs\\2026-03-19\\DRYRUN_SUBMIT_WINDOW_30P_20260319\\exits\\orders_submitted.jsonl"
+}

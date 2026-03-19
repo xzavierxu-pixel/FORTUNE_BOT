@@ -1,9 +1,0 @@
-[Unit]
-Description=Fortune Bot hourly-cycle job
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/fortune-bot/fortune_bot.env
-ExecStart=/bin/bash -lc 'cd "$FORTUNE_BOT_REPO_ROOT" && /usr/bin/env bash "$FORTUNE_BOT_REPO_ROOT/execution_engine/app/scripts/linux/run_hourly_cycle.sh" --skip-refresh-universe'

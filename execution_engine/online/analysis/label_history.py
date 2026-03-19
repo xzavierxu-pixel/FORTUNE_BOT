@@ -82,7 +82,9 @@ def load_selection_history(cfg: PegConfig, scope: LabelAnalysisScope = "run") ->
 def load_scanned_market_ids(cfg: PegConfig, scope: LabelAnalysisScope = "run") -> Set[str]:
     market_ids: Set[str] = set()
 
-    for filename in ["universe.csv", "processed_markets.csv", "selection_decisions.csv"]:
+    # Keep label coverage aligned with the current submit-window production path.
+    # Legacy universe/hourly-cycle artifacts are intentionally ignored here.
+    for filename in ["selection_decisions.csv"]:
         for path in _list_artifact_paths(cfg, filename, scope):
             frame = load_csv(path)
             if frame.empty or "market_id" not in frame.columns:
@@ -98,6 +100,13 @@ def load_scanned_market_ids(cfg: PegConfig, scope: LabelAnalysisScope = "run") -
             market_id = str(row.get("market_id") or "").strip()
             if market_id:
                 market_ids.add(market_id)
+
+    for filename in ["decisions.jsonl", "events.jsonl"]:
+        for path in _list_artifact_paths(cfg, filename, scope):
+            for row in read_jsonl_many([path]):
+                market_id = str(row.get("market_id") or "").strip()
+                if market_id:
+                    market_ids.add(market_id)
 
     return market_ids
 

@@ -16,7 +16,8 @@ class FileBalanceProvider:
     def get_available_usdc(self) -> Optional[float]:
         if not self.path.exists():
             return None
-        with self.path.open("r", encoding="utf-8") as handle:
+        # Accept UTF-8 files written by both Linux and Windows tooling.
+        with self.path.open("r", encoding="utf-8-sig") as handle:
             data = json.load(handle)
         value = data.get("available_usdc")
         return None if value is None else float(value)

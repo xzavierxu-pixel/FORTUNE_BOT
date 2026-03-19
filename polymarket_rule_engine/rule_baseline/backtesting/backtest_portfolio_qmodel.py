@@ -265,7 +265,7 @@ def compute_growth_and_direction(candidates: pd.DataFrame, cfg: BacktestConfig) 
         edge_raw = out["edge_raw_valid"].astype(float).replace(0.0, np.nan)
         confidence_discount = (
             out["edge_lower_bound_valid"].astype(float) / edge_raw.abs()
-        ).clip(lower=0.0, upper=1.0).fillna(0.0).values
+        ).clip(lower=0.95, upper=1.0).fillna(0.95).values
 
     edge_prob = q - p
     direction = np.zeros(len(out), dtype=int)

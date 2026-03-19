@@ -41,9 +41,9 @@ def load_fee_rate(cfg: PegConfig) -> float:
     try:
         from rule_baseline.utils import config as rule_config  # type: ignore
 
-        return float(getattr(rule_config, "FEE_RATE", 0.001))
+        return float(getattr(rule_config, "FEE_RATE", 0.0))
     except Exception:
-        return 0.001
+        return 0.0
 
 
 def to_bool(value: Any) -> bool:

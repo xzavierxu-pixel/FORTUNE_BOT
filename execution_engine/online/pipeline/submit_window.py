@@ -9,16 +9,18 @@ import json
 
 import pandas as pd
 
+from execution_engine.online.execution.monitor import OrderMonitorResult, monitor_order_lifecycle
 from execution_engine.online.execution.positions import load_open_market_ids, load_pending_market_ids
 from execution_engine.online.execution.submission import SubmitSelectionResult, _empty_result_noop, submit_selected_orders
 from execution_engine.online.pipeline.candidate_queue import CandidateBatch, DirectCandidateQueue
-from execution_engine.online.pipeline.eligibility import StructuralFilterResult, apply_structural_coarse_filter
+from execution_engine.online.pipeline.eligibility import apply_structural_coarse_filter
 from execution_engine.online.pipeline.lifecycle import (
     record_candidate_frame,
     record_pass_complete,
 )
 from execution_engine.online.pipeline.prewarm import OnlineRuntimeContainer, build_runtime_container
 from execution_engine.online.reporting.deferred_writer import DeferredWriter
+from execution_engine.online.reporting.run_summary import publish_run_summary
 from execution_engine.online.scoring.live import LiveInferenceResult, run_live_inference
 from execution_engine.online.scoring.selection import allocate_candidates, build_selection_decisions, select_target_side
 from execution_engine.online.streaming.manager import StreamRunResult, stream_market_data
@@ -41,6 +43,148 @@ def _merge_unique_columns(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFra
         return left.copy()
     addable = right.loc[:, [column for column in right.columns if column not in left.columns]]
     return pd.concat([left.reset_index(drop=True), addable.reset_index(drop=True)], axis=1)
+
+
+def _write_selection_snapshot(path, selection: pd.DataFrame) -> None:
+    if selection.empty:
+        return
+    existing = pd.DataFrame()
+    if path.exists():
+        try:
+            existing = pd.read_csv(path, dtype=str)
+        except pd.errors.EmptyDataError:
+            existing = pd.DataFrame()
+    combined = pd.concat([existing, selection.copy()], ignore_index=True)
+    dedupe_keys = [
+        column
+        for column in ["run_id", "batch_id", "market_id", "selected_token_id", "rule_group_key", "rule_leaf_id"]
+        if column in combined.columns
+    ]
+    if dedupe_keys:
+        for column in dedupe_keys:
+            combined[column] = combined[column].fillna("").astype(str)
+        combined = combined.drop_duplicates(subset=dedupe_keys, keep="last")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(path, index=False)
+
+
+def _load_csv_frame(path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, dtype=str)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
+def _append_csv_snapshot(path, frame: pd.DataFrame, *, dedupe_keys: list[str] | None = None) -> None:
+    if frame.empty:
+        return
+    incoming = frame.reset_index(drop=True).copy()
+    existing = _load_csv_frame(path)
+    combined = pd.concat([existing, incoming], ignore_index=True)
+    keys = [column for column in (dedupe_keys or []) if column in combined.columns]
+    if keys:
+        for column in keys:
+            combined[column] = combined[column].fillna("").astype(str)
+        combined = combined.drop_duplicates(subset=keys, keep="last")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    combined.to_csv(path, index=False)
+
+
+def _append_jsonl_snapshot(path, frame: pd.DataFrame) -> None:
+    if frame.empty:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    records = json.loads(frame.reset_index(drop=True).to_json(orient="records", date_format="iso"))
+    with path.open("a", encoding="utf-8") as handle:
+        for row in records:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
+def _with_batch_metadata(frame: pd.DataFrame, cfg: PegConfig, batch_id: str) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    out = frame.reset_index(drop=True).copy()
+    if "run_id" not in out.columns:
+        out.insert(0, "run_id", cfg.run_id)
+    else:
+        out["run_id"] = out["run_id"].fillna("").astype(str)
+        out.loc[out["run_id"] == "", "run_id"] = cfg.run_id
+    if "batch_id" not in out.columns:
+        out.insert(1 if "run_id" in out.columns else 0, "batch_id", batch_id)
+    else:
+        out["batch_id"] = out["batch_id"].fillna("").astype(str)
+        out.loc[out["batch_id"] == "", "batch_id"] = batch_id
+    return out
+
+
+def _write_snapshot_score_manifest(cfg: PegConfig) -> None:
+    payload = {
+        "generated_at_utc": to_iso(utc_now()),
+        "run_id": cfg.run_id,
+        "run_mode": cfg.run_mode,
+        "processed_markets_path": str(cfg.run_snapshot_processed_markets_path),
+        "raw_snapshot_inputs_path": str(cfg.run_snapshot_raw_inputs_path),
+        "normalized_snapshots_path": str(cfg.run_snapshot_normalized_path),
+        "feature_inputs_path": str(cfg.run_snapshot_feature_inputs_path),
+        "rule_hits_path": str(cfg.run_snapshot_rule_hits_path),
+        "model_outputs_path": str(cfg.run_snapshot_model_outputs_path),
+        "selection_decisions_path": str(cfg.run_snapshot_selection_path),
+        "processed_market_count": int(len(_load_csv_frame(cfg.run_snapshot_processed_markets_path))),
+        "normalized_snapshot_count": int(len(_load_csv_frame(cfg.run_snapshot_normalized_path))),
+        "feature_input_count": int(len(_load_csv_frame(cfg.run_snapshot_feature_inputs_path))),
+        "rule_hit_count": int(len(_load_csv_frame(cfg.run_snapshot_rule_hits_path))),
+        "model_output_count": int(len(_load_csv_frame(cfg.run_snapshot_model_outputs_path))),
+        "selection_decision_count": int(len(_load_csv_frame(cfg.run_snapshot_selection_path))),
+    }
+    _write_manifest(cfg.run_snapshot_score_manifest_path, payload)
+
+
+def _persist_batch_training_artifacts(
+    runtime: OnlineRuntimeContainer,
+    batch: CandidateBatch,
+    inference_result: LiveInferenceResult,
+    selection: pd.DataFrame,
+) -> None:
+    cfg = runtime.cfg
+    batch_id = batch.batch_id
+    processed_markets = _with_batch_metadata(batch.frame, cfg, batch_id)
+    raw_snapshot_inputs = _with_batch_metadata(inference_result.live_filter.eligible, cfg, batch_id)
+    normalized_snapshots = _with_batch_metadata(inference_result.snapshots, cfg, batch_id)
+    rule_hits = _with_batch_metadata(inference_result.rule_model.rule_hits, cfg, batch_id)
+    feature_inputs = _with_batch_metadata(inference_result.rule_model.feature_inputs, cfg, batch_id)
+    model_outputs = _with_batch_metadata(select_target_side(inference_result.rule_model.model_outputs), cfg, batch_id)
+    selection_snapshot = _with_batch_metadata(selection, cfg, batch_id)
+
+    _append_csv_snapshot(
+        cfg.run_snapshot_processed_markets_path,
+        processed_markets,
+        dedupe_keys=["run_id", "batch_id", "market_id", "selected_reference_token_id"],
+    )
+    _append_jsonl_snapshot(cfg.run_snapshot_raw_inputs_path, raw_snapshot_inputs)
+    _append_csv_snapshot(
+        cfg.run_snapshot_normalized_path,
+        normalized_snapshots,
+        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time"],
+    )
+    _append_csv_snapshot(
+        cfg.run_snapshot_rule_hits_path,
+        rule_hits,
+        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+    )
+    _append_csv_snapshot(
+        cfg.run_snapshot_feature_inputs_path,
+        feature_inputs,
+        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+    )
+    _append_csv_snapshot(
+        cfg.run_snapshot_model_outputs_path,
+        model_outputs,
+        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+    )
+    _write_selection_snapshot(cfg.run_snapshot_selection_path, selection_snapshot)
+    _write_snapshot_score_manifest(cfg)
 
 
 def _write_post_submit_output(
@@ -164,6 +308,7 @@ class SubmitWindowPageResult:
 @dataclass(frozen=True)
 class SubmitWindowResult:
     run_manifest_path: str
+    final_status: str
     page_count: int
     expanded_market_count: int
     direct_candidate_count: int
@@ -172,7 +317,51 @@ class SubmitWindowResult:
     underfilled_batch_count: int
     underfilled_batch_avg_size: float
     metrics: Dict[str, float]
+    post_submit_monitor_status: str
+    post_submit_monitor_manifest_path: str
+    post_submit_latest_order_count: int
+    post_submit_open_order_count: int
+    post_submit_fill_count: int
+    post_submit_open_position_count: int
+    post_submit_exit_candidate_count: int
+    post_submit_exit_submitted_count: int
+    post_submit_settlement_close_count: int
+    post_submit_canceled_exit_order_count: int
     pages: List[SubmitWindowPageResult]
+
+
+def _monitor_summary_defaults(enabled: bool) -> Dict[str, object]:
+    return {
+        "post_submit_monitor_enabled": bool(enabled),
+        "post_submit_monitor_status": "skipped",
+        "post_submit_monitor_error": "",
+        "post_submit_monitor_manifest_path": "",
+        "post_submit_latest_order_count": 0,
+        "post_submit_open_order_count": 0,
+        "post_submit_fill_count": 0,
+        "post_submit_open_position_count": 0,
+        "post_submit_exit_candidate_count": 0,
+        "post_submit_exit_submitted_count": 0,
+        "post_submit_settlement_close_count": 0,
+        "post_submit_canceled_exit_order_count": 0,
+    }
+
+
+def _monitor_summary_from_result(result: OrderMonitorResult) -> Dict[str, object]:
+    return {
+        "post_submit_monitor_enabled": True,
+        "post_submit_monitor_status": "success",
+        "post_submit_monitor_error": "",
+        "post_submit_monitor_manifest_path": str(result.run_manifest_path),
+        "post_submit_latest_order_count": int(result.latest_order_count),
+        "post_submit_open_order_count": int(result.open_order_count),
+        "post_submit_fill_count": int(result.fill_count),
+        "post_submit_open_position_count": int(result.open_position_count),
+        "post_submit_exit_candidate_count": int(result.exit_candidate_count),
+        "post_submit_exit_submitted_count": int(result.exit_submitted_count),
+        "post_submit_settlement_close_count": int(result.settlement_close_count),
+        "post_submit_canceled_exit_order_count": int(result.canceled_exit_order_count),
+    }
 
 
 def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> SubmitWindowBatchResult:
@@ -215,6 +404,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             )
     if inference_result.live_filter.eligible.empty:
         live_state_counts = inference_result.live_filter.state_counts
+        _persist_batch_training_artifacts(runtime, batch, inference_result, pd.DataFrame())
         return SubmitWindowBatchResult(
             batch_id=batch.batch_id,
             market_count=int(len(batch.frame)),
@@ -249,6 +439,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
     if viable_candidates.empty:
         live_state_counts = inference_result.live_filter.state_counts
         token_age_series = pd.to_numeric(inference_result.live_filter.eligible.get("token_state_age_sec"), errors="coerce")
+        _persist_batch_training_artifacts(runtime, batch, inference_result, pd.DataFrame())
         return SubmitWindowBatchResult(
             batch_id=batch.batch_id,
             market_count=int(len(batch.frame)),
@@ -285,6 +476,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
     if selection.empty:
         live_state_counts = inference_result.live_filter.state_counts
         token_age_series = pd.to_numeric(inference_result.live_filter.eligible.get("token_state_age_sec"), errors="coerce")
+        _persist_batch_training_artifacts(runtime, batch, inference_result, selection)
         return SubmitWindowBatchResult(
             batch_id=batch.batch_id,
             market_count=int(len(batch.frame)),
@@ -349,6 +541,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             reason_column="status",
             token_column="token_id",
         )
+    _persist_batch_training_artifacts(runtime, batch, inference_result, selection)
     _write_post_submit_output(runtime, inference_result, selection, latest_batch_attempts if not attempt_frame.empty else pd.DataFrame())
     live_state_counts = inference_result.live_filter.state_counts
     token_age_series = pd.to_numeric(inference_result.live_filter.eligible.get("token_state_age_sec"), errors="coerce")
@@ -467,6 +660,25 @@ def _update_metrics(cfg: PegConfig, payload: Dict[str, float]) -> None:
     metrics = load_metrics(cfg.metrics_path)
     metrics.update({key: float(value) for key, value in payload.items()})
     save_metrics(cfg.metrics_path, metrics)
+
+
+def _run_post_submit_monitor(cfg: PegConfig) -> tuple[Dict[str, object], Exception | None]:
+    if not cfg.submit_window_run_monitor_after:
+        return _monitor_summary_defaults(enabled=False), None
+
+    try:
+        result = monitor_order_lifecycle(
+            cfg,
+            sleep_sec=max(int(cfg.submit_window_monitor_sleep_sec), 0),
+            publish_summary_enabled=False,
+        )
+    except Exception as exc:
+        summary = _monitor_summary_defaults(enabled=True)
+        summary["post_submit_monitor_status"] = "failed"
+        summary["post_submit_monitor_error"] = str(exc)
+        return summary, exc
+
+    return _monitor_summary_from_result(result), None
 
 
 def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> SubmitWindowResult:
@@ -671,10 +883,15 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             for key, value in sorted(submit_status_counts.items())
         },
     }
+    monitor_summary, monitor_error = _run_post_submit_monitor(cfg)
+    final_status = "completed"
+    if str(monitor_summary["post_submit_monitor_status"]) == "failed":
+        final_status = "completed_with_post_submit_failure"
     manifest = {
         "generated_at_utc": to_iso(utc_now()),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
+        "submit_stage_status": "completed",
         "funnel": funnel_payload,
         "page_count": int(len(page_results)),
         "expanded_market_count": int(expanded_market_count),
@@ -691,10 +908,13 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
         "submit_attempted_count": int(submit_attempted_count),
         "submitted_order_count": int(submitted_order_count),
         "submit_rejection_count": int(submit_rejection_count),
+        "selection_decisions_path": str(cfg.run_snapshot_selection_path),
         "post_submit_features_path": str(cfg.run_submit_post_submit_features_path),
         "underfilled_batch_count": int(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
+        "final_status": final_status,
         "metrics": metrics_payload,
+        **monitor_summary,
         "pages": [
             {
                 "page_offset": page.page_offset,
@@ -735,8 +955,23 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
     }
     _write_manifest(cfg.run_submit_window_manifest_path, manifest)
     _update_metrics(cfg, metrics_payload)
+    summary_manifest = {key: value for key, value in manifest.items() if key != "pages"}
+    publish_run_summary(
+        cfg,
+        status=final_status,
+        notes={
+            "submit_window": summary_manifest,
+            "post_submit_monitor": {
+                key: monitor_summary[key]
+                for key in sorted(monitor_summary)
+            },
+        },
+    )
+    if monitor_error is not None and cfg.submit_window_fail_on_monitor_error:
+        raise RuntimeError("post-submit monitor failed") from monitor_error
     return SubmitWindowResult(
         run_manifest_path=str(cfg.run_submit_window_manifest_path),
+        final_status=final_status,
         page_count=len(page_results),
         expanded_market_count=expanded_market_count,
         direct_candidate_count=direct_candidate_count,
@@ -745,5 +980,15 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
         underfilled_batch_count=underfilled_batch_count,
         underfilled_batch_avg_size=underfilled_batch_avg_size,
         metrics=metrics_payload,
+        post_submit_monitor_status=str(monitor_summary["post_submit_monitor_status"]),
+        post_submit_monitor_manifest_path=str(monitor_summary["post_submit_monitor_manifest_path"]),
+        post_submit_latest_order_count=int(monitor_summary["post_submit_latest_order_count"]),
+        post_submit_open_order_count=int(monitor_summary["post_submit_open_order_count"]),
+        post_submit_fill_count=int(monitor_summary["post_submit_fill_count"]),
+        post_submit_open_position_count=int(monitor_summary["post_submit_open_position_count"]),
+        post_submit_exit_candidate_count=int(monitor_summary["post_submit_exit_candidate_count"]),
+        post_submit_exit_submitted_count=int(monitor_summary["post_submit_exit_submitted_count"]),
+        post_submit_settlement_close_count=int(monitor_summary["post_submit_settlement_close_count"]),
+        post_submit_canceled_exit_order_count=int(monitor_summary["post_submit_canceled_exit_order_count"]),
         pages=page_results,
     )

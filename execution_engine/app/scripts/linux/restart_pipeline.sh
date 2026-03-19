@@ -5,22 +5,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_common.sh"
 
 ENV_FILE="${FORTUNE_BOT_ENV_FILE:-/etc/fortune-bot/fortune_bot.env}"
-TMUX_SESSION="${FORTUNE_BOT_STREAM_TMUX_SESSION:-fortune-stream}"
-STREAM_SCRIPT="$SCRIPT_DIR/stream_market_data.sh"
 STOP_SCRIPT="$SCRIPT_DIR/stop_pipeline.sh"
 SERVICES=(
-    "fortune-bot-refresh-universe.service"
     "fortune-bot-submit-window.service"
     "fortune-bot-label-analysis.service"
     "fortune-bot-healthcheck.service"
-    "fortune-bot-hourly-cycle.service"
 )
 TIMERS=(
-    "fortune-bot-refresh-universe.timer"
     "fortune-bot-submit-window.timer"
     "fortune-bot-label-analysis.timer"
     "fortune-bot-healthcheck.timer"
-    "fortune-bot-hourly-cycle.timer"
 )
 
 NO_PULL=0
@@ -89,15 +83,6 @@ clear_running_services() {
     done
 }
 
-start_tmux_stream() {
-    if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-        echo "[INFO] Replacing existing tmux session: $TMUX_SESSION"
-        tmux kill-session -t "$TMUX_SESSION"
-    fi
-    echo "[INFO] Starting tmux session: $TMUX_SESSION"
-    tmux new-session -d -s "$TMUX_SESSION" "bash -lc 'set -euo pipefail; cd \"$REPO_ROOT\"; if [[ -f \"$ENV_FILE\" ]]; then set -a; source \"$ENV_FILE\"; set +a; fi; exec bash \"$STREAM_SCRIPT\"'"
-}
-
 start_timers() {
     local unit
     echo "[INFO] Reloading systemd."
@@ -118,10 +103,9 @@ main() {
     load_env_file
     bootstrap_env
     clear_running_services
-    start_tmux_stream
     start_timers
     echo "[INFO] Pipeline restart sequence completed."
-    echo "[INFO] Verify with: tmux ls && systemctl list-timers --all | grep fortune-bot"
+    echo "[INFO] Verify with: systemctl list-timers --all | grep fortune-bot"
 }
 
 main "$@"

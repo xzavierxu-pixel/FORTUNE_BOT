@@ -1,0 +1,292 @@
+{
+  "run_id": "DRYRUN_SUBMIT_WINDOW_30P_20260319",
+  "run_date": "2026-03-19",
+  "run_mode": "label_analysis",
+  "dry_run": true,
+  "status": "label_analysis_completed",
+  "generated_at_utc": "2026-03-19T10:00:39.626941Z",
+  "run_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\runs\\2026-03-19\\DRYRUN_SUBMIT_WINDOW_30P_20260319",
+  "summary_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\runs\\2026-03-19\\DRYRUN_SUBMIT_WINDOW_30P_20260319\\run_summary.json",
+  "metrics_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\runs\\2026-03-19\\DRYRUN_SUBMIT_WINDOW_30P_20260319\\metrics.json",
+  "dashboard_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\summary\\dashboard.html",
+  "counts": {
+    "decisions": 3,
+    "orders": 3,
+    "events": 5388,
+    "fills": 0,
+    "rejections": 5,
+    "alerts": 0,
+    "processed_markets": 0,
+    "normalized_snapshots": 0,
+    "feature_inputs": 0,
+    "rule_hits": 0,
+    "model_outputs": 0,
+    "selection_decisions": 8,
+    "submission_attempts": 8,
+    "orders_submitted": 3
+  },
+  "metrics": {
+    "decisions_count": 3.0,
+    "orders_sent": 3.0,
+    "rejections_count": 5.0,
+    "gamma_event_page_fetch_latency_ms": 459.44982666211826,
+    "expanded_market_count": 971.0,
+    "structural_reject_count": 816.0,
+    "state_reject_count": 0.0,
+    "direct_candidate_count": 155.0,
+    "underfilled_batch_count": 11.0,
+    "underfilled_batch_avg_size": 5.0,
+    "stream_latency_ms": 1226.8098749773344,
+    "token_state_age_sec": 0.42865271052631576,
+    "live_eligible_count": 38.0,
+    "live_price_miss_count": 31.0,
+    "live_spread_too_wide_count": 17.0,
+    "live_state_missing_count": 0.0,
+    "live_state_stale_count": 0.0,
+    "invalid_price_count": 69.0,
+    "selected_count": 8.0,
+    "submit_attempted_count": 8.0,
+    "inference_latency_ms": 1047.9571562464116,
+    "selection_to_submit_latency_ms": 2531.0506666666665,
+    "gamma_to_submit_latency_ms": 7584.592333333334,
+    "submit_success_count": 3.0,
+    "submit_rejection_count": 5.0,
+    "deferred_io_latency_ms": 0.020076675961414974,
+    "submit_quote_lookup_latency_ms": 0.006537477020174265,
+    "spread_gate_reject_count": 0.0,
+    "live_stage_unaccounted_count": 0.0,
+    "live_eligible_not_selected_count": 30.0,
+    "selected_not_attempted_count": 0.0,
+    "critical_path_candidate_column_count": 55.0,
+    "critical_path_snapshot_column_count": 62.0,
+    "deferred_artifact_reconstruction_count": 0.0
+  },
+  "rejection_reasons": {
+    "MISSING_LIVE_QUOTE": 5
+  },
+  "execution": {
+    "run_orders_count": 3,
+    "run_fills_count": 0,
+    "run_submitted_notional_usdc": 6.4934,
+    "run_filled_notional_usdc": 0,
+    "run_avg_order_usdc": 2.1645,
+    "run_latest_order_status_counts": {
+      "DRY_RUN_SUBMITTED": 3
+    },
+    "latest_order_status_counts": {
+      "DRY_RUN_SUBMITTED": 3
+    },
+    "order_lifecycle": {
+      "total_orders": 3,
+      "filled_orders": 0,
+      "partial_orders": 0,
+      "canceled_orders": 0,
+      "failed_orders": 0,
+      "fill_rate": 0.0,
+      "cancel_rate": 0.0,
+      "failure_rate": 0.0,
+      "avg_terminal_lifecycle_sec": 0.0,
+      "avg_fill_latency_sec": 0.0
+    },
+    "current_open_orders_count": 3,
+    "current_open_notional_usdc": 6.4934,
+    "lifetime_filled_notional_usdc": 0,
+    "positions": {
+      "open_positions_count": 0,
+      "closed_positions_count": 0,
+      "open_position_notional_usdc": 0,
+      "realized_pnl_usdc": 0,
+      "open_positions": [],
+      "closed_positions": []
+    },
+    "top_open_market_exposure": [
+      {
+        "key": "1568759|0|BUY",
+        "amount_usdc": 2.75
+      },
+      {
+        "key": "1568812|0|BUY",
+        "amount_usdc": 2.55
+      },
+      {
+        "key": "1568762|0|BUY",
+        "amount_usdc": 1.1934
+      }
+    ],
+    "top_open_category_exposure": [
+      {
+        "key": "CRYPTO",
+        "amount_usdc": 6.4934
+      }
+    ],
+    "top_open_side_exposure": [
+      {
+        "key": "OUTCOME_0",
+        "amount_usdc": 6.4934
+      }
+    ],
+    "recent_orders": [
+      {
+        "order_attempt_id": "222b19d3e5c36ba371674195d968caebb1d0125a6bb89148288689c953806c24",
+        "decision_id": "60d60b3a53f37166e2f1ebbd5a35d72ec763007dccb3c1c306f9fec3d27691c3",
+        "market_id": "1568812",
+        "outcome_index": 0,
+        "action": "BUY",
+        "position_side": "OUTCOME_0",
+        "amount_usdc": 2.55,
+        "price_limit": 0.51,
+        "status": "DRY_RUN_SUBMITTED",
+        "status_reason": null,
+        "updated_at_utc": "2026-03-19T10:00:05.891676Z",
+        "run_id": "DRYRUN_SUBMIT_WINDOW_30P_20260319"
+      },
+      {
+        "order_attempt_id": "967ea7a361c016384b9b89e9a70aefe47062004035f063f691f191f750802a57",
+        "decision_id": "9fde70b6071e82eb4a262a8bdca4b554b1ce40ffa8dff82acdb624e4d3a9f983",
+        "market_id": "1568762",
+        "outcome_index": 0,
+        "action": "BUY",
+        "position_side": "OUTCOME_0",
+        "amount_usdc": 1.1934,
+        "price_limit": 0.07,
+        "status": "DRY_RUN_SUBMITTED",
+        "status_reason": null,
+        "updated_at_utc": "2026-03-19T10:00:00.074665Z",
+        "run_id": "DRYRUN_SUBMIT_WINDOW_30P_20260319"
+      },
+      {
+        "order_attempt_id": "5aee329ffdd0ad98375d534f6cb4377a570486fec77835f8479b8d377deaa67b",
+        "decision_id": "7ae93bc7413532b068ef92f4e156f7a7897f6b303f93acd8778ffaa5e521d641",
+        "market_id": "1568759",
+        "outcome_index": 0,
+        "action": "BUY",
+        "position_side": "OUTCOME_0",
+        "amount_usdc": 2.75,
+        "price_limit": 0.55,
+        "status": "DRY_RUN_SUBMITTED",
+        "status_reason": null,
+        "updated_at_utc": "2026-03-19T10:00:00.001677Z",
+        "run_id": "DRYRUN_SUBMIT_WINDOW_30P_20260319"
+      }
+    ],
+    "recent_fills": []
+  },
+  "shared_state": {
+    "market_state_cache_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\shared\\positions\\market_state.json",
+    "state_snapshot_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\shared\\state\\state_snapshot.json",
+    "pending_market_count": 3,
+    "open_market_count": 0,
+    "market_state_latest_order_count": 3,
+    "market_state_fill_count": 0,
+    "state_open_orders_count": 3,
+    "state_net_exposure_usdc": 6.4934,
+    "state_daily_pnl_usdc": 0.0,
+    "state_market_action_filled_count": 0,
+    "state_decision_last_seen_count": 3
+  },
+  "notes": {
+    "label_analysis": {
+      "generated_at_utc": "2026-03-19T10:00:39.565302Z",
+      "run_id": "DRYRUN_SUBMIT_WINDOW_30P_20260319",
+      "run_mode": "label_analysis",
+      "analysis_scope": "run",
+      "label_source_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\intermediate\\raw_markets_merged.csv",
+      "resolved_labels_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\shared\\labels\\resolved_labels.csv",
+      "resolved_label_count": 0,
+      "order_lifecycle_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\runs\\2026-03-19\\DRYRUN_SUBMIT_WINDOW_30P_20260319\\label_analysis\\order_lifecycle.csv",
+      "order_lifecycle_count": 0,
+      "executed_lifecycle": {
+        "submitted_count": 0,
+        "filled_count": 0,
+        "partial_fill_count": 0,
+        "opened_position_count": 0,
+        "cancel_count": 0,
+        "rejection_count": 0,
+        "expired_count": 0,
+        "fill_rate": 0.0,
+        "cancel_rate": 0.0,
+        "rejection_rate": 0.0,
+        "average_order_lifetime_sec": 0.0,
+        "average_fill_latency_sec": 0.0,
+        "latest_status_counts": {}
+      },
+      "submitted_count": 0,
+      "filled_count": 0,
+      "partial_fill_count": 0,
+      "fill_rate": 0.0,
+      "cancel_rate": 0.0,
+      "rejection_rate": 0.0,
+      "average_order_lifetime_sec": 0.0,
+      "average_fill_latency_sec": 0.0,
+      "executed_row_count": 0,
+      "executed_resolved_count": 0,
+      "executed_win_rate": 0.0,
+      "executed_performance": {
+        "resolved_count": 0,
+        "win_count": 0,
+        "win_rate": 0.0,
+        "deployed_amount_usdc": 0.0,
+        "realized_payout_usdc": 0.0,
+        "realized_pnl_usdc": 0.0,
+        "roi": 0.0,
+        "avg_pnl_per_trade_usdc": 0.0,
+        "avg_return_pct": 0.0
+      },
+      "opportunity_row_count": 8,
+      "opportunity_resolved_count": 0,
+      "opportunity_selected_count": 8,
+      "opportunity_submitted_count": 0,
+      "selected_opportunity_performance": {
+        "resolved_count": 0,
+        "win_count": 0,
+        "win_rate": 0.0,
+        "deployed_amount_usdc": 0.0,
+        "realized_payout_usdc": 0.0,
+        "realized_pnl_usdc": 0.0,
+        "roi": 0.0,
+        "avg_pnl_per_trade_usdc": 0.0,
+        "avg_return_pct": 0.0
+      },
+      "submitted_opportunity_performance": {
+        "resolved_count": 0,
+        "win_count": 0,
+        "win_rate": 0.0,
+        "deployed_amount_usdc": 0.0,
+        "realized_payout_usdc": 0.0,
+        "realized_pnl_usdc": 0.0,
+        "roi": 0.0,
+        "avg_pnl_per_trade_usdc": 0.0,
+        "avg_return_pct": 0.0
+      },
+      "executed_by_category": [],
+      "executed_by_domain": [],
+      "executed_by_rule_leaf": [],
+      "executed_by_horizon_bucket": [],
+      "opportunity_by_rule_leaf": [],
+      "opportunity_by_horizon_bucket": [],
+      "selected_performance_by_rule_leaf": [],
+      "selected_performance_by_horizon_bucket": [],
+      "opportunity_by_selection_reason": [
+        {
+          "selection_reason": "allocated",
+          "row_count": 8
+        }
+      ],
+      "opportunity_by_execution_outcome": [
+        {
+          "execution_outcome": "selected_not_submitted",
+          "row_count": 8
+        }
+      ],
+      "opportunity_breakdown": {
+        "matched_not_selected_count": 0,
+        "selected_not_submitted_count": 8,
+        "submitted_not_filled_count": 0
+      },
+      "opportunity_edge_vs_realized_label": [],
+      "opportunity_cost_by_rule_leaf": [],
+      "opportunity_cost_by_horizon_bucket": [],
+      "opportunity_q_pred_calibration": []
+    }
+  }
+}

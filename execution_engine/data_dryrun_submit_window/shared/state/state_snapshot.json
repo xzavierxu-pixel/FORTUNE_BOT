@@ -1,0 +1,24 @@
+{
+  "decision_last_seen": {
+    "60d60b3a53f37166e2f1ebbd5a35d72ec763007dccb3c1c306f9fec3d27691c3": "2026-03-19T10:00:05.891676Z",
+    "7ae93bc7413532b068ef92f4e156f7a7897f6b303f93acd8778ffaa5e521d641": "2026-03-19T10:00:00.001677Z",
+    "9fde70b6071e82eb4a262a8bdca4b554b1ce40ffa8dff82acdb624e4d3a9f983": "2026-03-19T10:00:00.074665Z"
+  },
+  "market_action_filled": [],
+  "daily_order_count": 3,
+  "open_orders_count": 3,
+  "net_exposure_usdc": 6.493398254560693,
+  "market_exposure_usdc": {
+    "1568759|0|BUY": 2.75,
+    "1568762|0|BUY": 1.1933982545606934,
+    "1568812|0|BUY": 2.55
+  },
+  "category_exposure_usdc": {
+    "CRYPTO": 6.493398254560693
+  },
+  "daily_pnl_usdc": 0.0,
+  "latest_order_count": 3,
+  "fill_count": 0,
+  "generated_at_utc": "2026-03-19T10:00:18.546087Z",
+  "orders_root_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\execution_engine\\data_dryrun_submit_window\\runs"
+}
