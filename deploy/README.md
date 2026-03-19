@@ -1,76 +1,76 @@
-# Fortune Bot Ubuntu Deployment
+# Fortune Bot Ubuntu 部署说明
 
-This document is the deployment path for an AWS Ubuntu server.
-It is aligned with the current `execution_engine` production path in this repo.
+这份文档用于 AWS Ubuntu 服务器部署。
+内容已经与当前仓库里的 `execution_engine` 生产路径对齐。
 
-## Deployment Verdict
+## 部署结论
 
-The current deploy workflow is consistent with the codebase.
+当前 deploy 工作流与代码库现状是一致的。
 
-The production workflow is:
+当前生产工作流是：
 
 1. `fortune-bot-submit-window.timer`
-   Runs the direct page-based submit window.
-   The submit path already includes post-submit order monitoring when `PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER=1`.
+   运行基于直接翻页的 submit window 主流程。
+   当 `PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER=1` 时，submit 流程内部会自动串联 post-submit order monitoring。
 2. `fortune-bot-label-analysis.timer`
-   Runs daily label and opportunity analysis.
+   运行每日标签分析和机会分析。
 3. `fortune-bot-healthcheck.timer`
-   Checks timer health and job heartbeat files, then sends SMTP alerts if needed.
+   检查 timer 状态和 job heartbeat 文件，并在需要时发送 SMTP 告警。
 
-Old `refresh_universe` / `hourly_cycle` timers are no longer part of the active deployment model and should not be installed.
+旧的 `refresh_universe` / `hourly_cycle` 定时任务已经不是当前有效部署模型的一部分，不应该再安装。
 
-## Schedule Review
+## 定时安排评估
 
-The current schedule is reasonable for AWS Ubuntu:
+当前定时安排对 AWS Ubuntu 是合理的：
 
 - `submit-window`: `OnCalendar=hourly`
-  This is the main trading loop and matches the current direct submit-window design.
-  The deployed `systemd` unit runs it with `--max-pages 300`, so each hourly run has a hard page cap.
+  这是主交易循环，和当前 direct submit-window 设计一致。
+  当前部署的 `systemd` unit 会额外传入 `--max-pages 300`，所以每小时运行一次，且单次最多抓取 300 页。
 - `label-analysis`: `OnCalendar=*-*-* 00:10:00`
-  Reasonable as a once-daily reconciliation job.
-  The 10-minute offset avoids colliding with the top-of-hour submit run.
-- `healthcheck`: every 5 minutes
-  Reasonable for heartbeat and timer monitoring without being noisy.
+  作为每日一次的分析任务是合理的。
+  比整点晚 10 分钟，也避免和 submit-window 整点运行正面撞上。
+- `healthcheck`: 每 5 分钟一次
+  适合作 heartbeat 和 timer 监控，不会太重，也不会太慢。
 
-Recommended server convention:
+推荐的服务器约定：
 
-- Keep the server timezone on `UTC`.
-- Interpret the above timer schedules in `UTC`.
-- Do not change the server timezone unless you also want all timer behavior to shift.
+- 服务器时区保持为 `UTC`
+- 上述 timer 按 `UTC` 理解
+- 除非你明确希望所有任务整体平移，否则不要修改服务器时区
 
-The configured heartbeat thresholds are also reasonable:
+当前 heartbeat 阈值也合理：
 
 - `CHECK_SUBMIT_WINDOW_MAX_AGE_SEC=5400`
-  Allows for an hourly run plus execution slippage.
+  给每小时任务留出执行和延迟缓冲
 - `CHECK_LABEL_ANALYSIS_DAILY_MAX_AGE_SEC=93600`
-  Allows for a daily run plus a buffer.
+  给每日任务留出约一天外加缓冲
 
-## Server Prerequisites
+## 服务器依赖
 
-Install base packages:
+安装基础依赖：
 
 ```bash
 sudo apt update
 sudo apt install -y git python3 python3-venv python3-pip build-essential htop
 ```
 
-If model/runtime libraries later complain about missing OpenMP:
+如果后续模型或运行时依赖报 OpenMP 相关缺失，再安装：
 
 ```bash
 sudo apt install -y libgomp1
 ```
 
-## Directory Layout
+## 目录约定
 
-This deployment assumes:
+这套部署默认使用：
 
-- repo root: `/opt/fortune_bot`
-- venv: `/opt/fortune_bot/.venv-execution`
-- state dir: `/var/lib/fortune_bot`
-- execution data: `/var/lib/fortune_bot/execution_engine_data`
-- env file: `/etc/fortune-bot/fortune_bot.env`
+- 仓库根目录：`/opt/fortune_bot`
+- Python 虚拟环境：`/opt/fortune_bot/.venv-execution`
+- 状态目录：`/var/lib/fortune_bot`
+- execution 数据目录：`/var/lib/fortune_bot/execution_engine_data`
+- 环境变量文件：`/etc/fortune-bot/fortune_bot.env`
 
-Create them:
+创建这些目录：
 
 ```bash
 sudo mkdir -p /opt
@@ -81,7 +81,7 @@ sudo mkdir -p /var/lib/fortune_bot/execution_engine_data/summary
 sudo mkdir -p /etc/fortune-bot
 ```
 
-## Clone The Repo
+## 克隆仓库
 
 ```bash
 cd /opt
@@ -90,16 +90,16 @@ sudo chown -R "$USER":"$USER" /opt/fortune_bot
 cd /opt/fortune_bot
 ```
 
-If the repo is already present:
+如果服务器上已经有仓库：
 
 ```bash
 cd /opt/fortune_bot
 git pull --ff-only
 ```
 
-## Environment File
+## 环境变量文件
 
-Start from the template:
+从模板开始：
 
 ```bash
 cd /opt/fortune_bot
@@ -107,7 +107,7 @@ cp deploy/env/fortune_bot.env.example /tmp/fortune_bot.env
 nano /tmp/fortune_bot.env
 ```
 
-At minimum, set:
+至少需要设置这些值：
 
 ```env
 FORTUNE_BOT_REPO_ROOT=/opt/fortune_bot
@@ -148,7 +148,7 @@ CHECK_SUBMIT_WINDOW_MAX_AGE_SEC=5400
 CHECK_LABEL_ANALYSIS_DAILY_MAX_AGE_SEC=93600
 ```
 
-Install the env file:
+把环境文件安装到正式位置：
 
 ```bash
 sudo mv /tmp/fortune_bot.env /etc/fortune-bot/fortune_bot.env
@@ -157,13 +157,13 @@ sudo chmod 600 /etc/fortune-bot/fortune_bot.env
 
 ## balances.json
 
-The execution layer reads a local balance file:
+execution 层当前会读取一个本地余额文件：
 
 - `/var/lib/fortune_bot/execution_engine_data/shared/balances.json`
 
-This is currently a local execution budget file, not an automatic on-chain balance sync.
+它现在的作用是本地执行预算文件，不是链上余额自动同步结果。
 
-Example:
+示例：
 
 ```bash
 cat > /var/lib/fortune_bot/execution_engine_data/shared/balances.json <<'EOF'
@@ -175,24 +175,24 @@ cat > /var/lib/fortune_bot/execution_engine_data/shared/balances.json <<'EOF'
 EOF
 ```
 
-If your Polymarket account has more capital but you only want to let the bot use `100`, keep this file at `100`.
+如果你 Polymarket 账户里实际资金更多，但当前只想让策略使用 `100`，那这里就保持写 `100`。
 
-## Bootstrap The Venv
+## 初始化虚拟环境
 
 ```bash
 cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/bootstrap_venv.sh
 ```
 
-Verify:
+验证：
 
 ```bash
 /opt/fortune_bot/.venv-execution/bin/python --version
 ```
 
-## Optional Proxy Wallet Smoke Test
+## 可选：先跑 Proxy Wallet Smoke Test
 
-If you want to validate credentials and allowance setup before enabling timers:
+如果你想在启用 timer 前先验证凭据、allowance 和最小下单链路，可以先跑：
 
 ```bash
 set -a
@@ -203,18 +203,18 @@ cd /opt/fortune_bot
 /opt/fortune_bot/.venv-execution/bin/python execution_engine/app/scripts/manual/proxy_wallet_smoketest.py
 ```
 
-This is the safest way to confirm:
+这是最安全的联调方式，用来确认：
 
-- signature type and funder are correct
-- API credentials can be derived or used
-- allowance setup works
-- a minimal test order can be created
+- `signature_type` 和 `funder` 配置正确
+- API credentials 可以派生或可用
+- allowance 设置正常
+- 可以完成一次最小测试下单
 
-## Manual End-To-End Checks
+## 手工端到端检查
 
-Before enabling timers, run the workflow manually once.
+在启用 timer 之前，建议先手工跑一遍完整流程。
 
-Run submit window:
+先跑 submit window：
 
 ```bash
 cd /opt/fortune_bot
@@ -225,7 +225,7 @@ set +a
 bash execution_engine/app/scripts/linux/run_submit_window.sh --run-id MANUAL_SUBMIT_001 --max-pages 1
 ```
 
-Run label analysis:
+再跑 label analysis：
 
 ```bash
 cd /opt/fortune_bot
@@ -236,11 +236,11 @@ set +a
 bash execution_engine/app/scripts/linux/label_analysis_daily.sh --run-id MANUAL_LABEL_001 --scope all
 ```
 
-If both complete successfully, the deploy path is healthy.
+如果这两个都能成功结束，说明部署主路径是通的。
 
-## Install systemd Units
+## 安装 systemd Units
 
-Copy the unit files:
+复制 unit 文件：
 
 ```bash
 cd /opt/fortune_bot
@@ -249,7 +249,7 @@ sudo cp deploy/systemd/fortune-bot-*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
-Enable timers at boot and start them now:
+开机自启并立即启动：
 
 ```bash
 sudo systemctl enable --now fortune-bot-submit-window.timer
@@ -257,7 +257,7 @@ sudo systemctl enable --now fortune-bot-label-analysis.timer
 sudo systemctl enable --now fortune-bot-healthcheck.timer
 ```
 
-Verify:
+验证：
 
 ```bash
 systemctl list-timers --all | grep fortune-bot
@@ -266,15 +266,15 @@ systemctl status fortune-bot-label-analysis.timer
 systemctl status fortune-bot-healthcheck.timer
 ```
 
-## Pipeline Control Scripts
+## Pipeline 控制脚本
 
-These helper scripts are aligned with the current deploy model:
+这些脚本和当前 deploy 模型是匹配的：
 
 - `execution_engine/app/scripts/linux/start_pipeline.sh`
 - `execution_engine/app/scripts/linux/stop_pipeline.sh`
 - `execution_engine/app/scripts/linux/restart_pipeline.sh`
 
-Typical usage:
+常用方式：
 
 ```bash
 cd /opt/fortune_bot
@@ -286,9 +286,9 @@ cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/restart_pipeline.sh
 ```
 
-## Logs And Health
+## 日志和健康状态
 
-Check service logs:
+查看 service 日志：
 
 ```bash
 journalctl -u fortune-bot-submit-window.service -n 100 --no-pager
@@ -296,7 +296,7 @@ journalctl -u fortune-bot-label-analysis.service -n 100 --no-pager
 journalctl -u fortune-bot-healthcheck.service -n 100 --no-pager
 ```
 
-Check current service state:
+查看 service 当前状态：
 
 ```bash
 systemctl status fortune-bot-submit-window.service
@@ -304,15 +304,15 @@ systemctl status fortune-bot-label-analysis.service
 systemctl status fortune-bot-healthcheck.service
 ```
 
-Check heartbeat files:
+查看 heartbeat 文件：
 
 ```bash
 find /var/lib/fortune_bot/jobs -maxdepth 1 -type f | sort
 ```
 
-## Healthcheck Test
+## 手工测试 Healthcheck
 
-Run the healthcheck manually:
+手工执行一次 healthcheck：
 
 ```bash
 cd /opt/fortune_bot
@@ -323,25 +323,25 @@ set +a
 python3 deploy/monitor/check_jobs.py
 ```
 
-If SMTP is configured correctly, this job will send mail only when:
+如果 SMTP 配置正确，这个脚本只会在以下情况发送邮件：
 
-- a required timer is inactive
-- a job heartbeat file is missing
-- a job has failed
-- a job has gone stale
+- 必需的 timer 没有激活
+- job heartbeat 文件缺失
+- job 运行失败
+- job 超时变 stale
 
-## Recommended AWS Rollout Order
+## 推荐的 AWS 上线顺序
 
-Use this order on the Ubuntu server:
+推荐按这个顺序在 Ubuntu 服务器上部署：
 
-1. Clone repo and create directories.
-2. Install `/etc/fortune-bot/fortune_bot.env`.
-3. Create `balances.json`.
-4. Bootstrap the execution venv.
-5. Run the optional proxy wallet smoke test.
-6. Run one manual `submit-window` test.
-7. Run one manual `label-analysis` test.
-8. Install and enable the three timers.
-9. Confirm `systemctl list-timers --all | grep fortune-bot`.
+1. 克隆仓库并创建目录
+2. 安装 `/etc/fortune-bot/fortune_bot.env`
+3. 创建 `balances.json`
+4. 初始化 execution venv
+5. 可选：先跑 proxy wallet smoke test
+6. 手工跑一次 `submit-window`
+7. 手工跑一次 `label-analysis`
+8. 安装并启用三个 timer
+9. 用 `systemctl list-timers --all | grep fortune-bot` 确认调度生效
 
-That is the correct deploy path for the current repo state.
+这就是当前仓库状态下正确的 Ubuntu / AWS 部署路径。
