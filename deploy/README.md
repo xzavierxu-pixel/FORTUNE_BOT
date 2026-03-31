@@ -222,7 +222,7 @@ set -a
 source /etc/fortune-bot/fortune_bot.env
 set +a
 
-bash execution_engine/app/scripts/linux/run_submit_window.sh --run-id MANUAL_SUBMIT_001 --max-pages 1
+bash execution_engine/app/scripts/linux/run_submit_window.sh --run-id MANUAL_SUBMIT_001 --max-pages 10
 ```
 
 再跑 label analysis：

@@ -17,6 +17,9 @@ from rule_baseline.datasets.snapshots import prepare_rule_training_frame
 MIN_GROUP_ROWS = 20
 MIN_TRAIN_ROWS = 15
 MIN_VALID_N = 8
+TRAIN_PRICE_MIN = 0.2
+TRAIN_PRICE_MAX = 0.8
+RULE_PRICE_BIN_STEP = 0.1
 
 GROUP_COLUMNS = ["domain", "category", "market_type", "price_bin", "horizon_bin"]
 
@@ -363,6 +366,9 @@ def main() -> None:
         recent_days=args.recent_days,
         split_reference_end=args.split_reference_end,
         history_start_override=args.history_start,
+        min_price=TRAIN_PRICE_MIN,
+        max_price=TRAIN_PRICE_MAX,
+        price_bin_step=RULE_PRICE_BIN_STEP,
     )
     rules_df, report_df = build_rules(df, args.artifact_mode)
 

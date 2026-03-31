@@ -324,7 +324,6 @@ def apply_live_price_filter(
             rules_frame,
             horizon_column="remaining_hours",
             price_column="live_mid_price",
-            price_midpoint_tolerance=0.1,
         )
         miss_mask = ~live_rule_inputs["rule_coverage_exact_match"].fillna(False)
         live_rule_inputs.loc[miss_mask, ["live_filter_state", "live_filter_reason"]] = [

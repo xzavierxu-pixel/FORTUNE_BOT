@@ -12,7 +12,7 @@ UTC = timezone.utc
 HORIZONS = [1, 2, 4, 6, 12, 24]
 
 # Historical bootstrap window for the first raw fetch.
-DATE_START_STR = "2025-12-07"
+DATE_START_STR = "2024-10-31"
 
 # Rolling windows
 RAW_FETCH_OVERLAP_HOURS = 72

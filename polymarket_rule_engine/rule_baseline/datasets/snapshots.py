@@ -232,6 +232,8 @@ def _build_price_bin_edges(
         edges = np.insert(edges, 0, min_price)
     if edges[-1] < max_price:
         edges = np.append(edges, max_price)
+    # Keep right-open bins while still admitting the upper boundary into the final bin.
+    edges[-1] = np.nextafter(edges[-1], np.inf)
     return edges
 
 
@@ -327,6 +329,8 @@ def build_rule_bins(
     df: pd.DataFrame,
     price_bin_step: float = DEFAULT_PRICE_BIN_STEP,
     bin_source_df: pd.DataFrame | None = None,
+    min_price: float = DEFAULT_PRICE_MIN,
+    max_price: float = DEFAULT_PRICE_MAX,
 ) -> pd.DataFrame:
     out = df.copy()
     reference = bin_source_df.copy() if bin_source_df is not None else out.copy()
@@ -354,8 +358,12 @@ def build_rule_bins(
             if "market_id" in reference_group_df.columns
             else int(len(reference_group_df))
         )
-        step = _select_price_bin_step(market_count) if price_bin_step == DEFAULT_PRICE_BIN_STEP else price_bin_step
-        price_bins = _build_price_bin_edges(step)
+        step = (
+            _select_price_bin_step(market_count, min_price=min_price, max_price=max_price)
+            if price_bin_step == DEFAULT_PRICE_BIN_STEP
+            else price_bin_step
+        )
+        price_bins = _build_price_bin_edges(step, min_price=min_price, max_price=max_price)
         price_labels = [f"{left:.2f}-{right:.2f}" for left, right in zip(price_bins[:-1], price_bins[1:])]
         out.loc[group_df.index, "price_bin"] = pd.cut(
             group_df["price"],
@@ -373,8 +381,16 @@ def prepare_rule_training_frame(
     recent_days: int | None = None,
     split_reference_end: str | None = None,
     history_start_override: str | None = None,
+    min_price: float = DEFAULT_PRICE_MIN,
+    max_price: float = DEFAULT_PRICE_MAX,
+    price_bin_step: float = DEFAULT_PRICE_BIN_STEP,
 ) -> tuple[pd.DataFrame, TemporalSplit]:
-    snapshots = load_research_snapshots(max_rows=max_rows, recent_days=recent_days)
+    snapshots = load_research_snapshots(
+        min_price=min_price,
+        max_price=max_price,
+        max_rows=max_rows,
+        recent_days=recent_days,
+    )
     print(f"[INFO] Snapshot rows before quality_pass filter: {len(snapshots)}")
     snapshots = snapshots[snapshots["quality_pass"]].copy()
     print(f"[INFO] Snapshot rows after quality_pass filter: {len(snapshots)}")
@@ -389,7 +405,13 @@ def prepare_rule_training_frame(
     allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
     bin_source = snapshots.copy() if artifact_mode == "online" else snapshots[snapshots["dataset_split"].isin(["train", "valid"])].copy()
-    snapshots = build_rule_bins(snapshots, bin_source_df=bin_source)
+    snapshots = build_rule_bins(
+        snapshots,
+        price_bin_step=price_bin_step,
+        bin_source_df=bin_source,
+        min_price=min_price,
+        max_price=max_price,
+    )
     return snapshots, split
 
 

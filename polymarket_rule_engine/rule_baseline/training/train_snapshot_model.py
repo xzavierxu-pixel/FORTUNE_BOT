@@ -19,6 +19,9 @@ from rule_baseline.models import fit_model_payload, fit_regression_payload, pred
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
+TRAIN_PRICE_MIN = 0.2
+TRAIN_PRICE_MAX = 0.8
+
 DROP_COLS = {
     "y",
     "closedTime",
@@ -66,6 +69,7 @@ DROP_COLS = {
     "residual_q_target",
     "winning_outcome_index",
     "winning_outcome_label",
+    "leaf_id",
     "bestBid",
     "bestAsk",
     "spread",
@@ -101,6 +105,11 @@ DROP_COLS = {
     "negRisk",
     "liquidityAmm",
     "liquidityClob",
+    "source_url_market",
+    "sub_domain_market",
+    "outcome_pattern_market",
+    "groupItemTitle_market",
+    "gameId_market",
     "marketMakerAddress_market",
     "log_liq",
     "liq_ratio",
@@ -422,7 +431,12 @@ def main() -> None:
     artifact_paths = build_artifact_paths(args.artifact_mode)
 
     rebuild_canonical_merged()
-    snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
+    snapshots = load_research_snapshots(
+        min_price=TRAIN_PRICE_MIN,
+        max_price=TRAIN_PRICE_MAX,
+        max_rows=args.max_rows,
+        recent_days=args.recent_days,
+    )
     snapshots = snapshots[snapshots["quality_pass"]].copy()
     split = compute_artifact_split(
         snapshots,

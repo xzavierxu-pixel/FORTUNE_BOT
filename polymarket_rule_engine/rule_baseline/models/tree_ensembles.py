@@ -161,6 +161,12 @@ def build_preprocessor(numeric_columns: list[str], categorical_columns: list[str
     )
 
 
+def _cast_matrix_float32(matrix):
+    if hasattr(matrix, "astype"):
+        return matrix.astype(np.float32)
+    return np.asarray(matrix, dtype=np.float32)
+
+
 def _resolve_ensemble_params(defaults: dict, overrides: dict | None) -> dict:
     resolved: dict = {}
     for key, value in defaults.items():
@@ -303,7 +309,7 @@ def fit_model_payload(
     numeric_columns, categorical_columns = infer_feature_types(df_train, feature_columns)
     preprocessor = build_preprocessor(numeric_columns, categorical_columns)
     train_features = coerce_feature_frame(df_train[feature_columns], numeric_columns, categorical_columns)
-    X_train = preprocessor.fit_transform(train_features)
+    X_train = _cast_matrix_float32(preprocessor.fit_transform(train_features))
     y_train = df_train[target_column].astype(int).values
 
     calibrator = None
@@ -322,7 +328,7 @@ def fit_model_payload(
     if calibration_mode in {"valid_isotonic", "valid_sigmoid", "domain_valid_isotonic", "horizon_valid_isotonic"}:
         if not df_valid.empty and df_valid[target_column].nunique() > 1:
             valid_features = coerce_feature_frame(df_valid[feature_columns], numeric_columns, categorical_columns)
-            X_valid = preprocessor.transform(valid_features)
+            X_valid = _cast_matrix_float32(preprocessor.transform(valid_features))
             y_valid = df_valid[target_column].astype(int).values
             with warnings.catch_warnings():
                 warnings.filterwarnings(
@@ -366,7 +372,7 @@ def fit_regression_payload(
     numeric_columns, categorical_columns = infer_feature_types(df_train, feature_columns)
     preprocessor = build_preprocessor(numeric_columns, categorical_columns)
     train_features = coerce_feature_frame(df_train[feature_columns], numeric_columns, categorical_columns)
-    X_train = preprocessor.fit_transform(train_features)
+    X_train = _cast_matrix_float32(preprocessor.fit_transform(train_features))
     y_train = df_train[target_column].astype(float).values
 
     model = build_ensemble_regressor(model_hyperparams)
@@ -386,7 +392,7 @@ def fit_regression_payload(
 def predict_probabilities(payload: dict, df_feat: pd.DataFrame) -> np.ndarray:
     feature_columns = payload["feature_columns"]
     feature_frame = coerce_feature_frame(df_feat[feature_columns], payload["numeric_columns"], payload["categorical_columns"])
-    X = payload["preprocessor"].transform(feature_frame)
+    X = _cast_matrix_float32(payload["preprocessor"].transform(feature_frame))
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -417,7 +423,7 @@ def predict_probabilities(payload: dict, df_feat: pd.DataFrame) -> np.ndarray:
 def predict_regression(payload: dict, df_feat: pd.DataFrame) -> np.ndarray:
     feature_columns = payload["feature_columns"]
     feature_frame = coerce_feature_frame(df_feat[feature_columns], payload["numeric_columns"], payload["categorical_columns"])
-    X = payload["preprocessor"].transform(feature_frame)
+    X = _cast_matrix_float32(payload["preprocessor"].transform(feature_frame))
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
