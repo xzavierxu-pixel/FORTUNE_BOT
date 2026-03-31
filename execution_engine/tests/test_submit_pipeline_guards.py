@@ -1,11 +1,14 @@
 import unittest
 from types import SimpleNamespace
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
 from execution_engine.online.execution.live_quote import quote_from_clob
 from execution_engine.online.execution.pricing import build_submission_signal
 from execution_engine.online.pipeline.eligibility import apply_live_price_filter, apply_structural_coarse_filter
+from execution_engine.shared.io import read_jsonl, write_jsonl
 from execution_engine.shared.time import to_iso, utc_now
 
 
@@ -341,6 +344,40 @@ class LiveFilterCoverageTest(unittest.TestCase):
         self.assertTrue(result.eligible.empty)
         self.assertEqual(int(result.state_counts.get("LIVE_SPREAD_TOO_WIDE", 0)), 1)
         self.assertEqual(result.rejected.iloc[0]["live_filter_reason"], "live_spread_above_threshold")
+
+
+class OrderManagerSweepTest(unittest.TestCase):
+    def test_sweep_expired_orders_skips_error_orders(self) -> None:
+        from execution_engine.integrations.trading.order_manager import sweep_expired_orders
+
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runs_root = root / "runs"
+            run_dir = runs_root / "2026-03-31" / "RUN_001"
+            orders_file = run_dir / "orders.jsonl"
+            original_order = {
+                "order_attempt_id": "order-1",
+                "status": "ERROR",
+                "created_at_utc": "2026-03-31T00:00:00Z",
+                "updated_at_utc": "2026-03-31T00:05:00Z",
+                "expiration_seconds": 60,
+                "clob_order_id": "clob-1",
+            }
+            write_jsonl(orders_file, [original_order])
+
+            cfg = SimpleNamespace(
+                runs_root_dir=runs_root,
+                order_ttl_sec=60,
+                dry_run=False,
+                orders_path=root / "active_orders.jsonl",
+                logs_path=root / "logs.jsonl",
+                metrics_path=root / "metrics.json",
+            )
+
+            sweep_expired_orders(cfg)
+
+            self.assertEqual(read_jsonl(cfg.orders_path), [])
+            self.assertEqual(read_jsonl(cfg.logs_path), [])
 
 
 if __name__ == "__main__":
