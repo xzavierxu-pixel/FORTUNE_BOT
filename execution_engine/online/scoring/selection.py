@@ -75,9 +75,11 @@ def allocate_candidates(
     ranked = candidates.copy()
     if "snapshot_time" not in ranked.columns:
         ranked["snapshot_time"] = pd.NaT
+    if "edge_final" not in ranked.columns:
+        ranked["edge_final"] = 0.0
     ranked = ranked.sort_values(
-        by=["snapshot_time", "market_id"],
-        ascending=[True, True],
+        by=["snapshot_time", "edge_final", "market_id"],
+        ascending=[True, False, True],
     )
     for _, row in ranked.iterrows():
         if remaining_cash <= 0:
@@ -156,6 +158,7 @@ def build_selection_decisions(
                 "selection_reason": selection_reason,
                 "stake_usdc": _to_float((picked or {}).get("stake_usdc")),
                 "growth_score": growth_score,
+                "edge_final": _to_float(execution_row.get("edge_final")),
                 "f_exec": _to_float(execution_row.get("f_exec")),
                 "q_pred": _to_float(execution_row.get("q_pred"), default=0.5),
                 "trade_value_pred": _to_float(execution_row.get("trade_value_pred")),

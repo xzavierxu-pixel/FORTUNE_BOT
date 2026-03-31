@@ -215,14 +215,14 @@ def evaluate_matched_snapshots(
     )
     viable = (
         viable.sort_values(
-            by=["market_id", "snapshot_time", "growth_score"],
+            by=["market_id", "snapshot_time", "edge_final"],
             ascending=[True, True, False],
         )
         .drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")
         .reset_index(drop=True)
     )
-    viable = runtime.apply_earliest_market_dedup(viable, score_column="growth_score")
-    viable = viable.sort_values(["batch_id", "growth_score"], ascending=[True, False]).reset_index(drop=True)
+    viable = runtime.apply_earliest_market_dedup(viable, score_column="edge_final")
+    viable = viable.sort_values(["batch_id", "edge_final"], ascending=[True, False]).reset_index(drop=True)
 
     return RuleModelResult(
         rule_hits=rule_hits,

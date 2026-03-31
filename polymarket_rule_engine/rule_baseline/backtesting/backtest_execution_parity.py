@@ -89,7 +89,7 @@ def prepare_execution_candidates(
         return scored
 
     # Online parity: a market can only be acted on once, at the earliest tradable snapshot.
-    scored = apply_earliest_market_dedup(scored, score_column="growth_score")
+    scored = apply_earliest_market_dedup(scored, score_column="edge_final")
     return scored.sort_values(["snapshot_time", "market_id"]).reset_index(drop=True)
 
 
@@ -125,7 +125,7 @@ def compute_filter_breakdown(
 
     scored = predict_candidates(dedup_snapshot, market_feature_cache, payload)
     grown = compute_growth_and_direction(scored, cfg)
-    earliest = apply_earliest_market_dedup(grown, score_column="growth_score") if not grown.empty else grown
+    earliest = apply_earliest_market_dedup(grown, score_column="edge_final") if not grown.empty else grown
     breakdown = {
         "test_snapshot_rows": int(len(test_snapshots)),
         "test_market_ids": int(test_snapshots["market_id"].nunique()),
@@ -287,6 +287,7 @@ def run_execution_parity_backtest(
                         "q_pred": float(row["q_pred"]),
                         "trade_value_pred": float(row.get("trade_value_pred", np.nan)),
                         "edge_prob": float(row["edge_prob"]),
+                        "edge_final": float(row["edge_final"]),
                         "direction": int(row["direction_model"]),
                         "rule_group_key": row["rule_group_key"],
                         "rule_leaf_id": int(row["rule_leaf_id"]),

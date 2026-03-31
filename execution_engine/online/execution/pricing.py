@@ -80,6 +80,8 @@ def build_submission_signal(
     )
     if limit_price <= 0:
         return None, "INVALID_LIMIT_PRICE"
+    if limit_price < cfg.rule_engine_min_price or limit_price > cfg.rule_engine_max_price:
+        return None, "LIMIT_PRICE_OUTSIDE_RULE_RANGE"
 
     cap = price_cap(row, cfg, fee_rate)
     if cap <= 0:

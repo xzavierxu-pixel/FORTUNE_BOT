@@ -40,6 +40,8 @@ class SubmitPricingGuardsTest(unittest.TestCase):
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
             order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
         )
         row = {
             "selected_token_id": "token-1",
@@ -67,6 +69,8 @@ class SubmitPricingGuardsTest(unittest.TestCase):
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
             order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
         )
         row = {
             "selected_token_id": "token-1",
@@ -111,6 +115,8 @@ class SubmitPricingGuardsTest(unittest.TestCase):
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
             order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
         )
         row = {
             "selected_token_id": "token-1",
@@ -133,6 +139,66 @@ class SubmitPricingGuardsTest(unittest.TestCase):
 
         self.assertEqual(reason, "OK")
         self.assertIsNotNone(signal)
+
+    def test_build_submission_signal_rejects_limit_price_below_rule_min(self) -> None:
+        cfg = SimpleNamespace(
+            run_id="test-run",
+            online_limit_ticks_below_best_bid=0,
+            online_price_cap_safety_buffer=0.01,
+            max_trade_amount_usdc=5.0,
+            order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
+        )
+        row = {
+            "selected_token_id": "token-1",
+            "market_id": "market-1",
+            "stake_usdc": 2.0,
+            "q_pred": 0.95,
+            "price": 0.21,
+        }
+        quote = {
+            "best_bid": 0.19,
+            "best_ask": 0.23,
+            "tick_size": 0.01,
+            "min_order_size": 5.0,
+            "mid": 0.21,
+        }
+
+        signal, reason = build_submission_signal(row, quote, cfg, fee_rate=0.001)
+
+        self.assertIsNone(signal)
+        self.assertEqual(reason, "LIMIT_PRICE_OUTSIDE_RULE_RANGE")
+
+    def test_build_submission_signal_rejects_limit_price_above_rule_max(self) -> None:
+        cfg = SimpleNamespace(
+            run_id="test-run",
+            online_limit_ticks_below_best_bid=0,
+            online_price_cap_safety_buffer=0.01,
+            max_trade_amount_usdc=5.0,
+            order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
+        )
+        row = {
+            "selected_token_id": "token-1",
+            "market_id": "market-1",
+            "stake_usdc": 2.0,
+            "q_pred": 0.95,
+            "price": 0.79,
+        }
+        quote = {
+            "best_bid": 0.81,
+            "best_ask": 0.83,
+            "tick_size": 0.01,
+            "min_order_size": 5.0,
+            "mid": 0.82,
+        }
+
+        signal, reason = build_submission_signal(row, quote, cfg, fee_rate=0.001)
+
+        self.assertIsNone(signal)
+        self.assertEqual(reason, "LIMIT_PRICE_OUTSIDE_RULE_RANGE")
 
 
 class StructuralFilterTest(unittest.TestCase):

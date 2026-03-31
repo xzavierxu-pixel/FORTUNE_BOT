@@ -303,14 +303,14 @@ def run_live_inference(
     if not viable.empty:
         viable = (
             viable.sort_values(
-                by=["market_id", "snapshot_time", "growth_score"],
+                by=["market_id", "snapshot_time", "edge_final"],
                 ascending=[True, True, False],
             )
             .drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")
             .reset_index(drop=True)
         )
-        viable = runtime.rule_runtime.apply_earliest_market_dedup(viable, score_column="growth_score")
-        viable = viable.sort_values(["batch_id", "growth_score"], ascending=[True, False]).reset_index(drop=True)
+        viable = runtime.rule_runtime.apply_earliest_market_dedup(viable, score_column="edge_final")
+        viable = viable.sort_values(["batch_id", "edge_final"], ascending=[True, False]).reset_index(drop=True)
 
     return LiveInferenceResult(
         live_filter=live_filter,

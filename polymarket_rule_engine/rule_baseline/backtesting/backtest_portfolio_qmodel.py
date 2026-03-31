@@ -332,12 +332,17 @@ def compute_growth_and_direction(candidates: pd.DataFrame, cfg: BacktestConfig) 
 
     out["edge_prob"] = edge_prob
     out["direction_model"] = direction
+    out["edge_final"] = np.where(direction > 0, edge_prob, np.where(direction < 0, -edge_prob, -np.inf))
     out["f_star"] = f_star
     out["f_exec"] = f_exec
     out["g_net"] = g_net
     out["growth_score"] = growth_score
     return out[
-        (out["direction_model"] != 0) & np.isfinite(out["growth_score"]) & (out["growth_score"] > 0)
+        (out["direction_model"] != 0)
+        & np.isfinite(out["growth_score"])
+        & (out["growth_score"] > 0)
+        & np.isfinite(out["edge_final"])
+        & (out["edge_final"] > 0)
     ].copy()
 
 
@@ -369,12 +374,12 @@ def prepare_candidate_book(
         return scored
 
     scored = scored.sort_values(
-        ["market_id", "snapshot_time", "growth_score"],
+        ["market_id", "snapshot_time", "edge_final"],
         ascending=[True, True, False],
     )
     scored = scored.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
-    scored = apply_earliest_market_dedup(scored, score_column="growth_score")
-    return scored.sort_values(["snapshot_time", "growth_score"], ascending=[True, False]).reset_index(drop=True)
+    scored = apply_earliest_market_dedup(scored, score_column="edge_final")
+    return scored.sort_values(["snapshot_time", "edge_final"], ascending=[True, False]).reset_index(drop=True)
 
 
 def trade_pnl(direction: int, stake: float, price_yes: float, y: int, fee_rate: float) -> float:
@@ -442,7 +447,7 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
             equity_records.append({"date": current_date, "bankroll": equity_start, "daily_pnl": realized_pnl, "num_trades": 0})
             continue
 
-        day_candidates = pd.DataFrame(active_rows).sort_values("growth_score", ascending=False).head(cfg.max_daily_trades)
+        day_candidates = pd.DataFrame(active_rows).sort_values("edge_final", ascending=False).head(cfg.max_daily_trades)
         bankroll_start = equity_start
         remaining_budget = min(cfg.max_daily_exposure_f * bankroll_start, cash)
         daily_pnl = realized_pnl
@@ -525,6 +530,7 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
                     "q_pred": float(row["q_pred"]),
                     "trade_value_pred": float(row.get("trade_value_pred", np.nan)),
                     "edge_prob": float(row["edge_prob"]),
+                    "edge_final": float(row["edge_final"]),
                     "direction": int(row["direction_model"]),
                     "rule_group_key": row["rule_group_key"],
                     "rule_leaf_id": int(row["rule_leaf_id"]),
