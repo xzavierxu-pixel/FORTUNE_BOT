@@ -4,22 +4,41 @@ from __future__ import annotations
 import json
 import os
 import smtplib
+import socket
 import ssl
 import subprocess
-import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def bj_now() -> datetime:
+    return datetime.now(BEIJING_TZ)
+
+
+def utc_now_iso() -> str:
+    return utc_now().isoformat().replace("+00:00", "Z")
+
+
+def bj_now_iso() -> str:
+    return bj_now().isoformat()
+
+
 def parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def to_bj(value: str) -> str:
+    return parse_utc(value).astimezone(BEIJING_TZ).isoformat()
 
 
 def state_dir() -> Path:
@@ -144,11 +163,14 @@ def check_job_issues(base_state_dir: Path) -> list[Issue]:
                 Issue(
                     key=issue_key("job_stale", job),
                     subject=f"job stale: {job}",
-                    body=f"Last success for `{job}` is older than allowed.\n"
-                    f"last_success_utc={success_raw}\n"
-                    f"age_sec={age_sec}\n"
-                    f"max_age_sec={max_age_sec}\n"
-                    f"payload={json.dumps(payload, ensure_ascii=True, indent=2)}",
+                    body=(
+                        f"Last success for `{job}` is older than allowed.\n"
+                        f"last_success_utc={success_raw}\n"
+                        f"last_success_bj={to_bj(success_raw)}\n"
+                        f"age_sec={age_sec}\n"
+                        f"max_age_sec={max_age_sec}\n"
+                        f"payload={json.dumps(payload, ensure_ascii=True, indent=2)}"
+                    ),
                 )
             )
     return issues
@@ -172,7 +194,7 @@ def send_email(subject: str, body: str) -> None:
     message["From"] = sender
     message["To"] = recipient
     message.set_content(
-        f"Host: {socket.gethostname()}\nTime: {utc_now().isoformat()}\n\n{body}",
+        f"Host: {socket.gethostname()}\nTime-BJ: {bj_now_iso()}\nTime-UTC: {utc_now_iso()}\n\n{body}",
     )
 
     if use_ssl:
@@ -200,7 +222,13 @@ def should_send(base_state_dir: Path, key: str) -> bool:
 
 def mark_sent(base_state_dir: Path, key: str) -> None:
     alert_path = base_state_dir / "alerts" / f"{key}.json"
-    write_json(alert_path, {"last_sent_utc": utc_now().isoformat().replace("+00:00", "Z")})
+    write_json(
+        alert_path,
+        {
+            "last_sent_utc": utc_now_iso(),
+            "last_sent_bj": bj_now_iso(),
+        },
+    )
 
 
 def main() -> None:

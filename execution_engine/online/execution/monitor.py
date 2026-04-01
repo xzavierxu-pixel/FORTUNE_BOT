@@ -23,7 +23,7 @@ from execution_engine.shared.io import (
     read_jsonl_many,
     write_jsonl,
 )
-from execution_engine.shared.time import to_iso, utc_now
+from execution_engine.shared.time import bj_now_iso, parse_utc, to_bj_iso, to_iso, utc_now
 
 
 def _latest_orders_by_attempt(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -252,6 +252,7 @@ def _build_opened_position_events(
         order = latest_orders.get(order_attempt_id, {})
         event = {
             "event_time_utc": str(position.get("opened_at_utc") or to_iso(utc_now())),
+            "event_time_bj": to_bj_iso(parse_utc(str(position.get("opened_at_utc") or to_iso(utc_now())))),
             "event_type": "OPENED_POSITION",
             "decision_id": str(order.get("decision_id") or ""),
             "order_attempt_id": order_attempt_id,
@@ -263,6 +264,7 @@ def _build_opened_position_events(
             "filled_shares": _to_float(position.get("filled_shares")),
             "entry_price": _to_float(position.get("entry_price")),
             "opened_at_utc": str(position.get("opened_at_utc") or ""),
+            "opened_at_bj": to_bj_iso(parse_utc(str(position.get("opened_at_utc") or to_iso(utc_now())))),
             "position_status": str(position.get("status") or "OPEN"),
             "position_side": str(order.get("position_side") or ""),
             "category": str(order.get("category") or ""),
@@ -271,7 +273,17 @@ def _build_opened_position_events(
             "rule_group_key": str(order.get("rule_group_key") or ""),
             "rule_leaf_id": str(order.get("rule_leaf_id") or ""),
         }
-        append_jsonl(cfg.events_path, {"event_time_utc": event["event_time_utc"], "event_type": "OPENED_POSITION", "decision_id": event["decision_id"], "order_attempt_id": event["order_attempt_id"], "payload": event})
+        append_jsonl(
+            cfg.events_path,
+            {
+                "event_time_utc": event["event_time_utc"],
+                "event_time_bj": event["event_time_bj"],
+                "event_type": "OPENED_POSITION",
+                "decision_id": event["decision_id"],
+                "order_attempt_id": event["order_attempt_id"],
+                "payload": event,
+            },
+        )
         opened_events.append(event)
         seen_market_ids.add(market_id)
     return existing_events + opened_events
@@ -337,6 +349,7 @@ def monitor_order_lifecycle(
 
     manifest = {
         "generated_at_utc": to_iso(utc_now()),
+        "generated_at_bj": bj_now_iso(),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
         "sleep_sec": int(max(sleep_sec, 0)),

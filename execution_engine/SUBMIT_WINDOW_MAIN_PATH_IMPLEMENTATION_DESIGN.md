@@ -61,6 +61,8 @@ The implementation must achieve the following:
 4. Execute post-submit lifecycle handling immediately after `submit-window` completes submission work.
 5. Present a single run-level manifest and summary model centered on `submit-window`.
 6. Simplify deployment so the only production trading timer is `fortune-bot-submit-window.timer`.
+7. Ensure post-submit lifecycle work does not block the next run's submit phase once the current run's submit phase has completed.
+8. Standardize execution-engine logs, manifests, summaries, and operator-facing timestamps on Beijing time.
 
 ## 6. Non-Goals
 
@@ -71,6 +73,7 @@ This design does not aim to:
 3. Remove helper functions from shared library modules if they are still used by `submit-window` internals.
 4. Redesign the internal business semantics of `monitor_order_lifecycle`.
 5. Change label analysis behavior beyond updating dependencies and health checks.
+6. Preserve the old whole-run serial execution model where post-submit lifecycle blocks the next run's submit phase.
 
 ## 7. Current State
 
@@ -135,6 +138,8 @@ The post-submit lifecycle stage is part of the `submit-window` run and executes 
 
 Its implementation uses `monitor_order_lifecycle` with summary publishing disabled for the nested call.
 
+The post-submit lifecycle stage is logically downstream of the current run, but it is not allowed to own the scheduling gate for the next run's submit phase.
+
 The post-submit stage must handle:
 
 1. TTL cleanup
@@ -147,7 +152,34 @@ The post-submit stage must handle:
 8. shared `orders_live/*` rebuild
 9. opened-position event generation
 
-### 8.3 Removed components from production trading
+### 8.3 Concurrency boundary between runs
+
+The implementation must distinguish two kinds of run activity:
+
+1. active `submit phase`
+2. active `post-submit lifecycle`
+
+Only active `submit phase` is allowed to block the next scheduled submit run.
+
+This means:
+
+1. if run `N` is still fetching pages, evaluating candidates, or submitting orders, run `N+1` submit must not start
+2. if run `N` has finished submission work and is only canceling orders, reconciling state, or handling exits, run `N+1` submit must still be allowed to start
+3. overlapping `post-submit lifecycle` from run `N` with `submit phase` from run `N+1` is an intended and valid state
+
+### 8.4 Timezone ownership
+
+The production execution-engine timezone for operator-facing timestamps is `Asia/Shanghai`.
+
+This timezone requirement applies to:
+
+1. application logs
+2. manifest timestamps
+3. summary timestamps
+4. job heartbeat timestamps
+5. any operator-facing human-readable diagnostic output
+
+### 8.5 Removed components from production trading
 
 The following components are removed from the production trading path:
 
@@ -188,7 +220,23 @@ This phase must:
 3. write its own detailed manifest if needed
 4. contribute summary fields back to the main `submit-window` manifest
 
-### 9.3 Final run status must be phase-aware
+### 9.3 Scheduling must be gated by submit phase only
+
+The next scheduled submit run must be blocked only by an active submit phase from a previous run.
+
+The implementation must enforce all of the following:
+
+1. an active page scan or submission loop from run `N` blocks run `N+1`
+2. an active cancel/reconcile/exit stage from run `N` does not block run `N+1`
+3. skip/cancel/defer decisions for a scheduled run are based on submit-phase state only
+4. the system must not treat the whole top-level workflow as one indivisible scheduling lock
+
+Examples:
+
+1. if the previous run is still processing the configured `--max-pages 300`, the next run may be skipped or deferred
+2. if the previous run has finished all submission attempts and is only canceling or reconciling orders, the next run must still proceed
+
+### 9.4 Final run status must be phase-aware
 
 The final `submit-window` run result must distinguish:
 
@@ -202,7 +250,19 @@ Required final status examples:
 2. `submit_failed`
 3. `completed_with_post_submit_failure`
 
-### 9.4 Deployment must expose one trading timer
+### 9.5 Operator-facing time fields must use Beijing time
+
+The system must emit Beijing-time timestamps by default for all operator-facing outputs.
+
+Required rules:
+
+1. any human-readable log timestamp emitted by execution-engine must use `Asia/Shanghai`
+2. any manifest or summary field intended for direct operator inspection must use Beijing time by default
+3. if UTC fields are retained for machine compatibility, they must be explicitly suffixed with `_utc`
+4. any Beijing-time field must be explicitly named so its timezone is unambiguous, for example `_bj`, `_cst`, or `_local`
+5. documentation and runbook examples must interpret runtime timestamps in Beijing time
+
+### 9.6 Deployment must expose one trading timer
 
 The production trading schedule must be centered on:
 
@@ -213,7 +273,7 @@ No additional trading timer is allowed for:
 1. `refresh-universe`
 2. `hourly-cycle`
 
-### 9.5 Health checks must monitor the new owner path
+### 9.7 Health checks must monitor the new owner path
 
 Health check configuration must track:
 
@@ -233,9 +293,12 @@ The new top-level `submit-window` flow is:
 2. execute existing submit-window page and batch loop
 3. perform submission attempts
 4. collect submit metrics and artifacts
-5. run post-submit lifecycle handling
-6. merge post-submit lifecycle summary into the main workflow manifest
-7. publish one final workflow summary
+5. release submit-phase exclusivity as soon as submission work is complete
+6. run post-submit lifecycle handling
+7. merge post-submit lifecycle summary into the main workflow manifest
+8. publish one final workflow summary
+
+The critical requirement is that step 5 happens before step 6 begins any long-running cancel or reconciliation work.
 
 ### 10.2 Post-submit lifecycle call contract
 
@@ -246,6 +309,8 @@ The new top-level `submit-window` flow is:
 3. the same resolved `PegConfig`
 
 The nested call must not create a second top-level summary entry for the same workflow run.
+
+The nested call must also not retain the submit-phase scheduling lock for the duration of the post-submit lifecycle stage.
 
 ### 10.3 Shared artifacts after submit-window
 
@@ -270,6 +335,31 @@ This means `submit-window` becomes responsible for both:
 
 The implementation must document that the post-submit stage is account-global, not limited to orders created in the current run.
 
+### 10.5 Required locking and run-state semantics
+
+The runtime implementation must expose separate state for:
+
+1. `submit_phase_active`
+2. `post_submit_active`
+
+It must be possible for these states to represent:
+
+1. run `N` with `post_submit_active=True`
+2. while run `N+1` with `submit_phase_active=True`
+
+The implementation must not collapse both states into a single whole-run mutex.
+
+### 10.6 Required time semantics
+
+All execution-engine time handling for operator-facing outputs must default to Beijing time.
+
+Recommended implementation rules:
+
+1. define one shared timezone source for `Asia/Shanghai`
+2. route log timestamp formatting through that shared timezone
+3. route manifest and summary timestamp formatting through that shared timezone
+4. retain UTC only where required for interoperability, and name those fields explicitly
+
 ## 11. Code Changes
 
 ### 11.1 `submit_window.py`
@@ -283,9 +373,11 @@ Required changes:
 1. import `monitor_order_lifecycle`
 2. extend `SubmitWindowResult` to include post-submit lifecycle summary fields
 3. execute post-submit lifecycle after all page and batch submission work completes
-4. capture lifecycle success or failure explicitly
-5. merge lifecycle counters and manifest paths into `submit_window/manifest.json`
-6. publish a single final run summary for the whole workflow
+4. release submit-phase exclusivity before post-submit lifecycle begins
+5. capture lifecycle success or failure explicitly
+6. merge lifecycle counters and manifest paths into `submit_window/manifest.json`
+7. publish a single final run summary for the whole workflow
+8. emit operator-facing timestamps in Beijing time
 
 Required new manifest fields:
 
@@ -301,6 +393,10 @@ Required new manifest fields:
 10. `post_submit_settlement_close_count`
 11. `post_submit_canceled_exit_order_count`
 12. `final_status`
+13. `submit_phase_started_at_bj`
+14. `submit_phase_finished_at_bj`
+15. `post_submit_started_at_bj`
+16. `post_submit_finished_at_bj`
 
 ### 11.2 `monitor.py`
 
@@ -314,6 +410,7 @@ Required changes:
 2. support nested invocation from `submit-window` without publishing a separate top-level run summary
 3. keep writing `order_monitor/manifest.json`
 4. keep returning structured counts required by the main workflow
+5. emit operator-facing timestamps in Beijing time
 
 No pre-submit legacy behavior from `hourly-cycle` should be moved here.
 
@@ -328,12 +425,14 @@ Required additions:
 1. `PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER`
 2. `PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC`
 3. `PEG_SUBMIT_WINDOW_FAIL_ON_MONITOR_ERROR`
+4. shared timezone configuration for execution-engine operator-facing timestamps
 
 Recommended defaults:
 
 1. `RUN_MONITOR_AFTER=1`
 2. `MONITOR_SLEEP_SEC=0`
 3. `FAIL_ON_MONITOR_ERROR=0` during rollout, then optionally `1` after stabilization
+4. `TZ=Asia/Shanghai` or an equivalent execution-engine timezone setting
 
 ### 11.4 Remove legacy hourly-cycle implementation path
 
@@ -447,6 +546,7 @@ This means:
 1. `submit_window/manifest.json` is the canonical trading-run manifest
 2. nested `order_monitor/manifest.json` remains an implementation detail of the post-submit phase
 3. the final run summary is published once, from the top-level `submit-window` workflow
+4. the top-level manifest must expose phase-separated timestamps in Beijing time
 
 ### 14.2 Required top-level summary shape
 
@@ -464,6 +564,8 @@ It must be possible to answer these questions from one summary:
 5. how many fills and open positions exist after the lifecycle phase
 6. whether exits were considered or submitted
 7. whether the full workflow completed successfully
+8. when submit phase started and ended in Beijing time
+9. when post-submit lifecycle started and ended in Beijing time
 
 ## 15. Migration Plan
 
@@ -493,9 +595,12 @@ It must be possible to answer these questions from one summary:
 
 1. `run_submit_window` remains behaviorally unchanged before order submission.
 2. After submission, `monitor_order_lifecycle` is automatically executed.
-3. Shared order and position artifacts are rebuilt during the same top-level workflow run.
-4. Exit lifecycle handling is executed through the post-submit stage.
-5. `submit_window/manifest.json` contains both submit and post-submit results.
+3. A next scheduled run is blocked only when the previous run's submit phase is still active.
+4. A next scheduled run is not blocked merely because the previous run is still canceling or reconciling orders.
+5. Shared order and position artifacts are rebuilt during the same top-level workflow run.
+6. Exit lifecycle handling is executed through the post-submit stage.
+7. `submit_window/manifest.json` contains both submit and post-submit results.
+8. Operator-facing timestamps are emitted in Beijing time.
 
 ### 16.2 Legacy removal
 
@@ -541,6 +646,26 @@ Mitigation:
 2. remove README references
 3. delete unused entrypoints and config when migration completes
 
+### 17.4 Risk: post-submit and next submit contend for shared state
+
+Allowing run `N` post-submit lifecycle to overlap with run `N+1` submit phase can introduce shared-state races if both paths mutate the same files or caches without phase-aware coordination.
+
+Mitigation:
+
+1. define which artifacts are submit-phase critical versus post-submit derived
+2. keep the submit-phase gate narrow, but add artifact-level locking where real shared writes exist
+3. document any intentionally account-global side effects
+
+### 17.5 Risk: mixed UTC and Beijing-time timestamps create operator confusion
+
+If some logs stay in UTC while manifests and summaries move to Beijing time, operators will misread sequencing during incidents.
+
+Mitigation:
+
+1. make Beijing time the default for all operator-facing outputs
+2. name any retained UTC fields explicitly with `_utc`
+3. update runbooks and examples to use Beijing time consistently
+
 ## 18. Final Decision Summary
 
 The final design is:
@@ -549,4 +674,5 @@ The final design is:
 2. `refresh-universe` is removed from the production path.
 3. legacy `hourly-cycle` pre-submit behavior is removed from the codebase.
 4. post-submit lifecycle handling is attached directly to `submit-window`.
-5. deployment, health checks, manifests, and summaries are rewritten around this single-path ownership model.
+5. the next scheduled submit is blocked only by an active prior submit phase, not by a still-running cancel/reconcile phase.
+6. deployment, health checks, manifests, summaries, and logs are rewritten around this single-path ownership model and Beijing-time operator semantics.

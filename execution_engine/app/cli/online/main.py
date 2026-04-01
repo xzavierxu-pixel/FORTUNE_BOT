@@ -14,7 +14,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from execution_engine.online.analysis.labels import build_daily_label_analysis
 from execution_engine.online.execution.monitor import monitor_order_lifecycle
-from execution_engine.online.pipeline.submit_window import run_submit_window
+from execution_engine.online.pipeline.submit_window import complete_post_submit_monitor, run_submit_window
 from execution_engine.online.streaming.manager import stream_market_data
 from execution_engine.runtime.config import load_config
 
@@ -126,6 +126,8 @@ def _cmd_run_submit_window(args: argparse.Namespace) -> None:
     os.environ["PEG_RUN_MODE"] = "submit_window"
     if args.run_id:
         os.environ["PEG_RUN_ID"] = args.run_id
+    if args.run_date:
+        os.environ["PEG_RUN_DATE"] = args.run_date
 
     cfg = load_config()
     result = run_submit_window(
@@ -149,6 +151,23 @@ def _cmd_run_submit_window(args: argparse.Namespace) -> None:
         print(f"page_{page.page_offset}_expanded={page.expanded_market_count}")
         print(f"page_{page.page_offset}_candidates={page.direct_candidate_count}")
         print(f"page_{page.page_offset}_submitted={page.submitted_count}")
+    print(f"manifest={result.run_manifest_path}")
+
+
+def _cmd_run_submit_window_post_submit(args: argparse.Namespace) -> None:
+    os.environ["PEG_RUN_MODE"] = "submit_window"
+    if args.run_id:
+        os.environ["PEG_RUN_ID"] = args.run_id
+    if args.run_date:
+        os.environ["PEG_RUN_DATE"] = args.run_date
+
+    cfg = load_config()
+    result = complete_post_submit_monitor(cfg)
+    print(f"post_submit_monitor_status={result.post_submit_monitor_status}")
+    print(f"post_submit_open_order_count={result.post_submit_open_order_count}")
+    print(f"post_submit_fill_count={result.post_submit_fill_count}")
+    print(f"post_submit_open_position_count={result.post_submit_open_position_count}")
+    print(f"final_status={result.final_status}")
     print(f"manifest={result.run_manifest_path}")
 
 
@@ -177,8 +196,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     submit_window = subparsers.add_parser("run-submit-window", description="Run the direct page-based online submit loop.")
     submit_window.add_argument("--run-id", default=None)
+    submit_window.add_argument("--run-date", default=None)
     submit_window.add_argument("--max-pages", type=int, default=0)
     submit_window.set_defaults(handler=_cmd_run_submit_window)
+
+    post_submit = subparsers.add_parser(
+        "run-submit-window-post-submit",
+        description="Run the detached post-submit lifecycle for an existing submit-window run.",
+    )
+    post_submit.add_argument("--run-id", default=None)
+    post_submit.add_argument("--run-date", default=None)
+    post_submit.set_defaults(handler=_cmd_run_submit_window_post_submit)
 
     return parser
 

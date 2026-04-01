@@ -13,7 +13,7 @@ from execution_engine.runtime.config import PegConfig
 from execution_engine.shared.alerts import record_alert
 from execution_engine.shared.logger import log_structured
 from execution_engine.shared.metrics import increment_metric
-from execution_engine.shared.time import to_iso, utc_now
+from execution_engine.shared.time import bj_now_iso, to_iso, utc_now
 
 ALERT_REASONS = {
     "CIRCUIT_OPEN",
@@ -99,6 +99,7 @@ def record_rejection(
     state.record_event(
         {
             "event_time_utc": to_iso(utc_now()),
+            "event_time_bj": bj_now_iso(),
             "event_type": "REJECTION",
             "decision_id": decision_id,
             "order_attempt_id": order_attempt_id,
@@ -113,6 +114,7 @@ def record_decision_created(cfg: PegConfig, state: Any, decision: Dict[str, Any]
     state.record_event(
         {
             "event_time_utc": to_iso(utc_now()),
+            "event_time_bj": bj_now_iso(),
             "event_type": "DECISION_CREATED",
             "decision_id": decision.get("decision_id"),
             "order_attempt_id": order_attempt_id,
@@ -128,6 +130,7 @@ def record_order_submitted(cfg: PegConfig, state: Any, decision: Dict[str, Any],
     state.record_event(
         {
             "event_time_utc": to_iso(utc_now()),
+            "event_time_bj": bj_now_iso(),
             "event_type": "ORDER_SUBMITTED",
             "decision_id": decision.get("decision_id"),
             "order_attempt_id": order.get("order_attempt_id"),

@@ -158,9 +158,6 @@ Online shared artifacts under [execution_engine/data/shared](C:\Users\ROG\Deskto
 
 Per-run direct submission artifacts:
 
-- `submit_hourly/submission_attempts.csv`
-- `submit_hourly/orders_submitted.jsonl`
-- `submit_hourly/manifest.json`
 - `submit_window/manifest.json`
 
 Per-run order monitoring artifacts:

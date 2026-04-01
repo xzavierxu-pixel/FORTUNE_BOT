@@ -8,7 +8,7 @@ import pandas as pd
 
 from execution_engine.runtime.config import PegConfig
 from execution_engine.shared.io import append_jsonl
-from execution_engine.shared.time import to_iso, utc_now
+from execution_engine.shared.time import bj_now_iso, to_iso, utc_now
 
 
 def record_candidate_state(
@@ -24,6 +24,7 @@ def record_candidate_state(
 ) -> None:
     payload = {
         "event_time_utc": to_iso(utc_now()),
+        "event_time_bj": bj_now_iso(),
         "event_type": "CANDIDATE_STATE",
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,

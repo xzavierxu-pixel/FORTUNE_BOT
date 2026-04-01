@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 import csv
 import json
 from typing import Any, Dict, Iterable, List
 
 from execution_engine.shared.io import read_jsonl
+from execution_engine.shared.time import bj_now_iso, to_iso, utc_now
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    return to_iso(utc_now())
+
+
+def bj_now_summary_iso() -> str:
+    return bj_now_iso()
 
 
 def count_jsonl(path: Path) -> int:

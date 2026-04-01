@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
 from time import perf_counter
 from typing import Dict, List
 import json
@@ -26,14 +31,23 @@ from execution_engine.online.scoring.selection import allocate_candidates, build
 from execution_engine.online.streaming.manager import StreamRunResult, stream_market_data
 from execution_engine.online.universe.page_source import EventPageResult, fetch_event_page
 from execution_engine.runtime.config import PegConfig
+from execution_engine.runtime.run_state import acquire_submit_phase, read_submit_phase
 from execution_engine.runtime.state import StateStore
 from execution_engine.shared.metrics import load_metrics, save_metrics
-from execution_engine.shared.time import to_iso, utc_now
+from execution_engine.shared.time import bj_now_iso, to_bj_iso, to_iso, utc_now
 
 
 def _write_manifest(path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _now_fields(prefix: str) -> Dict[str, str]:
+    now_utc = utc_now()
+    return {
+        f"{prefix}_utc": to_iso(now_utc),
+        f"{prefix}_bj": to_bj_iso(now_utc),
+    }
 
 
 def _merge_unique_columns(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
@@ -122,6 +136,7 @@ def _with_batch_metadata(frame: pd.DataFrame, cfg: PegConfig, batch_id: str) -> 
 def _write_snapshot_score_manifest(cfg: PegConfig) -> None:
     payload = {
         "generated_at_utc": to_iso(utc_now()),
+        "generated_at_bj": bj_now_iso(),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
         "processed_markets_path": str(cfg.run_snapshot_processed_markets_path),
@@ -257,7 +272,9 @@ def _write_post_submit_output(
                     on=merge_keys,
                     how="left",
                 )
-    output["post_submit_recorded_at_utc"] = to_iso(utc_now())
+    now_utc = utc_now()
+    output["post_submit_recorded_at_utc"] = to_iso(now_utc)
+    output["post_submit_recorded_at_bj"] = to_bj_iso(now_utc)
     existing = pd.DataFrame()
     if runtime.cfg.run_submit_post_submit_features_path.exists():
         try:
@@ -309,6 +326,7 @@ class SubmitWindowPageResult:
 class SubmitWindowResult:
     run_manifest_path: str
     final_status: str
+    submit_phase_status: str
     page_count: int
     expanded_market_count: int
     direct_candidate_count: int
@@ -327,6 +345,10 @@ class SubmitWindowResult:
     post_submit_exit_submitted_count: int
     post_submit_settlement_close_count: int
     post_submit_canceled_exit_order_count: int
+    submit_phase_started_at_bj: str
+    submit_phase_finished_at_bj: str
+    post_submit_started_at_bj: str
+    post_submit_finished_at_bj: str
     pages: List[SubmitWindowPageResult]
 
 
@@ -362,6 +384,217 @@ def _monitor_summary_from_result(result: OrderMonitorResult) -> Dict[str, object
         "post_submit_settlement_close_count": int(result.settlement_close_count),
         "post_submit_canceled_exit_order_count": int(result.canceled_exit_order_count),
     }
+
+
+def _build_submit_window_manifest(
+    cfg: PegConfig,
+    *,
+    funnel_payload: Dict[str, object],
+    metrics_payload: Dict[str, float],
+    page_results: List[SubmitWindowPageResult],
+    expanded_market_count: int,
+    structural_reject_count: int,
+    state_reject_count: int,
+    direct_candidate_count: int,
+    live_eligible_count: int,
+    live_price_miss_count: int,
+    live_spread_too_wide_count: int,
+    live_state_missing_count: int,
+    live_state_stale_count: int,
+    invalid_price_count: int,
+    selected_count: int,
+    submit_attempted_count: int,
+    submitted_order_count: int,
+    submit_rejection_count: int,
+    underfilled_batch_count: int,
+    underfilled_batch_avg_size: float,
+    final_status: str,
+    submit_phase_status: str,
+    monitor_summary: Dict[str, object],
+    submit_phase_started_at_bj: str,
+    submit_phase_finished_at_bj: str,
+) -> Dict[str, object]:
+    return {
+        "generated_at_utc": to_iso(utc_now()),
+        "generated_at_bj": bj_now_iso(),
+        "run_id": cfg.run_id,
+        "run_mode": cfg.run_mode,
+        "submit_stage_status": submit_phase_status,
+        "submit_phase_started_at_bj": submit_phase_started_at_bj,
+        "submit_phase_finished_at_bj": submit_phase_finished_at_bj,
+        "funnel": funnel_payload,
+        "page_count": int(len(page_results)),
+        "expanded_market_count": int(expanded_market_count),
+        "structural_reject_count": int(structural_reject_count),
+        "state_reject_count": int(state_reject_count),
+        "direct_candidate_count": int(direct_candidate_count),
+        "live_eligible_count": int(live_eligible_count),
+        "live_price_miss_count": int(live_price_miss_count),
+        "live_spread_too_wide_count": int(live_spread_too_wide_count),
+        "live_state_missing_count": int(live_state_missing_count),
+        "live_state_stale_count": int(live_state_stale_count),
+        "invalid_price_count": int(invalid_price_count),
+        "selected_count": int(selected_count),
+        "submit_attempted_count": int(submit_attempted_count),
+        "submitted_order_count": int(submitted_order_count),
+        "submit_rejection_count": int(submit_rejection_count),
+        "selection_decisions_path": str(cfg.run_snapshot_selection_path),
+        "post_submit_features_path": str(cfg.run_submit_post_submit_features_path),
+        "underfilled_batch_count": int(underfilled_batch_count),
+        "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
+        "final_status": final_status,
+        "metrics": metrics_payload,
+        **monitor_summary,
+        "pages": [
+            {
+                "page_offset": page.page_offset,
+                "event_count": page.event_count,
+                "expanded_market_count": page.expanded_market_count,
+                "structural_reject_count": page.structural_reject_count,
+                "state_reject_count": page.state_reject_count,
+                "direct_candidate_count": page.direct_candidate_count,
+                "submitted_count": page.submitted_count,
+                "fetch_latency_ms": round(page.fetch_latency_ms, 3),
+                "batches": [
+                    {
+                        "batch_id": batch.batch_id,
+                        "market_count": batch.market_count,
+                        "live_eligible_count": batch.live_eligible_count,
+                        "live_price_miss_count": batch.live_price_miss_count,
+                        "live_spread_too_wide_count": batch.live_spread_too_wide_count,
+                        "live_state_missing_count": batch.live_state_missing_count,
+                        "live_state_stale_count": batch.live_state_stale_count,
+                        "invalid_price_count": batch.invalid_price_count,
+                        "selected_count": batch.selected_count,
+                        "submitted_count": batch.submitted_count,
+                        "underfilled": batch.underfilled,
+                        "stream_latency_ms": round(batch.stream_latency_ms, 3),
+                        "inference_latency_ms": round(batch.inference_latency_ms, 3),
+                        "avg_token_state_age_sec": round(batch.avg_token_state_age_sec, 3),
+                        "candidate_column_count": batch.candidate_column_count,
+                        "snapshot_column_count": batch.snapshot_column_count,
+                        "quote_lookup_latency_ms": round(batch.submit_result.quote_lookup_latency_ms, 3),
+                        "gamma_to_submit_latency_ms": round(batch.submit_result.gamma_to_submit_latency_ms, 3),
+                        "selection_to_submit_latency_ms": round(batch.submit_result.selection_to_submit_latency_ms, 3),
+                    }
+                    for batch in page.batches
+                ],
+            }
+            for page in page_results
+        ],
+    }
+
+
+def _publish_submit_window_summary(
+    cfg: PegConfig,
+    *,
+    final_status: str,
+    manifest: Dict[str, object],
+    monitor_summary: Dict[str, object],
+) -> None:
+    summary_manifest = {key: value for key, value in manifest.items() if key != "pages"}
+    publish_run_summary(
+        cfg,
+        status=final_status,
+        notes={
+            "submit_window": summary_manifest,
+            "post_submit_monitor": {
+                key: monitor_summary[key]
+                for key in sorted(monitor_summary)
+            },
+        },
+    )
+
+
+def _spawn_async_post_submit(cfg: PegConfig) -> bool:
+    systemd_run = shutil.which("systemd-run")
+    if not cfg.submit_window_run_monitor_after or not cfg.submit_window_async_post_submit or not systemd_run:
+        return False
+    env_args: list[str] = []
+    for key, value in os.environ.items():
+        if key.startswith("PEG_") or key.startswith("FORTUNE_BOT_"):
+            env_args.append(f"--setenv={key}={value}")
+    env_args.extend(
+        [
+            f"--setenv=PEG_RUN_ID={cfg.run_id}",
+            f"--setenv=PEG_RUN_DATE={cfg.run_date}",
+            f"--setenv=PEG_RUN_MODE={cfg.run_mode}",
+        ]
+    )
+    unit_name = f"fortune-bot-submit-window-post-submit-{cfg.run_id}".lower().replace("_", "-")
+    command = [
+        systemd_run,
+        f"--unit={unit_name}",
+        "--collect",
+        "--property=Type=exec",
+        f"--property=WorkingDirectory={Path(__file__).resolve().parents[3]}",
+        *env_args,
+        sys.executable,
+        "-m",
+        "execution_engine.app.cli.online.main",
+        "run-submit-window-post-submit",
+        "--run-id",
+        cfg.run_id,
+        "--run-date",
+        cfg.run_date,
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except Exception:
+        return False
+    return True
+
+
+def complete_post_submit_monitor(cfg: PegConfig) -> SubmitWindowResult:
+    if not cfg.run_submit_window_manifest_path.exists():
+        raise FileNotFoundError(f"submit-window manifest missing: {cfg.run_submit_window_manifest_path}")
+    manifest = json.loads(cfg.run_submit_window_manifest_path.read_text(encoding="utf-8"))
+    monitor_summary, monitor_error = _run_post_submit_monitor(cfg)
+    final_status = "completed"
+    if str(monitor_summary["post_submit_monitor_status"]) == "failed":
+        final_status = "completed_with_post_submit_failure"
+    manifest.update(monitor_summary)
+    manifest.update(
+        {
+            "generated_at_utc": to_iso(utc_now()),
+            "generated_at_bj": bj_now_iso(),
+            "final_status": final_status,
+            "post_submit_started_at_bj": str(manifest.get("post_submit_started_at_bj") or bj_now_iso()),
+            "post_submit_finished_at_bj": bj_now_iso(),
+        }
+    )
+    _write_manifest(cfg.run_submit_window_manifest_path, manifest)
+    _publish_submit_window_summary(cfg, final_status=final_status, manifest=manifest, monitor_summary=monitor_summary)
+    if monitor_error is not None and cfg.submit_window_fail_on_monitor_error:
+        raise RuntimeError("post-submit monitor failed") from monitor_error
+    return SubmitWindowResult(
+        run_manifest_path=str(cfg.run_submit_window_manifest_path),
+        final_status=final_status,
+        submit_phase_status=str(manifest.get("submit_stage_status") or "completed"),
+        page_count=int(manifest.get("page_count", 0) or 0),
+        expanded_market_count=int(manifest.get("expanded_market_count", 0) or 0),
+        direct_candidate_count=int(manifest.get("direct_candidate_count", 0) or 0),
+        submitted_order_count=int(manifest.get("submitted_order_count", 0) or 0),
+        submit_rejection_count=int(manifest.get("submit_rejection_count", 0) or 0),
+        underfilled_batch_count=int(manifest.get("underfilled_batch_count", 0) or 0),
+        underfilled_batch_avg_size=float(manifest.get("underfilled_batch_avg_size", 0.0) or 0.0),
+        metrics={key: float(value) for key, value in dict(manifest.get("metrics") or {}).items()},
+        post_submit_monitor_status=str(monitor_summary["post_submit_monitor_status"]),
+        post_submit_monitor_manifest_path=str(monitor_summary["post_submit_monitor_manifest_path"]),
+        post_submit_latest_order_count=int(monitor_summary["post_submit_latest_order_count"]),
+        post_submit_open_order_count=int(monitor_summary["post_submit_open_order_count"]),
+        post_submit_fill_count=int(monitor_summary["post_submit_fill_count"]),
+        post_submit_open_position_count=int(monitor_summary["post_submit_open_position_count"]),
+        post_submit_exit_candidate_count=int(monitor_summary["post_submit_exit_candidate_count"]),
+        post_submit_exit_submitted_count=int(monitor_summary["post_submit_exit_submitted_count"]),
+        post_submit_settlement_close_count=int(monitor_summary["post_submit_settlement_close_count"]),
+        post_submit_canceled_exit_order_count=int(monitor_summary["post_submit_canceled_exit_order_count"]),
+        submit_phase_started_at_bj=str(manifest.get("submit_phase_started_at_bj") or ""),
+        submit_phase_finished_at_bj=str(manifest.get("submit_phase_finished_at_bj") or ""),
+        post_submit_started_at_bj=str(manifest.get("post_submit_started_at_bj") or ""),
+        post_submit_finished_at_bj=str(manifest.get("post_submit_finished_at_bj") or ""),
+        pages=[],
+    )
 
 
 def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> SubmitWindowBatchResult:
@@ -681,7 +914,7 @@ def _run_post_submit_monitor(cfg: PegConfig) -> tuple[Dict[str, object], Excepti
     return _monitor_summary_from_result(result), None
 
 
-def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> SubmitWindowResult:
+def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None) -> SubmitWindowResult:
     runtime = build_runtime_container(cfg)
     deferred_writer = DeferredWriter(cfg)
 
@@ -783,6 +1016,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
         deferred_writer.write_report(
             {
                 "generated_at_utc": to_iso(utc_now()),
+                "generated_at_bj": bj_now_iso(),
                 "page_offset": page_result.page_offset,
                 "event_count": page_result.event_count,
                 "expanded_market_count": page_result.expanded_market_count,
@@ -883,15 +1117,20 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             for key, value in sorted(submit_status_counts.items())
         },
     }
+    post_submit_started_at_bj = bj_now_iso()
     monitor_summary, monitor_error = _run_post_submit_monitor(cfg)
+    post_submit_finished_at_bj = bj_now_iso() if cfg.submit_window_run_monitor_after else ""
     final_status = "completed"
     if str(monitor_summary["post_submit_monitor_status"]) == "failed":
         final_status = "completed_with_post_submit_failure"
     manifest = {
         "generated_at_utc": to_iso(utc_now()),
+        "generated_at_bj": bj_now_iso(),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
         "submit_stage_status": "completed",
+        "post_submit_started_at_bj": post_submit_started_at_bj if cfg.submit_window_run_monitor_after else "",
+        "post_submit_finished_at_bj": post_submit_finished_at_bj,
         "funnel": funnel_payload,
         "page_count": int(len(page_results)),
         "expanded_market_count": int(expanded_market_count),
@@ -972,6 +1211,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
     return SubmitWindowResult(
         run_manifest_path=str(cfg.run_submit_window_manifest_path),
         final_status=final_status,
+        submit_phase_status="completed",
         page_count=len(page_results),
         expanded_market_count=expanded_market_count,
         direct_candidate_count=direct_candidate_count,
@@ -990,5 +1230,194 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
         post_submit_exit_submitted_count=int(monitor_summary["post_submit_exit_submitted_count"]),
         post_submit_settlement_close_count=int(monitor_summary["post_submit_settlement_close_count"]),
         post_submit_canceled_exit_order_count=int(monitor_summary["post_submit_canceled_exit_order_count"]),
+        submit_phase_started_at_bj="",
+        submit_phase_finished_at_bj="",
+        post_submit_started_at_bj=post_submit_started_at_bj if cfg.submit_window_run_monitor_after else "",
+        post_submit_finished_at_bj=post_submit_finished_at_bj,
         pages=page_results,
+    )
+
+
+def _rewrite_submit_window_manifest(
+    cfg: PegConfig,
+    *,
+    submit_phase_started_at_bj: str,
+    submit_phase_finished_at_bj: str,
+    post_submit_status: str,
+    post_submit_started_at_bj: str = "",
+    post_submit_finished_at_bj: str = "",
+) -> dict[str, object]:
+    manifest = json.loads(cfg.run_submit_window_manifest_path.read_text(encoding="utf-8"))
+    monitor_summary = _monitor_summary_defaults(enabled=cfg.submit_window_run_monitor_after)
+    for key in monitor_summary:
+        if key in manifest:
+            monitor_summary[key] = manifest[key]
+    manifest.update(
+        {
+            "generated_at_utc": to_iso(utc_now()),
+            "generated_at_bj": bj_now_iso(),
+            "submit_stage_status": "completed",
+            "submit_phase_started_at_bj": submit_phase_started_at_bj,
+            "submit_phase_finished_at_bj": submit_phase_finished_at_bj,
+            "post_submit_started_at_bj": post_submit_started_at_bj,
+            "post_submit_finished_at_bj": post_submit_finished_at_bj,
+            "post_submit_monitor_enabled": cfg.submit_window_run_monitor_after,
+            "post_submit_monitor_status": post_submit_status,
+            "post_submit_monitor_error": "" if post_submit_status == "scheduled" else str(manifest.get("post_submit_monitor_error") or ""),
+        }
+    )
+    if post_submit_status == "scheduled":
+        manifest["final_status"] = "completed_post_submit_scheduled"
+    _write_manifest(cfg.run_submit_window_manifest_path, manifest)
+    _publish_submit_window_summary(
+        cfg,
+        final_status=str(manifest.get("final_status") or "completed"),
+        manifest=manifest,
+        monitor_summary={
+            **monitor_summary,
+            "post_submit_monitor_status": str(manifest.get("post_submit_monitor_status") or post_submit_status),
+        },
+    )
+    return manifest
+
+
+def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> SubmitWindowResult:
+    submit_phase_started_at_bj = bj_now_iso()
+    existing_phase = read_submit_phase(cfg.submit_phase_lock_path)
+    if existing_phase.active:
+        monitor_summary = _monitor_summary_defaults(enabled=cfg.submit_window_run_monitor_after)
+        monitor_summary["post_submit_monitor_status"] = "not_started"
+        monitor_summary["post_submit_monitor_error"] = "previous_submit_phase_active"
+        skipped_manifest = {
+            "generated_at_utc": to_iso(utc_now()),
+            "generated_at_bj": bj_now_iso(),
+            "run_id": cfg.run_id,
+            "run_mode": cfg.run_mode,
+            "submit_stage_status": "skipped_previous_submit_phase_active",
+            "submit_phase_started_at_bj": submit_phase_started_at_bj,
+            "submit_phase_finished_at_bj": submit_phase_started_at_bj,
+            "final_status": "skipped_previous_submit_phase_active",
+            "blocking_submit_phase": existing_phase.payload,
+            "metrics": {},
+            **monitor_summary,
+            "pages": [],
+        }
+        _write_manifest(cfg.run_submit_window_manifest_path, skipped_manifest)
+        _publish_submit_window_summary(
+            cfg,
+            final_status="skipped_previous_submit_phase_active",
+            manifest=skipped_manifest,
+            monitor_summary=monitor_summary,
+        )
+        return SubmitWindowResult(
+            run_manifest_path=str(cfg.run_submit_window_manifest_path),
+            final_status="skipped_previous_submit_phase_active",
+            submit_phase_status="skipped_previous_submit_phase_active",
+            page_count=0,
+            expanded_market_count=0,
+            direct_candidate_count=0,
+            submitted_order_count=0,
+            submit_rejection_count=0,
+            underfilled_batch_count=0,
+            underfilled_batch_avg_size=0.0,
+            metrics={},
+            post_submit_monitor_status="not_started",
+            post_submit_monitor_manifest_path="",
+            post_submit_latest_order_count=0,
+            post_submit_open_order_count=0,
+            post_submit_fill_count=0,
+            post_submit_open_position_count=0,
+            post_submit_exit_candidate_count=0,
+            post_submit_exit_submitted_count=0,
+            post_submit_settlement_close_count=0,
+            post_submit_canceled_exit_order_count=0,
+            submit_phase_started_at_bj=submit_phase_started_at_bj,
+            submit_phase_finished_at_bj=submit_phase_started_at_bj,
+            post_submit_started_at_bj="",
+            post_submit_finished_at_bj="",
+            pages=[],
+        )
+
+    run_cfg = cfg
+    want_async_post_submit = cfg.submit_window_run_monitor_after and cfg.submit_window_async_post_submit
+    if want_async_post_submit:
+        run_cfg = replace(cfg, submit_window_run_monitor_after=False)
+
+    with acquire_submit_phase(cfg.submit_phase_lock_path, run_id=cfg.run_id, run_mode=cfg.run_mode):
+        result = _run_submit_window_sync_impl(run_cfg, max_pages=max_pages)
+    submit_phase_finished_at_bj = bj_now_iso()
+
+    if want_async_post_submit and _spawn_async_post_submit(cfg):
+        _rewrite_submit_window_manifest(
+            cfg,
+            submit_phase_started_at_bj=submit_phase_started_at_bj,
+            submit_phase_finished_at_bj=submit_phase_finished_at_bj,
+            post_submit_status="scheduled",
+            post_submit_started_at_bj=bj_now_iso(),
+            post_submit_finished_at_bj="",
+        )
+        return SubmitWindowResult(
+            run_manifest_path=result.run_manifest_path,
+            final_status="completed_post_submit_scheduled",
+            submit_phase_status="completed",
+            page_count=result.page_count,
+            expanded_market_count=result.expanded_market_count,
+            direct_candidate_count=result.direct_candidate_count,
+            submitted_order_count=result.submitted_order_count,
+            submit_rejection_count=result.submit_rejection_count,
+            underfilled_batch_count=result.underfilled_batch_count,
+            underfilled_batch_avg_size=result.underfilled_batch_avg_size,
+            metrics=result.metrics,
+            post_submit_monitor_status="scheduled",
+            post_submit_monitor_manifest_path="",
+            post_submit_latest_order_count=0,
+            post_submit_open_order_count=0,
+            post_submit_fill_count=0,
+            post_submit_open_position_count=0,
+            post_submit_exit_candidate_count=0,
+            post_submit_exit_submitted_count=0,
+            post_submit_settlement_close_count=0,
+            post_submit_canceled_exit_order_count=0,
+            submit_phase_started_at_bj=submit_phase_started_at_bj,
+            submit_phase_finished_at_bj=submit_phase_finished_at_bj,
+            post_submit_started_at_bj=bj_now_iso(),
+            post_submit_finished_at_bj="",
+            pages=result.pages,
+        )
+
+    manifest = _rewrite_submit_window_manifest(
+        cfg,
+        submit_phase_started_at_bj=submit_phase_started_at_bj,
+        submit_phase_finished_at_bj=submit_phase_finished_at_bj,
+        post_submit_status=result.post_submit_monitor_status,
+        post_submit_started_at_bj=result.post_submit_started_at_bj,
+        post_submit_finished_at_bj=result.post_submit_finished_at_bj,
+    )
+    return SubmitWindowResult(
+        run_manifest_path=result.run_manifest_path,
+        final_status=str(manifest.get("final_status") or result.final_status),
+        submit_phase_status="completed",
+        page_count=result.page_count,
+        expanded_market_count=result.expanded_market_count,
+        direct_candidate_count=result.direct_candidate_count,
+        submitted_order_count=result.submitted_order_count,
+        submit_rejection_count=result.submit_rejection_count,
+        underfilled_batch_count=result.underfilled_batch_count,
+        underfilled_batch_avg_size=result.underfilled_batch_avg_size,
+        metrics=result.metrics,
+        post_submit_monitor_status=result.post_submit_monitor_status,
+        post_submit_monitor_manifest_path=result.post_submit_monitor_manifest_path,
+        post_submit_latest_order_count=result.post_submit_latest_order_count,
+        post_submit_open_order_count=result.post_submit_open_order_count,
+        post_submit_fill_count=result.post_submit_fill_count,
+        post_submit_open_position_count=result.post_submit_open_position_count,
+        post_submit_exit_candidate_count=result.post_submit_exit_candidate_count,
+        post_submit_exit_submitted_count=result.post_submit_exit_submitted_count,
+        post_submit_settlement_close_count=result.post_submit_settlement_close_count,
+        post_submit_canceled_exit_order_count=result.post_submit_canceled_exit_order_count,
+        submit_phase_started_at_bj=submit_phase_started_at_bj,
+        submit_phase_finished_at_bj=submit_phase_finished_at_bj,
+        post_submit_started_at_bj=result.post_submit_started_at_bj,
+        post_submit_finished_at_bj=result.post_submit_finished_at_bj,
+        pages=result.pages,
     )

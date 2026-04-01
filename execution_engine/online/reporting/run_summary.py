@@ -6,7 +6,14 @@ from typing import Any, Dict, Optional
 
 from execution_engine.runtime.config import PegConfig
 from execution_engine.online.reporting.dashboard import write_dashboard
-from execution_engine.online.reporting.summary_io import load_json, read_index, utc_now_iso, write_json, write_jsonl
+from execution_engine.online.reporting.summary_io import (
+    bj_now_summary_iso,
+    load_json,
+    read_index,
+    utc_now_iso,
+    write_json,
+    write_jsonl,
+)
 from execution_engine.online.reporting.summary_metrics import (
     build_counts,
     build_execution_metrics,
@@ -35,6 +42,7 @@ def _build_summary_payload(
         "dry_run": cfg.dry_run,
         "status": status,
         "generated_at_utc": utc_now_iso(),
+        "generated_at_bj": bj_now_summary_iso(),
         "run_dir": str(cfg.data_dir),
         "summary_path": str(cfg.run_summary_path),
         "metrics_path": str(cfg.metrics_path),

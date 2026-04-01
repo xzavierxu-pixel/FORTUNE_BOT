@@ -1,8 +1,8 @@
 [Unit]
-Description=Run Fortune Bot submit-window every hour
+Description=Run Fortune Bot submit-window every 15 minutes
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=*:0/15
 Persistent=true
 Unit=fortune-bot-submit-window.service
 

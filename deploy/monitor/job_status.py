@@ -8,10 +8,17 @@ import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def bj_now() -> str:
+    return datetime.now(BEIJING_TZ).isoformat()
 
 
 def default_state_dir() -> Path:
@@ -48,6 +55,7 @@ def mark_start(state_dir: Path, job: str, run_id: str) -> None:
             "host": socket.gethostname(),
             "last_run_id": run_id,
             "last_start_utc": utc_now(),
+            "last_start_bj": bj_now(),
             "last_status": "running",
             "last_pid": os.getpid(),
         }
@@ -58,19 +66,22 @@ def mark_start(state_dir: Path, job: str, run_id: str) -> None:
 def mark_finish(state_dir: Path, job: str, run_id: str, exit_code: int) -> None:
     path = job_status_path(state_dir, job)
     payload = load_payload(path)
-    finished_at = utc_now()
+    finished_at_utc = utc_now()
+    finished_at_bj = bj_now()
     payload.update(
         {
             "job": job,
             "host": socket.gethostname(),
             "last_run_id": run_id,
-            "last_end_utc": finished_at,
+            "last_end_utc": finished_at_utc,
+            "last_end_bj": finished_at_bj,
             "last_exit_code": int(exit_code),
             "last_status": "success" if int(exit_code) == 0 else "failed",
         }
     )
     if int(exit_code) == 0:
-        payload["last_success_utc"] = finished_at
+        payload["last_success_utc"] = finished_at_utc
+        payload["last_success_bj"] = finished_at_bj
     write_payload(path, payload)
 
 

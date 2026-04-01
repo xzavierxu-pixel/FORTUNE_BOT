@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from datetime import datetime, timezone
 import os
 import re
+
+from execution_engine.shared.time import bj_today_str
 
 BASE_DIR = Path(__file__).resolve().parent
 ENGINE_DIR = BASE_DIR.parent
@@ -42,10 +43,6 @@ def _sanitize_run_component(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
-def _utc_today_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
 def _first_existing_path(candidates: list[Path]) -> Path:
     for candidate in candidates:
         if candidate.exists():
@@ -55,7 +52,8 @@ def _first_existing_path(candidates: list[Path]) -> Path:
 
 def _build_runtime_context() -> dict[str, object]:
     run_id = _sanitize_run_component(_get_env("PEG_RUN_ID", "manual"), "manual")
-    run_date = _sanitize_run_component(_get_env("PEG_RUN_DATE", _utc_today_str()), _utc_today_str())
+    default_run_date = bj_today_str()
+    run_date = _sanitize_run_component(_get_env("PEG_RUN_DATE", default_run_date), default_run_date)
     return {
         "dry_run": _get_bool("PEG_DRY_RUN", True),
         "run_id": run_id,
@@ -168,6 +166,8 @@ class PegConfig:
     run_label_executed_analysis_path: Path
     run_label_opportunity_analysis_path: Path
     run_label_summary_path: Path
+    runtime_state_dir: Path
+    submit_phase_lock_path: Path
 
     # Order sizing and TTL
     initial_bankroll_usdc: float
@@ -272,6 +272,7 @@ class PegConfig:
     submit_window_run_monitor_after: bool
     submit_window_monitor_sleep_sec: int
     submit_window_fail_on_monitor_error: bool
+    submit_window_async_post_submit: bool
 
     def ensure_dirs(self) -> None:
         self.base_data_dir.mkdir(parents=True, exist_ok=True)
@@ -284,6 +285,7 @@ class PegConfig:
         self.shared_positions_dir.mkdir(parents=True, exist_ok=True)
         self.shared_orders_live_dir.mkdir(parents=True, exist_ok=True)
         self.shared_state_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_state_dir.mkdir(parents=True, exist_ok=True)
         self.shared_token_state_dir.mkdir(parents=True, exist_ok=True)
         self.shared_ws_raw_dir.mkdir(parents=True, exist_ok=True)
         self.shared_labels_dir.mkdir(parents=True, exist_ok=True)
@@ -454,6 +456,12 @@ def load_config() -> PegConfig:
         run_label_summary_path=Path(
             _get_env("PEG_RUN_LABEL_SUMMARY_PATH", str(data_dir / "label_analysis" / "summary.json"))
         ),
+        runtime_state_dir=Path(
+            _get_env("PEG_RUNTIME_STATE_DIR", str(shared_state_dir / "runtime"))
+        ),
+        submit_phase_lock_path=Path(
+            _get_env("PEG_SUBMIT_PHASE_LOCK_PATH", str(shared_state_dir / "runtime" / "submit_window_submit_phase.lock"))
+        ),
         initial_bankroll_usdc=_get_float("PEG_INITIAL_BANKROLL_USDC", 100.0),
         max_trade_amount_usdc=_get_float("PEG_MAX_TRADE_AMOUNT_USDC", 5.0),
         order_usdc=_get_float("PEG_ORDER_USDC", 5.0),
@@ -550,6 +558,7 @@ def load_config() -> PegConfig:
         submit_window_run_monitor_after=_get_bool("PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER", True),
         submit_window_monitor_sleep_sec=_get_int("PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC", 0),
         submit_window_fail_on_monitor_error=_get_bool("PEG_SUBMIT_WINDOW_FAIL_ON_MONITOR_ERROR", False),
+        submit_window_async_post_submit=_get_bool("PEG_SUBMIT_WINDOW_ASYNC_POST_SUBMIT", True),
     )
     cfg.ensure_dirs()
     return cfg

@@ -11,7 +11,8 @@
 
 1. `fortune-bot-submit-window.timer`
    运行基于直接翻页的 submit window 主流程。
-   当 `PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER=1` 时，submit 流程内部会自动串联 post-submit order monitoring。
+   当 `PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER=1` 时，会在 submit phase 完成后触发 post-submit order monitoring。
+   当 `PEG_SUBMIT_WINDOW_ASYNC_POST_SUBMIT=1` 且生产机可用 `systemd-run` 时，post-submit 会被拆到独立 transient unit 中执行，不阻塞下一轮 submit phase。
 2. `fortune-bot-label-analysis.timer`
    运行每日标签分析和机会分析。
 3. `fortune-bot-healthcheck.timer`
@@ -21,14 +22,15 @@
 
 ## 定时安排评估
 
-当前定时安排对 AWS Ubuntu 是合理的：
+当前仓库里的定时安排是：
 
-- `submit-window`: `OnCalendar=hourly`
-  这是主交易循环，和当前 direct submit-window 设计一致。
-  当前部署的 `systemd` unit 会额外传入 `--max-pages 300`，所以每小时运行一次，且单次最多抓取 300 页。
+- `submit-window`: `OnCalendar=*:0/15`
+  这表示当前仓库默认是每 15 分钟触发一次 submit phase。
+  当前 `systemd` unit 会额外传入 `--max-pages 300`，所以单次最多抓取 300 页。
+  触发时点是每小时的 `00`、`15`、`30`、`45` 分。
 - `label-analysis`: `OnCalendar=*-*-* 00:10:00`
   作为每日一次的分析任务是合理的。
-  比整点晚 10 分钟，也避免和 submit-window 整点运行正面撞上。
+  比每日零点晚 10 分钟，也避免和整点的 submit-window 触发点正面撞上。
 - `healthcheck`: 每 5 分钟一次
   适合作 heartbeat 和 timer 监控，不会太重，也不会太慢。
 
@@ -37,11 +39,13 @@
 - 服务器时区保持为 `UTC`
 - 上述 timer 按 `UTC` 理解
 - 除非你明确希望所有任务整体平移，否则不要修改服务器时区
+- execution engine、job heartbeat、健康检查邮件中的 operator-facing 时间字段统一按北京时间展示
+- 如保留 UTC 字段，则用于机器兼容或排序，字段名应显式带 `_utc`
 
 当前 heartbeat 阈值也合理：
 
-- `CHECK_SUBMIT_WINDOW_MAX_AGE_SEC=5400`
-  给每小时任务留出执行和延迟缓冲
+- `CHECK_SUBMIT_WINDOW_MAX_AGE_SEC=1800`
+  给 15 分钟任务留出一轮额外缓冲，超过 30 分钟仍无成功 heartbeat 再视为 stale
 - `CHECK_LABEL_ANALYSIS_DAILY_MAX_AGE_SEC=93600`
   给每日任务留出约一天外加缓冲
 
@@ -142,9 +146,10 @@ ALERT_COOLDOWN_SEC=3600
 PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER=1
 PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC=0
 PEG_SUBMIT_WINDOW_FAIL_ON_MONITOR_ERROR=0
+PEG_SUBMIT_WINDOW_ASYNC_POST_SUBMIT=1
 
 CHECK_REQUIRED_UNITS=fortune-bot-submit-window.timer,fortune-bot-label-analysis.timer,fortune-bot-healthcheck.timer
-CHECK_SUBMIT_WINDOW_MAX_AGE_SEC=5400
+CHECK_SUBMIT_WINDOW_MAX_AGE_SEC=1800
 CHECK_LABEL_ANALYSIS_DAILY_MAX_AGE_SEC=93600
 ```
 
