@@ -105,13 +105,16 @@ cd /path/to/polymarket_strategy
 # 1. 获取原始市场数据 (~5-10 分钟)
 python rule_baseline/data_collection/fetch_raw_events.py
 
-# 2. 构建价格快照 (~30-60 分钟，取决于市场数量)
+# 2. 构建市场注释
+python rule_baseline/domain_extractor/build_market_annotations.py
+
+# 3. 构建价格快照 (~30-60 分钟，取决于市场数量)
 python rule_baseline/data_collection/build_snapshots.py
 
-# 3. 挖掘朴素规则 (~2-5 分钟)
+# 4. 挖掘朴素规则 (~2-5 分钟)
 python rule_baseline/training/train_rules_naive_output_rule.py
 
-# 4. 训练 LightGBM Q-Model (~5-10 分钟)
+# 5. 训练 LightGBM Q-Model (~5-10 分钟)
 python rule_baseline/training/train_snapshot_lgbm_v2.py
 
 # 5. 验证模型校准
@@ -297,7 +300,6 @@ EDGE_AB_THRESHOLD = 0.02 # 最小绝对 edge
 |------|------|------|
 | `backtest_execution_parity.py` | **[主要]** Execution parity 回测 | 对齐线上执行逻辑 + Kelly |
 | `backtest_portfolio_qmodel.py` | Q-Model 组合回测 | 更严格的 rule / risk / portfolio 筛选 |
-| `backtest_portfolio_rules_only.py` | 纯规则回测 (无 ML) | 作为 baseline 对比 |
 
 **backtest_execution_parity.py 关键参数**:
 ```python

@@ -28,6 +28,9 @@ That is equivalent to:
 python rule_baseline/workflow/run_pipeline.py --artifact-mode online --skip-backtest --skip-baselines
 ```
 
+The pipeline runs market annotations by default between raw fetch and snapshot build.
+Use `--skip-annotations` only when you intentionally want to reuse an existing annotation artifact.
+
 Hard rule:
 - In `offline`, `test` is evaluation-only. It must never influence rule definition, bin construction, model fitting, or calibration. It is reserved for final diagnostics and backtesting only.
 
@@ -126,6 +129,7 @@ python rule_baseline/training/train_rules_naive_output_rule.py --artifact-mode o
 
 Purpose:
 - Load enriched snapshots
+- Consume the canonical market annotation artifact built earlier in the pipeline
 - Apply rule bins on price and horizon
 - In `offline`, split into train/valid/test and define rule bins from train+valid only
 - In `online`, split into train/valid with the last 20 days as valid and define rule bins from all labeled rows
@@ -223,7 +227,6 @@ Purpose:
 
 Files:
 - `train_rules_naive_output_rule.py`: current main rule trainer
-- `train_rules_naive_output_rule_strict.py`: stricter experimental rule trainer
 - `train_snapshot_model.py`: current main snapshot model trainer
 
 ### `rule_baseline/analysis`
@@ -247,7 +250,7 @@ Purpose:
 
 Files:
 - `backtest_portfolio_qmodel.py`: main portfolio backtest
-- `backtest_portfolio_rules_only.py`: older rules-only backtest path
+- `backtest_execution_parity.py`: execution-parity backtest aligned with the online path
 
 ### `rule_baseline/data_collection`
 
@@ -308,7 +311,5 @@ These files are still real implementations, not compatibility wrappers:
 - `rule_baseline/utils/config.py`
 
 These scripts are not part of the main pipeline, but may still be useful as diagnostics or experiments:
-- `rule_baseline/training/train_rules_naive_output_rule_strict.py`
-- `rule_baseline/backtesting/backtest_portfolio_rules_only.py`
 - `rule_baseline/analysis/analyze_qmodel_trades.py`
 - `rule_baseline/analysis/analyze_raw_markets.py`

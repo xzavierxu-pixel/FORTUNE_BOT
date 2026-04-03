@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date-end", type=str, default=None)
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--skip-fetch", action="store_true")
+    parser.add_argument("--skip-annotations", action="store_true")
     parser.add_argument("--skip-snapshots", action="store_true")
     parser.add_argument("--skip-analysis", action="store_true")
     parser.add_argument("--skip-backtest", action="store_true")
@@ -83,6 +84,10 @@ def main() -> None:
         if args.date_end is not None:
             fetch_cmd.extend(["--date-end", args.date_end])
         run_step("Fetch raw markets", fetch_cmd)
+
+    if not args.skip_annotations:
+        annotation_cmd = [sys.executable, "rule_baseline/domain_extractor/build_market_annotations.py"]
+        run_step("Build market annotations", annotation_cmd)
 
     if not args.skip_snapshots:
         snapshot_cmd = [sys.executable, "rule_baseline/data_collection/build_snapshots.py"]

@@ -35,6 +35,36 @@ RULE_ROLLING_WINDOW_TRADES = 50
 RULE_KILL_THRESHOLD = -0.2
 RULE_COOLDOWN_DAYS = 5
 KELLY_FRACTION = 0.10
+REQUIRED_RULE_COLUMNS = {
+    "group_key",
+    "domain",
+    "category",
+    "market_type",
+    "leaf_id",
+    "price_min",
+    "price_max",
+    "h_min",
+    "h_max",
+    "direction",
+    "q_smooth",
+    "edge_lower_bound_valid",
+    "rule_score",
+    "n_train",
+    "n_valid",
+    "n_test",
+    "n_full",
+    "q_train",
+    "p_train",
+    "edge_train",
+    "edge_std_train",
+    "q_valid",
+    "p_valid",
+    "edge_valid",
+    "edge_std_valid",
+    "q_test",
+    "p_test",
+    "edge_test",
+}
 
 
 @dataclass
@@ -73,12 +103,23 @@ def parse_args() -> argparse.Namespace:
 
 def load_rules(path) -> pd.DataFrame:
     rules = pd.read_csv(path)
+    missing_columns = sorted(REQUIRED_RULE_COLUMNS - set(rules.columns))
+    if missing_columns:
+        raise ValueError(
+            "Rules file does not match the runtime schema. Missing columns: "
+            + ", ".join(missing_columns)
+        )
+
     for column in [
+        "n_train",
         "n_valid",
-        "edge_raw_valid",
+        "n_test",
+        "n_full",
+        "edge_train",
+        "edge_std_train",
+        "edge_valid",
         "edge_std_valid",
-        "edge_sample_trade",
-        "edge_std_trade",
+        "edge_test",
         "rule_score",
         "price_min",
         "price_max",
@@ -86,6 +127,12 @@ def load_rules(path) -> pd.DataFrame:
         "h_max",
         "q_smooth",
         "edge_lower_bound_valid",
+        "q_train",
+        "p_train",
+        "q_valid",
+        "p_valid",
+        "q_test",
+        "p_test",
     ]:
         if column in rules.columns:
             rules[column] = pd.to_numeric(rules[column], errors="coerce")
@@ -157,15 +204,10 @@ def rolling_t_stat(values: list[float]) -> float:
 
 
 def select_top_rules(rules: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
-    edge_column = "edge_raw_valid" if "edge_raw_valid" in rules.columns else "edge_sample_trade_valid"
-    std_column = "edge_std_valid" if "edge_std_valid" in rules.columns else "edge_std_trade_valid"
-    if edge_column not in rules.columns or std_column not in rules.columns:
-        raise ValueError("Rules file does not contain validation-only edge columns required for offline selection.")
-
     mask = (
         (rules["n_valid"] >= cfg.min_rule_valid_n)
-        & (rules[edge_column] >= cfg.min_edge_trade)
-        & (rules[std_column] >= cfg.min_std_trade)
+        & (rules["edge_valid"] >= cfg.min_edge_trade)
+        & (rules["edge_std_valid"] >= cfg.min_std_trade)
     )
     candidates = rules[mask].copy()
     if candidates.empty:
@@ -191,7 +233,7 @@ def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
                 "rule_score",
                 "direction",
                 "q_smooth",
-                "edge_raw_valid",
+                "edge_valid",
                 "edge_std_valid",
                 "edge_lower_bound_valid",
             ]
@@ -261,10 +303,10 @@ def compute_growth_and_direction(candidates: pd.DataFrame, cfg: BacktestConfig) 
     rule_dir = out["rule_direction"].astype(int).values
     trade_value_pred = out["trade_value_pred"].astype(float).values
     confidence_discount = np.ones(len(out), dtype=float)
-    if "edge_lower_bound_valid" in out.columns and "edge_raw_valid" in out.columns:
-        edge_raw = out["edge_raw_valid"].astype(float).replace(0.0, np.nan)
+    if "edge_lower_bound_valid" in out.columns and "edge_valid" in out.columns:
+        edge_valid = out["edge_valid"].astype(float).replace(0.0, np.nan)
         confidence_discount = (
-            out["edge_lower_bound_valid"].astype(float) / edge_raw.abs()
+            out["edge_lower_bound_valid"].astype(float) / edge_valid
         ).clip(lower=0.95, upper=1.0).fillna(0.95).values
 
     edge_prob = q - p

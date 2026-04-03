@@ -18,6 +18,40 @@ MIN_MARKETS_PER_PRICE_BIN = 15
 RULE_BIN_GROUP_COLUMNS = ["domain", "category", "market_type"]
 
 
+def _stage_summary(name: str, df: pd.DataFrame) -> dict:
+    unique_markets = 0
+    if "market_id" in df.columns and not df.empty:
+        unique_markets = int(df["market_id"].astype(str).nunique())
+    return {
+        "stage": name,
+        "snapshot_rows": int(len(df)),
+        "unique_markets": unique_markets,
+    }
+
+
+def _raw_market_summary(name: str, df: pd.DataFrame, reason_column: str | None = None) -> dict:
+    if df.empty:
+        return {
+            "stage": name,
+            "row_count": 0,
+            "unique_markets": 0,
+            "reason_counts": {},
+        }
+
+    market_column = "market_id" if "market_id" in df.columns else "id" if "id" in df.columns else None
+    unique_markets = int(df[market_column].astype(str).nunique()) if market_column else int(len(df))
+    reason_counts: dict[str, int] = {}
+    if reason_column and reason_column in df.columns:
+        reason_counts = df[reason_column].fillna("UNKNOWN").astype(str).value_counts().to_dict()
+
+    return {
+        "stage": name,
+        "row_count": int(len(df)),
+        "unique_markets": unique_markets,
+        "reason_counts": {str(key): int(value) for key, value in reason_counts.items()},
+    }
+
+
 def load_snapshots(path: Path | None = None) -> pd.DataFrame:
     target = path or config.SNAPSHOTS_PATH
     if not target.exists():
@@ -201,7 +235,7 @@ def _filter_tradable_price_range(
     min_price: float = DEFAULT_PRICE_MIN,
     max_price: float = DEFAULT_PRICE_MAX,
 ) -> pd.DataFrame:
-    return df[df["price"].gt(min_price) & df["price"].lt(max_price)].copy()
+    return df[df["price"].ge(min_price) & df["price"].le(max_price)].copy()
 
 
 def _select_price_bin_step(
@@ -287,7 +321,7 @@ def build_snapshot_base(
     out["duration_below_min_horizon_flag"] = out["market_duration_hours"] < min(config.HORIZONS)
     out["delta_hours_exceeded_flag"] = out["delta_hours"] > config.MAX_ALLOWED_RESOLVE_DELTA_HOURS
     out["delta_hours_bucket"] = out["delta_hours"].fillna(999.0).round(2).clip(lower=0.0, upper=999.0)
-    out["price_in_range_flag"] = out["price"].between(min_price, max_price, inclusive="left")
+    out["price_in_range_flag"] = out["price"].between(min_price, max_price, inclusive="both")
     out["quality_pass"] = out["price_in_range_flag"].fillna(False)
     out["snapshot_quality_score"] = (
         1.0
@@ -384,16 +418,58 @@ def prepare_rule_training_frame(
     min_price: float = DEFAULT_PRICE_MIN,
     max_price: float = DEFAULT_PRICE_MAX,
     price_bin_step: float = DEFAULT_PRICE_BIN_STEP,
-) -> tuple[pd.DataFrame, TemporalSplit]:
-    snapshots = load_research_snapshots(
+) -> tuple[pd.DataFrame, TemporalSplit, dict]:
+    snapshots_raw = load_snapshots(config.SNAPSHOTS_PATH)
+    raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
+    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    raw_quarantine = pd.DataFrame()
+    if config.RAW_MARKET_QUARANTINE_PATH.exists():
+        raw_quarantine = pd.read_csv(config.RAW_MARKET_QUARANTINE_PATH, low_memory=False)
+
+    if max_rows is not None:
+        snapshots_raw = snapshots_raw.sort_values("closedTime").tail(max_rows).copy()
+
+    if recent_days is not None and recent_days > 0:
+        cutoff = snapshots_raw["closedTime"].max() - pd.Timedelta(days=recent_days)
+        snapshots_raw = snapshots_raw[snapshots_raw["closedTime"] >= cutoff].copy()
+
+    snapshots = build_snapshot_base(
+        snapshots=snapshots_raw,
+        raw_markets=raw_markets,
+        market_annotations=market_annotations,
         min_price=min_price,
         max_price=max_price,
-        max_rows=max_rows,
-        recent_days=recent_days,
     )
+    raw_seen_rows = int(len(raw_markets) + len(raw_quarantine))
+    raw_seen_unique_markets = int(
+        pd.concat(
+            [
+                raw_markets["market_id"].astype(str) if "market_id" in raw_markets.columns else pd.Series(dtype="object"),
+                raw_quarantine["market_id"].astype(str) if "market_id" in raw_quarantine.columns else pd.Series(dtype="object"),
+            ],
+            ignore_index=True,
+        ).nunique()
+    )
+
+    funnel_summary = {
+        "raw_market_funnel": [
+            {
+                "stage": "raw_markets_seen",
+                "row_count": raw_seen_rows,
+                "unique_markets": raw_seen_unique_markets,
+                "reason_counts": {},
+            },
+            _raw_market_summary("after_raw_filter", raw_markets),
+            _raw_market_summary("raw_markets_quarantine", raw_quarantine, reason_column="reject_reason"),
+        ],
+        "snapshot_funnel": [],
+    }
+    funnel_summary["snapshot_funnel"].append(_stage_summary("snapshots_loaded", snapshots_raw))
+    funnel_summary["snapshot_funnel"].append(_stage_summary("after_price_range", snapshots))
     print(f"[INFO] Snapshot rows before quality_pass filter: {len(snapshots)}")
     snapshots = snapshots[snapshots["quality_pass"]].copy()
     print(f"[INFO] Snapshot rows after quality_pass filter: {len(snapshots)}")
+    funnel_summary["snapshot_funnel"].append(_stage_summary("after_quality_pass", snapshots))
     split = compute_artifact_split(
         snapshots,
         artifact_mode=artifact_mode,
@@ -404,6 +480,7 @@ def prepare_rule_training_frame(
     snapshots = assign_dataset_split(snapshots, split, date_col="closedTime")
     allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
+    funnel_summary["snapshot_funnel"].append(_stage_summary("after_dataset_split", snapshots))
     bin_source = snapshots.copy() if artifact_mode == "online" else snapshots[snapshots["dataset_split"].isin(["train", "valid"])].copy()
     snapshots = build_rule_bins(
         snapshots,
@@ -412,7 +489,10 @@ def prepare_rule_training_frame(
         min_price=min_price,
         max_price=max_price,
     )
-    return snapshots, split
+    funnel_summary["snapshot_funnel"].append(
+        _stage_summary("after_rule_bins_with_train_valid_reference", snapshots)
+    )
+    return snapshots, split, funnel_summary
 
 
 def apply_earliest_market_dedup(

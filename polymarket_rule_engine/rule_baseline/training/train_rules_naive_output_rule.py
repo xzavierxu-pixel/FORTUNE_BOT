@@ -22,6 +22,114 @@ TRAIN_PRICE_MAX = 0.8
 RULE_PRICE_BIN_STEP = 0.1
 
 GROUP_COLUMNS = ["domain", "category", "market_type", "price_bin", "horizon_bin"]
+RULE_SCHEMA_COLUMNS = [
+    "group_key",
+    "domain",
+    "category",
+    "market_type",
+    "leaf_id",
+    "price_min",
+    "price_max",
+    "h_min",
+    "h_max",
+    "direction",
+    "q_smooth",
+    "edge_lower_bound_valid",
+    "rule_score",
+    "n_train",
+    "n_valid",
+    "n_test",
+    "n_full",
+    "q_train",
+    "p_train",
+    "edge_train",
+    "edge_std_train",
+    "q_valid",
+    "p_valid",
+    "edge_valid",
+    "edge_std_valid",
+    "q_test",
+    "p_test",
+    "edge_test",
+]
+
+
+def summarize_rule_selection(
+    snapshots_df: pd.DataFrame,
+    report_df: pd.DataFrame,
+    rules_df: pd.DataFrame,
+) -> dict:
+    if snapshots_df.empty:
+        return {
+            "selected_rule_count": int(len(rules_df)),
+            "rule_bucket_status_counts": {},
+            "selection_status_market_impact": [],
+            "after_rule_selection": {
+                "snapshot_rows": 0,
+                "unique_markets": 0,
+            },
+        }
+
+    bucket_columns = GROUP_COLUMNS.copy()
+    snapshot_status_df = snapshots_df.merge(
+        report_df[bucket_columns + ["selection_status"]],
+        on=bucket_columns,
+        how="left",
+    )
+    snapshot_status_df["selection_status"] = snapshot_status_df["selection_status"].fillna("missing_rule_status")
+
+    status_market_impact: list[dict] = []
+    status_counts = snapshot_status_df["selection_status"].value_counts().to_dict()
+    total_snapshot_rows = int(len(snapshots_df))
+    total_unique_markets = int(snapshots_df["market_id"].astype(str).nunique())
+    for status, snapshot_rows in status_counts.items():
+        status_slice = snapshot_status_df[snapshot_status_df["selection_status"] == status]
+        unique_markets = int(status_slice["market_id"].astype(str).nunique())
+        status_market_impact.append(
+            {
+                "selection_status": str(status),
+                "snapshot_rows": int(snapshot_rows),
+                "unique_markets": unique_markets,
+                "snapshot_rows_delta": int(snapshot_rows) - total_snapshot_rows,
+                "unique_markets_delta": unique_markets - total_unique_markets,
+            }
+        )
+
+    selected_snapshots = snapshot_status_df[snapshot_status_df["selection_status"] == "selected"].copy()
+    return {
+        "selected_rule_count": int(len(rules_df)),
+        "rule_bucket_status_counts": {
+            str(key): int(value) for key, value in report_df["selection_status"].value_counts().to_dict().items()
+        }
+        if not report_df.empty
+        else {},
+        "selection_status_market_impact": sorted(
+            status_market_impact,
+            key=lambda item: (item["selection_status"] != "selected", -item["snapshot_rows"], item["selection_status"]),
+        ),
+        "after_rule_selection": {
+            "snapshot_rows": int(len(selected_snapshots)),
+            "unique_markets": int(selected_snapshots["market_id"].astype(str).nunique()),
+        },
+    }
+
+
+def with_stage_deltas(stages: list[dict]) -> list[dict]:
+    enriched: list[dict] = []
+    previous_snapshots: int | None = None
+    previous_markets: int | None = None
+
+    for stage in stages:
+        current = dict(stage)
+        snapshot_rows = int(current.get("snapshot_rows", 0))
+        unique_markets = int(current.get("unique_markets", 0))
+        current["snapshot_rows_delta"] = None if previous_snapshots is None else snapshot_rows - previous_snapshots
+        current["unique_markets_delta"] = None if previous_markets is None else unique_markets - previous_markets
+        enriched.append(current)
+        previous_snapshots = snapshot_rows
+        previous_markets = unique_markets
+
+    return enriched
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,30 +204,16 @@ def wilson_interval(successes: float, n_obs: float, z_value: float = 1.96) -> tu
     return max(0.0, center - radius), min(1.0, center + radius)
 
 
-def summarize_directional_metrics(q_value: float, p_mean: float, edge_raw: float, edge_std: float, direction: int) -> dict[str, float]:
-    if direction >= 0:
-        q_trade = q_value
-        p_trade = p_mean
-        edge_net_trade = q_value - p_mean
-        edge_sample_trade = edge_raw
-        edge_std_trade = edge_std
-        roi_trade = edge_raw / max(p_mean, 1e-6)
-    else:
-        q_trade = 1.0 - q_value
-        p_trade = 1.0 - p_mean
-        edge_net_trade = p_mean - q_value
-        edge_sample_trade = -edge_raw
-        edge_std_trade = -edge_std
-        roi_trade = -edge_raw / max(1.0 - p_mean, 1e-6)
+def direction_adjusted_edge(q_value: float, p_mean: float, direction: int) -> float:
+    return float(direction * (q_value - p_mean))
 
-    return {
-        "q_trade": float(q_trade),
-        "p_trade": float(p_trade),
-        "edge_net_trade": float(edge_net_trade),
-        "edge_sample_trade": float(edge_sample_trade),
-        "edge_std_trade": float(edge_std_trade),
-        "roi_trade": float(roi_trade),
-    }
+
+def direction_adjusted_stat(value: float, direction: int) -> float:
+    return float(direction * value)
+
+
+def trade_price_for_direction(p_mean: float, direction: int) -> float:
+    return float(p_mean if direction >= 0 else 1.0 - p_mean)
 
 
 def lower_bound_sortino(edge_lower_bound: float, q_trade_lower: float, p_trade: float, eps: float = 1e-6) -> float:
@@ -162,58 +256,46 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
 
     q_train = wins_train / n_train
     p_train = get_metric(row, "train", "p_mean")
-    edge_train = q_train - p_train
+    edge_train_raw = q_train - p_train
+    edge_std_train_raw = get_metric(row, "train", "edge_std_mean")
 
     q_valid = wins_valid / n_valid
     p_valid = get_metric(row, "valid", "p_mean")
-    edge_valid = q_valid - p_valid
-    edge_raw_valid = get_metric(row, "valid", "edge_raw_mean")
-    edge_std_valid = get_metric(row, "valid", "edge_std_mean")
+    edge_valid_raw = q_valid - p_valid
+    edge_std_valid_raw = get_metric(row, "valid", "edge_std_mean")
 
-    sign_train = edge_sign(edge_train)
-    sign_valid = edge_sign(edge_valid)
+    sign_train = edge_sign(edge_train_raw)
+    sign_valid = edge_sign(edge_valid_raw)
     if sign_train == 0 or sign_valid == 0:
         return {}, "ambiguous_direction"
     if sign_train != sign_valid:
         return {}, "train_valid_direction_mismatch"
 
     q_test = np.nan
+    p_test = np.nan
     edge_test = np.nan
     n_test = get_metric(row, "test", "n")
     if np.isfinite(n_test) and n_test > 0:
         q_test = get_metric(row, "test", "wins") / n_test
-        edge_test = q_test - get_metric(row, "test", "p_mean")
+        p_test = get_metric(row, "test", "p_mean")
 
     direction = sign_train
     estimation_suffix = "all" if artifact_mode == "online" else "train"
     wins_est = wins_all if estimation_suffix == "all" else wins_train
     n_est = n_all if estimation_suffix == "all" else n_train
     q_est = wins_est / n_est
-    p_est = get_metric(row, estimation_suffix, "p_mean")
-    edge_est = q_est - p_est
-    edge_raw_est = get_metric(row, estimation_suffix, "edge_raw_mean")
-    edge_std_est = get_metric(row, estimation_suffix, "edge_std_mean")
 
     price_label = str(row["price_bin"])
     horizon_label = str(row["horizon_bin"])
     group_key = f"{row['domain']}|{row['category']}|{row['market_type']}"
     leaf_id = stable_leaf_id(group_key, price_label, horizon_label)
     price_min, price_max, horizon_min, horizon_max = parse_bounds(price_label, horizon_label)
-
-    directional = summarize_directional_metrics(
-        q_value=q_est,
-        p_mean=p_est,
-        edge_raw=edge_raw_est,
-        edge_std=edge_std_est,
-        direction=direction,
-    )
-    directional_valid = summarize_directional_metrics(
-        q_value=q_valid,
-        p_mean=p_valid,
-        edge_raw=edge_raw_valid,
-        edge_std=edge_std_valid,
-        direction=direction,
-    )
+    edge_train = direction_adjusted_edge(q_train, p_train, direction)
+    edge_std_train = direction_adjusted_stat(edge_std_train_raw, direction)
+    edge_valid = direction_adjusted_edge(q_valid, p_valid, direction)
+    edge_std_valid = direction_adjusted_stat(edge_std_valid_raw, direction)
+    if np.isfinite(q_test) and np.isfinite(p_test):
+        edge_test = direction_adjusted_edge(q_test, p_test, direction)
 
     q_valid_lower, q_valid_upper = wilson_interval(wins_valid, n_valid)
     if direction >= 0:
@@ -230,7 +312,7 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
     rule_score = lower_bound_sortino(
         edge_lower_bound=edge_lower_bound_valid,
         q_trade_lower=q_trade_lower_valid,
-        p_trade=directional_valid["p_trade"],
+        p_trade=trade_price_for_direction(p_valid, direction),
     )
 
     rule = {
@@ -239,53 +321,30 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         "category": row["category"],
         "market_type": row["market_type"],
         "leaf_id": leaf_id,
-        "price_bin": price_label,
-        "horizon_bin": horizon_label,
         "price_min": price_min,
         "price_max": price_max,
         "h_min": horizon_min,
         "h_max": horizon_max,
-        "rule_bounds": json.dumps(
-            {
-                "price_min": price_min,
-                "price_max": price_max,
-                "horizon_min": horizon_min,
-                "horizon_max": horizon_max,
-            }
-        ),
         "direction": int(direction),
+        "q_smooth": float(q_est),
+        "edge_lower_bound_valid": float(edge_lower_bound_valid),
+        "rule_score": float(rule_score),
         "n_train": int(n_train),
         "n_valid": int(n_valid),
         "n_test": int(n_test) if np.isfinite(n_test) else 0,
         "n_full": int(n_all),
-        "q_smooth": float(q_est),
-        "q_raw_est": float(q_est),
-        "prior_mean": np.nan,
-        "p_mean": float(p_est),
-        "edge_net": float(edge_est),
-        "edge_sample": float(edge_raw_est),
-        "edge_std": float(edge_std_est),
-        "roi": float(directional["roi_trade"]),
         "q_train": float(q_train),
-        "q_train_raw": float(q_train),
         "p_train": float(p_train),
         "edge_train": float(edge_train),
+        "edge_std_train": float(edge_std_train),
         "q_valid": float(q_valid),
         "p_valid": float(p_valid),
         "edge_valid": float(edge_valid),
-        "edge_raw_valid": float(edge_raw_valid),
         "edge_std_valid": float(edge_std_valid),
-        "edge_lower_bound_valid": float(edge_lower_bound_valid),
-        "p_value_valid": np.nan,
-        "p_value_valid_adj": np.nan,
         "q_test": float(q_test) if np.isfinite(q_test) else np.nan,
+        "p_test": float(p_test) if np.isfinite(p_test) else np.nan,
         "edge_test": float(edge_test) if np.isfinite(edge_test) else np.nan,
-        "rule_score": float(rule_score),
-        "estimation_source": estimation_suffix,
-        "selection_status": "selected",
     }
-    rule.update(directional)
-    rule.update({f"{key}_valid": value for key, value in directional_valid.items()})
     return rule, "selected"
 
 
@@ -312,6 +371,7 @@ def build_rules(df: pd.DataFrame, artifact_mode: str) -> tuple[pd.DataFrame, pd.
     rules_df = pd.DataFrame(selected_rules)
     if not rules_df.empty:
         rules_df = rules_df.sort_values("rule_score", ascending=False).reset_index(drop=True)
+        rules_df = rules_df.reindex(columns=RULE_SCHEMA_COLUMNS)
 
     if not report_df.empty:
         report_df = report_df.sort_values(
@@ -323,44 +383,14 @@ def build_rules(df: pd.DataFrame, artifact_mode: str) -> tuple[pd.DataFrame, pd.
 
 
 def empty_rules_frame() -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=[
-            "group_key",
-            "domain",
-            "category",
-            "market_type",
-            "leaf_id",
-            "price_min",
-            "price_max",
-            "h_min",
-            "h_max",
-            "n_train",
-            "n_valid",
-            "n_test",
-            "n_full",
-            "q_smooth",
-            "prior_mean",
-            "p_mean",
-            "edge_net",
-            "edge_sample_trade",
-            "edge_std_trade",
-            "edge_raw_valid",
-            "edge_std_valid",
-            "edge_lower_bound_valid",
-            "p_value_valid",
-            "p_value_valid_adj",
-            "rule_score",
-            "direction",
-            "rule_bounds",
-        ]
-    )
+    return pd.DataFrame(columns=RULE_SCHEMA_COLUMNS)
 
 
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
 
-    df, split = prepare_rule_training_frame(
+    df, split, funnel_summary = prepare_rule_training_frame(
         artifact_mode=args.artifact_mode,
         max_rows=args.max_rows,
         recent_days=args.recent_days,
@@ -371,6 +401,10 @@ def main() -> None:
         price_bin_step=RULE_PRICE_BIN_STEP,
     )
     rules_df, report_df = build_rules(df, args.artifact_mode)
+    rule_selection_summary = summarize_rule_selection(df, report_df, rules_df)
+    snapshot_funnel = with_stage_deltas(
+        funnel_summary["snapshot_funnel"] + [{"stage": "after_rule_selection", **rule_selection_summary["after_rule_selection"]}]
+    )
 
     if rules_df.empty:
         rules_df = empty_rules_frame()
@@ -406,10 +440,26 @@ def main() -> None:
             },
         },
     )
+    write_json(
+        artifact_paths.rule_funnel_summary_path,
+        {
+            "artifact_mode": args.artifact_mode,
+            "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+            "boundaries": split.to_dict(),
+            "raw_market_funnel": funnel_summary["raw_market_funnel"],
+            "snapshot_funnel": snapshot_funnel,
+            "rule_selection": {
+                "selected_rule_count": rule_selection_summary["selected_rule_count"],
+                "rule_bucket_status_counts": rule_selection_summary["rule_bucket_status_counts"],
+                "selection_status_market_impact": rule_selection_summary["selection_status_market_impact"],
+            },
+        },
+    )
 
     print(f"[INFO] Saved {len(rules_df)} rules to {artifact_paths.rules_path}")
     print(f"[INFO] Saved full rule report to {artifact_paths.rule_report_path}")
     print(f"[INFO] Saved split summary to {artifact_paths.split_summary_path}")
+    print(f"[INFO] Saved rule funnel summary to {artifact_paths.rule_funnel_summary_path}")
 
 
 if __name__ == "__main__":

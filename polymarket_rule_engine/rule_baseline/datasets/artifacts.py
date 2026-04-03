@@ -19,6 +19,7 @@ class ArtifactPaths:
     backtest_dir: Path
     analysis_dir: Path
     metadata_dir: Path
+    audit_dir: Path
     naive_rules_dir: Path
     rules_path: Path
     rule_report_path: Path
@@ -29,6 +30,7 @@ class ArtifactPaths:
     split_summary_path: Path
     rule_training_summary_path: Path
     model_training_summary_path: Path
+    rule_funnel_summary_path: Path
 
     def ensure_dirs(self) -> None:
         for path in [
@@ -39,6 +41,7 @@ class ArtifactPaths:
             self.backtest_dir,
             self.analysis_dir,
             self.metadata_dir,
+            self.audit_dir,
             self.naive_rules_dir,
         ]:
             path.mkdir(parents=True, exist_ok=True)
@@ -59,6 +62,7 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         backtest_dir=root / "backtesting",
         analysis_dir=root / "analysis",
         metadata_dir=root / "metadata",
+        audit_dir=root / "audit",
         naive_rules_dir=root / "naive_rules",
         rules_path=root / "edge" / "trading_rules.csv",
         rule_report_path=root / "naive_rules" / "naive_all_leaves_report.csv",
@@ -69,6 +73,7 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         split_summary_path=root / "metadata" / "split_summary.json",
         rule_training_summary_path=root / "metadata" / "rule_training_summary.json",
         model_training_summary_path=root / "metadata" / "model_training_summary.json",
+        rule_funnel_summary_path=root / "audit" / "rule_funnel_summary.json",
     )
     paths.ensure_dirs()
     return paths
