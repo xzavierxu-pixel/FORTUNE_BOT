@@ -61,7 +61,7 @@ def match_rules_to_snapshots(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd
                 "price_max",
                 "h_min",
                 "h_max",
-                "edge_valid",
+                "edge_full",
                 "direction",
             ]
         ],
@@ -118,7 +118,7 @@ def compute_rule_metrics(df: pd.DataFrame) -> pd.DataFrame:
         alpha_ratio = cc / max(contrarian_n, 1) if contrarian_n else np.nan
         weighted_score = (2 * cc + sc - sw - 2 * cw) / len(subset)
         direction = int(subset["direction"].iloc[0])
-        edge = subset["edge_valid"].iloc[0]
+        edge = subset["edge_full"].iloc[0]
         actual_edge = (subset["direction"].astype(float) * (subset["y"] - subset["price"])).mean()
         fee = config.FEE_RATE
         pnl = (

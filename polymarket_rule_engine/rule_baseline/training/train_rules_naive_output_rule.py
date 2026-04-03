@@ -13,6 +13,7 @@ import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
 from rule_baseline.datasets.snapshots import prepare_rule_training_frame
+from rule_baseline.utils import config
 
 MIN_GROUP_ROWS = 20
 MIN_TRAIN_ROWS = 15
@@ -33,24 +34,13 @@ RULE_SCHEMA_COLUMNS = [
     "h_min",
     "h_max",
     "direction",
-    "q_smooth",
-    "edge_lower_bound_valid",
+    "q_full",
+    "p_full",
+    "edge_full",
+    "edge_std_full",
+    "edge_lower_bound_full",
     "rule_score",
-    "n_train",
-    "n_valid",
-    "n_test",
     "n_full",
-    "q_train",
-    "p_train",
-    "edge_train",
-    "edge_std_train",
-    "q_valid",
-    "p_valid",
-    "edge_valid",
-    "edge_std_valid",
-    "q_test",
-    "p_test",
-    "edge_test",
 ]
 
 
@@ -241,7 +231,75 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
     n_train = get_metric(row, "train", "n")
     n_valid = get_metric(row, "valid", "n")
     n_all = get_metric(row, "all", "n")
-    n_definition = n_all if artifact_mode == "online" else n_train + n_valid
+    wins_all = get_metric(row, "all", "wins")
+    p_all = get_metric(row, "all", "p_mean")
+    edge_std_all_raw = get_metric(row, "all", "edge_std_mean")
+
+    if artifact_mode == "offline":
+        if not np.isfinite(n_all) or n_all < MIN_GROUP_ROWS:
+            return {}, "insufficient_definition_rows"
+
+        q_all = wins_all / n_all
+        edge_all_raw = q_all - p_all
+        sign_all = edge_sign(edge_all_raw)
+        if sign_all == 0:
+            return {}, "ambiguous_direction"
+
+        direction = sign_all
+        price_label = str(row["price_bin"])
+        horizon_label = str(row["horizon_bin"])
+        group_key = f"{row['domain']}|{row['category']}|{row['market_type']}"
+        leaf_id = stable_leaf_id(group_key, price_label, horizon_label)
+        price_min, price_max, horizon_min, horizon_max = parse_bounds(price_label, horizon_label)
+        edge_all = direction_adjusted_edge(q_all, p_all, direction)
+        edge_std_all = direction_adjusted_stat(edge_std_all_raw, direction)
+
+        q_all_lower, q_all_upper = wilson_interval(wins_all, n_all)
+        if direction >= 0:
+            edge_lower_bound_valid = q_all_lower - p_all
+            q_trade_lower = q_all_lower
+        else:
+            edge_lower_bound_valid = p_all - q_all_upper
+            q_trade_lower = 1.0 - q_all_upper
+
+        if edge_lower_bound_valid < config.MIN_RULE_EDGE_LOWER_BOUND_FULL:
+            return {}, "insufficient_edge_lower_bound_all"
+
+        rule_score = float(edge_lower_bound_valid)
+
+        q_test = np.nan
+        p_test = np.nan
+        edge_test = np.nan
+        if np.isfinite(get_metric(row, "test", "n")) and get_metric(row, "test", "n") > 0:
+            n_test = get_metric(row, "test", "n")
+            q_test = get_metric(row, "test", "wins") / n_test
+            p_test = get_metric(row, "test", "p_mean")
+            edge_test = direction_adjusted_edge(q_test, p_test, direction)
+        else:
+            n_test = 0
+
+        rule = {
+            "group_key": group_key,
+            "domain": row["domain"],
+            "category": row["category"],
+            "market_type": row["market_type"],
+            "leaf_id": leaf_id,
+            "price_min": price_min,
+            "price_max": price_max,
+            "h_min": horizon_min,
+            "h_max": horizon_max,
+            "direction": int(direction),
+            "q_full": float(q_all),
+            "p_full": float(p_all),
+            "edge_full": float(edge_all),
+            "edge_std_full": float(edge_std_all),
+            "edge_lower_bound_full": float(edge_lower_bound_valid),
+            "rule_score": float(rule_score),
+            "n_full": int(n_all),
+        }
+        return rule, "selected"
+
+    n_definition = n_all
 
     if not np.isfinite(n_definition) or n_definition < MIN_GROUP_ROWS:
         return {}, "insufficient_definition_rows"
@@ -252,8 +310,6 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
 
     wins_train = get_metric(row, "train", "wins")
     wins_valid = get_metric(row, "valid", "wins")
-    wins_all = get_metric(row, "all", "wins")
-
     q_train = wins_train / n_train
     p_train = get_metric(row, "train", "p_mean")
     edge_train_raw = q_train - p_train
@@ -280,7 +336,7 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         p_test = get_metric(row, "test", "p_mean")
 
     direction = sign_train
-    estimation_suffix = "all" if artifact_mode == "online" else "train"
+    estimation_suffix = "all"
     wins_est = wins_all if estimation_suffix == "all" else wins_train
     n_est = n_all if estimation_suffix == "all" else n_train
     q_est = wins_est / n_est
@@ -305,15 +361,11 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         edge_lower_bound_valid = p_valid - q_valid_upper
         q_trade_lower_valid = 1.0 - q_valid_upper
 
-    if edge_lower_bound_valid <= 0:
-        return {}, "nonpositive_edge_lower_bound_valid"
+    if edge_lower_bound_valid < config.MIN_RULE_EDGE_LOWER_BOUND_FULL:
+        return {}, "insufficient_edge_lower_bound_valid"
 
     # Score rules with the conservative Wilson lower-bound edge and binary-contract Sortino.
-    rule_score = lower_bound_sortino(
-        edge_lower_bound=edge_lower_bound_valid,
-        q_trade_lower=q_trade_lower_valid,
-        p_trade=trade_price_for_direction(p_valid, direction),
-    )
+    rule_score = float(edge_lower_bound_valid)
 
     rule = {
         "group_key": group_key,
@@ -326,24 +378,17 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         "h_min": horizon_min,
         "h_max": horizon_max,
         "direction": int(direction),
-        "q_smooth": float(q_est),
-        "edge_lower_bound_valid": float(edge_lower_bound_valid),
+        "q_full": float(q_est),
+        "p_full": float(get_metric(row, "all", "p_mean")),
+        "edge_full": float(direction_adjusted_edge(get_metric(row, "all", "wins") / n_all, get_metric(row, "all", "p_mean"), direction)),
+        "edge_std_full": float(direction_adjusted_stat(get_metric(row, "all", "edge_std_mean"), direction)),
+        "edge_lower_bound_full": float(
+            (wilson_interval(wins_all, n_all)[0] - get_metric(row, "all", "p_mean"))
+            if direction >= 0
+            else (get_metric(row, "all", "p_mean") - wilson_interval(wins_all, n_all)[1])
+        ),
         "rule_score": float(rule_score),
-        "n_train": int(n_train),
-        "n_valid": int(n_valid),
-        "n_test": int(n_test) if np.isfinite(n_test) else 0,
         "n_full": int(n_all),
-        "q_train": float(q_train),
-        "p_train": float(p_train),
-        "edge_train": float(edge_train),
-        "edge_std_train": float(edge_std_train),
-        "q_valid": float(q_valid),
-        "p_valid": float(p_valid),
-        "edge_valid": float(edge_valid),
-        "edge_std_valid": float(edge_std_valid),
-        "q_test": float(q_test) if np.isfinite(q_test) else np.nan,
-        "p_test": float(p_test) if np.isfinite(p_test) else np.nan,
-        "edge_test": float(edge_test) if np.isfinite(edge_test) else np.nan,
     }
     return rule, "selected"
 
@@ -389,6 +434,7 @@ def empty_rules_frame() -> pd.DataFrame:
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
+    rule_training_mode = "full_fit_all_data" if args.artifact_mode == "offline" else "train_valid_gated"
 
     df, split, funnel_summary = prepare_rule_training_frame(
         artifact_mode=args.artifact_mode,
@@ -434,6 +480,7 @@ def main() -> None:
             "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
             "method": {
                 "estimator": "raw_frequency",
+                "rule_training_mode": rule_training_mode,
                 "bayesian_smoothing": False,
                 "prior_mean": False,
                 "benjamini_hochberg": False,
@@ -444,6 +491,7 @@ def main() -> None:
         artifact_paths.rule_funnel_summary_path,
         {
             "artifact_mode": args.artifact_mode,
+            "rule_training_mode": rule_training_mode,
             "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
             "boundaries": split.to_dict(),
             "raw_market_funnel": funnel_summary["raw_market_funnel"],

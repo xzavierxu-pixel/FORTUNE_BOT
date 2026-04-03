@@ -46,24 +46,13 @@ REQUIRED_RULE_COLUMNS = {
     "h_min",
     "h_max",
     "direction",
-    "q_smooth",
-    "edge_lower_bound_valid",
+    "q_full",
+    "p_full",
+    "edge_full",
+    "edge_std_full",
+    "edge_lower_bound_full",
     "rule_score",
-    "n_train",
-    "n_valid",
-    "n_test",
     "n_full",
-    "q_train",
-    "p_train",
-    "edge_train",
-    "edge_std_train",
-    "q_valid",
-    "p_valid",
-    "edge_valid",
-    "edge_std_valid",
-    "q_test",
-    "p_test",
-    "edge_test",
 }
 
 
@@ -111,28 +100,17 @@ def load_rules(path) -> pd.DataFrame:
         )
 
     for column in [
-        "n_train",
-        "n_valid",
-        "n_test",
         "n_full",
-        "edge_train",
-        "edge_std_train",
-        "edge_valid",
-        "edge_std_valid",
-        "edge_test",
+        "edge_full",
+        "edge_std_full",
         "rule_score",
         "price_min",
         "price_max",
         "h_min",
         "h_max",
-        "q_smooth",
-        "edge_lower_bound_valid",
-        "q_train",
-        "p_train",
-        "q_valid",
-        "p_valid",
-        "q_test",
-        "p_test",
+        "q_full",
+        "p_full",
+        "edge_lower_bound_full",
     ]:
         if column in rules.columns:
             rules[column] = pd.to_numeric(rules[column], errors="coerce")
@@ -171,18 +149,18 @@ def infer_q_from_trade_value(candidates: pd.DataFrame, trade_value_pred: np.ndar
 
 
 def derive_domain_whitelist(rules: pd.DataFrame) -> set[str] | None:
-    if rules.empty or "edge_lower_bound_valid" not in rules.columns:
+    if rules.empty or "edge_lower_bound_full" not in rules.columns:
         return None
 
     grouped = (
         rules.assign(
-            weighted_edge_component=rules["edge_lower_bound_valid"].fillna(0.0)
-            * rules["n_valid"].clip(lower=1).fillna(1.0)
+            weighted_edge_component=rules["edge_lower_bound_full"].fillna(0.0)
+            * rules["n_full"].clip(lower=1).fillna(1.0)
         )
         .groupby("domain", observed=False)
         .agg(
             weighted_edge_sum=("weighted_edge_component", "sum"),
-            weight_sum=("n_valid", lambda series: series.clip(lower=1).fillna(1.0).sum()),
+            weight_sum=("n_full", lambda series: series.clip(lower=1).fillna(1.0).sum()),
         )
         .assign(weighted_edge_lower=lambda frame: frame["weighted_edge_sum"] / frame["weight_sum"].clip(lower=1.0))
         ["weighted_edge_lower"]
@@ -205,9 +183,9 @@ def rolling_t_stat(values: list[float]) -> float:
 
 def select_top_rules(rules: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
     mask = (
-        (rules["n_valid"] >= cfg.min_rule_valid_n)
-        & (rules["edge_valid"] >= cfg.min_edge_trade)
-        & (rules["edge_std_valid"] >= cfg.min_std_trade)
+        (rules["n_full"] >= cfg.min_rule_valid_n)
+        & (rules["edge_full"] >= cfg.min_edge_trade)
+        & (rules["edge_std_full"] >= cfg.min_std_trade)
     )
     candidates = rules[mask].copy()
     if candidates.empty:
@@ -232,10 +210,10 @@ def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
                 "h_max",
                 "rule_score",
                 "direction",
-                "q_smooth",
-                "edge_valid",
-                "edge_std_valid",
-                "edge_lower_bound_valid",
+                "q_full",
+                "edge_full",
+                "edge_std_full",
+                "edge_lower_bound_full",
             ]
         ],
         on=["domain", "category", "market_type"],
@@ -303,10 +281,10 @@ def compute_growth_and_direction(candidates: pd.DataFrame, cfg: BacktestConfig) 
     rule_dir = out["rule_direction"].astype(int).values
     trade_value_pred = out["trade_value_pred"].astype(float).values
     confidence_discount = np.ones(len(out), dtype=float)
-    if "edge_lower_bound_valid" in out.columns and "edge_valid" in out.columns:
-        edge_valid = out["edge_valid"].astype(float).replace(0.0, np.nan)
+    if "edge_lower_bound_full" in out.columns and "edge_full" in out.columns:
+        edge_full = out["edge_full"].astype(float).replace(0.0, np.nan)
         confidence_discount = (
-            out["edge_lower_bound_valid"].astype(float) / edge_valid
+            out["edge_lower_bound_full"].astype(float) / edge_full
         ).clip(lower=0.95, upper=1.0).fillna(0.95).values
 
     edge_prob = q - p

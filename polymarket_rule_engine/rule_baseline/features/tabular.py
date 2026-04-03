@@ -153,6 +153,8 @@ def preprocess_features(
         out["horizon_hours"] = pd.to_numeric(out["horizon_hours"], errors="coerce").fillna(0.0)
     out["log_horizon"] = np.log1p(out["horizon_hours"].clip(lower=0))
 
+    if "q_smooth" not in out.columns and "q_full" in out.columns:
+        out["q_smooth"] = out["q_full"]
     if "q_smooth" in out.columns:
         out["q_smooth"] = pd.to_numeric(out["q_smooth"], errors="coerce").fillna(0.5)
     else:

@@ -66,7 +66,7 @@ def feature_metadata(feature: str) -> tuple[str, str]:
         "closing_drift",
     }:
         return "期限结构特征", "同一市场不同 horizon 的价格路径和 term structure 派生特征。"
-    if feature in {"leaf_id", "price_min", "price_max", "h_min", "h_max", "q_smooth", "rule_score", "direction", "group_key"}:
+    if feature in {"leaf_id", "price_min", "price_max", "h_min", "h_max", "q_smooth", "q_full", "rule_score", "direction", "group_key"}:
         return "规则匹配特征", "snapshot 匹配到规则 bucket 后带入模型的规则上下文。"
     if feature in {"domain", "category", "category_raw", "category_parsed", "category_override_flag", "market_type", "sub_domain_market", "source_url_market", "outcome_pattern_market"}:
         return "市场分类特征", "市场来源、分类和 outcome pattern 等标签信息。"
