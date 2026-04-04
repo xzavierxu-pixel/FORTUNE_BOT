@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
+import random
 from typing import Any
 
 import numpy as np
@@ -14,13 +16,34 @@ from rule_baseline.models.runtime_bundle import (
     save_feature_contract,
     write_bundle_json,
 )
-from rule_baseline.models.tree_ensembles import fit_grouped_calibrators, fit_probability_calibrator, infer_feature_types
+from rule_baseline.models.tree_ensembles import (
+    fit_grouped_calibrators,
+    fit_probability_blend_calibrator,
+    fit_probability_calibrator,
+    infer_feature_types,
+)
 
 
 DEFAULT_AUTOGUON_PRESETS = "medium_quality"
-DEFAULT_CALIBRATION_MODE = "grouped_isotonic"
+DEFAULT_CALIBRATION_MODE = "global_isotonic"
 DEFAULT_GROUP_COLUMN = "horizon_hours"
 DEFAULT_GROUP_MIN_ROWS = 20
+DEFAULT_RANDOM_SEED = 21
+DEFAULT_TIME_LIMIT = 300
+SUPPORTED_CALIBRATION_MODES = {
+    "none",
+    "global_isotonic",
+    "grouped_isotonic",
+    "global_sigmoid",
+    "grouped_sigmoid",
+    "beta_calibration",
+    "blend_raw_global_isotonic_15",
+    "blend_raw_global_isotonic_25",
+    "blend_raw_global_isotonic_35",
+    "blend_raw_beta_15",
+    "blend_raw_beta_25",
+    "blend_raw_beta_35",
+}
 
 
 def _load_tabular_predictor_class():
@@ -119,12 +142,18 @@ def fit_autogluon_q_model(
     calibration_mode: str = DEFAULT_CALIBRATION_MODE,
     predictor_presets: str = DEFAULT_AUTOGUON_PRESETS,
     time_limit: int | None = None,
+    random_seed: int = DEFAULT_RANDOM_SEED,
     refit_full: bool = False,
     deploy_optimized: bool = False,
     predictor_hyperparameters: dict[str, Any] | None = None,
     label_column: str = "y",
     grouped_calibration_min_rows: int = DEFAULT_GROUP_MIN_ROWS,
     grouped_calibration_column: str = DEFAULT_GROUP_COLUMN,
+    num_bag_folds: int | None = None,
+    num_bag_sets: int | None = None,
+    num_stack_levels: int | None = None,
+    auto_stack: bool | None = None,
+    calibration_holdout_policy: str = "explicit_valid_split",
 ) -> AutoGluonQTrainingResult:
     if df_train.empty:
         raise RuntimeError("AutoGluon q-model training requires non-empty training data.")
@@ -163,6 +192,14 @@ def fit_autogluon_q_model(
         "refit_full": False,
         "set_best_to_refit_full": False,
     }
+    if num_bag_folds is not None:
+        fit_kwargs["num_bag_folds"] = int(num_bag_folds)
+    if num_bag_sets is not None:
+        fit_kwargs["num_bag_sets"] = int(num_bag_sets)
+    if num_stack_levels is not None:
+        fit_kwargs["num_stack_levels"] = int(num_stack_levels)
+    if auto_stack is not None:
+        fit_kwargs["auto_stack"] = bool(auto_stack)
     if valid_data is not None and not valid_data.empty:
         fit_kwargs["tuning_data"] = valid_data
         # Bagging presets require explicit holdout usage when external tuning data is provided.
@@ -173,7 +210,11 @@ def fit_autogluon_q_model(
         fit_kwargs["time_limit"] = time_limit
     if predictor_hyperparameters:
         fit_kwargs["hyperparameters"] = predictor_hyperparameters
+    random.seed(int(random_seed))
+    np.random.seed(int(random_seed))
+    fit_started = time.perf_counter()
     predictor.fit(**fit_kwargs)
+    fit_duration_sec = time.perf_counter() - fit_started
 
     predictor_name = getattr(predictor, "model_best", None)
     if refit_full:
@@ -200,6 +241,12 @@ def fit_autogluon_q_model(
         if calibration_mode == "global_isotonic":
             calibrator = fit_probability_calibrator(raw_valid, y_valid, "isotonic")
             calibrator_meta.update({"type": "global", "method": "isotonic"})
+        elif calibration_mode == "global_sigmoid":
+            calibrator = fit_probability_calibrator(raw_valid, y_valid, "sigmoid")
+            calibrator_meta.update({"type": "global", "method": "sigmoid"})
+        elif calibration_mode == "beta_calibration":
+            calibrator = fit_probability_calibrator(raw_valid, y_valid, "beta")
+            calibrator_meta.update({"type": "global", "method": "beta"})
         elif calibration_mode == "grouped_isotonic":
             group_values = _extract_group_values(df_valid, grouped_calibration_column)
             grouped = fit_grouped_calibrators(
@@ -221,8 +268,59 @@ def fit_autogluon_q_model(
                     "grouped_fallback_to_global": True,
                 }
             )
+        elif calibration_mode == "grouped_sigmoid":
+            group_values = _extract_group_values(df_valid, grouped_calibration_column)
+            grouped = fit_grouped_calibrators(
+                raw_valid,
+                y_valid,
+                group_values,
+                "sigmoid",
+                min_rows=grouped_calibration_min_rows,
+            )
+            global_calibrator = fit_probability_calibrator(raw_valid, y_valid, "sigmoid")
+            grouped["__global__"] = global_calibrator
+            calibrator = grouped
+            calibrator_meta.update(
+                {
+                    "type": "grouped",
+                    "method": "sigmoid",
+                    "group_column": grouped_calibration_column,
+                    "group_calibrator_count": int(max(len(grouped) - 1, 0)),
+                    "grouped_fallback_to_global": True,
+                }
+            )
+        elif calibration_mode.startswith("blend_raw_global_isotonic_"):
+            alpha = float(calibration_mode.rsplit("_", 1)[-1]) / 100.0
+            calibrator = fit_probability_blend_calibrator(
+                raw_valid,
+                y_valid,
+                alpha=alpha,
+                base_method="isotonic",
+            )
+            calibrator_meta.update({"type": "global", "method": "blend", "base_method": "isotonic", "blend_alpha": alpha})
+        elif calibration_mode.startswith("blend_raw_beta_"):
+            alpha = float(calibration_mode.rsplit("_", 1)[-1]) / 100.0
+            calibrator = fit_probability_blend_calibrator(
+                raw_valid,
+                y_valid,
+                alpha=alpha,
+                base_method="beta",
+            )
+            calibrator_meta.update({"type": "global", "method": "blend", "base_method": "beta", "blend_alpha": alpha})
         else:
             raise ValueError(f"Unsupported AutoGluon calibration_mode: {calibration_mode}")
+
+    persist_seconds = None
+    persist_ok = False
+    persist_error = ""
+    if deploy_optimized:
+        persist_started = time.perf_counter()
+        try:
+            predictor.persist()
+            persist_ok = True
+        except Exception as exc:
+            persist_error = str(exc)
+        persist_seconds = time.perf_counter() - persist_started
 
     runtime_manifest = {
         "artifact_version": 1,
@@ -238,6 +336,31 @@ def fit_autogluon_q_model(
         "calibration_mode": calibration_mode,
         "grouped_calibration_column": grouped_calibration_column,
         "predictor_presets": predictor_presets,
+        "random_seed": int(random_seed),
+        "num_bag_folds": int(num_bag_folds) if num_bag_folds is not None else None,
+        "num_bag_sets": int(num_bag_sets) if num_bag_sets is not None else None,
+        "num_stack_levels": int(num_stack_levels) if num_stack_levels is not None else None,
+        "auto_stack": bool(auto_stack) if auto_stack is not None else None,
+        "use_bag_holdout": bool(fit_kwargs.get("use_bag_holdout", False)),
+        "dynamic_stacking": fit_kwargs.get("dynamic_stacking"),
+        "training_recipe": {
+            "predictor_presets": predictor_presets,
+            "time_limit": time_limit,
+            "random_seed": int(random_seed),
+            "label_column": label_column,
+            "fit_rows": int(len(df_train)),
+            "calibration_rows": int(len(df_valid)),
+            "calibration_mode": calibration_mode,
+            "calibration_holdout_policy": calibration_holdout_policy,
+            "calibration_overlap_allowed": False,
+        },
+        "deployment_validation": {
+            "fit_duration_sec": float(fit_duration_sec),
+            "persist_attempted": bool(deploy_optimized),
+            "persist_ok": bool(persist_ok),
+            "persist_duration_sec": float(persist_seconds) if persist_seconds is not None else None,
+            "persist_error": persist_error,
+        },
         "fit_rows": int(len(df_train)),
         "calibration_rows": int(len(df_valid)),
     }
@@ -245,6 +368,7 @@ def fit_autogluon_q_model(
     save_feature_contract(bundle_paths.feature_contract_path, feature_contract)
     write_bundle_json(bundle_paths.runtime_manifest_path, runtime_manifest)
     write_bundle_json(bundle_paths.calibrator_meta_path, calibrator_meta)
+    write_bundle_json(bundle_paths.deployment_summary_path, runtime_manifest["deployment_validation"])
     if calibrator is not None:
         save_calibrator(bundle_paths.calibrator_path, calibrator)
 

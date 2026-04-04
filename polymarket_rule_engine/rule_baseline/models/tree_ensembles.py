@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import warnings
 
 import numpy as np
@@ -15,6 +16,17 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, RobustScaler
 from xgboost import XGBClassifier, XGBRegressor
+
+
+@dataclass(frozen=True)
+class BetaCalibrationModel:
+    logistic: LogisticRegression
+
+
+@dataclass(frozen=True)
+class ProbabilityBlendCalibrator:
+    alpha: float
+    base_calibrator: object | None = None
 
 DEFAULT_CLASSIFIER_PARAMS = {
     "xgb": {
@@ -254,7 +266,24 @@ def fit_probability_calibrator(raw_valid: np.ndarray, y_valid: np.ndarray, metho
         calibrator = LogisticRegression(solver="lbfgs")
         calibrator.fit(raw_valid.reshape(-1, 1), y_valid)
         return calibrator
+    if method == "beta":
+        clipped = np.clip(np.asarray(raw_valid, dtype=float), 1e-6, 1.0 - 1e-6)
+        design = np.column_stack([np.log(clipped), np.log1p(-clipped)])
+        calibrator = LogisticRegression(solver="lbfgs")
+        calibrator.fit(design, y_valid)
+        return BetaCalibrationModel(logistic=calibrator)
     raise ValueError(f"Unsupported calibration method: {method}")
+
+
+def fit_probability_blend_calibrator(
+    raw_valid: np.ndarray,
+    y_valid: np.ndarray,
+    *,
+    alpha: float,
+    base_method: str,
+):
+    base = fit_probability_calibrator(raw_valid, y_valid, base_method)
+    return ProbabilityBlendCalibrator(alpha=float(alpha), base_calibrator=base)
 
 
 def fit_grouped_calibrators(
@@ -283,6 +312,22 @@ def apply_probability_calibrator(calibrator, raw_prob: np.ndarray) -> np.ndarray
         return calibrator.transform(raw_prob)
     if isinstance(calibrator, LogisticRegression):
         return calibrator.predict_proba(raw_prob.reshape(-1, 1))[:, 1]
+    if isinstance(calibrator, BetaCalibrationModel):
+        clipped = np.clip(np.asarray(raw_prob, dtype=float), 1e-6, 1.0 - 1e-6)
+        design = np.column_stack([np.log(clipped), np.log1p(-clipped)])
+        return calibrator.logistic.predict_proba(design)[:, 1]
+    if isinstance(calibrator, ProbabilityBlendCalibrator):
+        base_prob = (
+            apply_probability_calibrator(calibrator.base_calibrator, raw_prob)
+            if calibrator.base_calibrator is not None
+            else np.asarray(raw_prob, dtype=float)
+        )
+        return np.clip(
+            (1.0 - float(calibrator.alpha)) * np.asarray(raw_prob, dtype=float)
+            + float(calibrator.alpha) * np.asarray(base_prob, dtype=float),
+            0.0,
+            1.0,
+        )
     raise ValueError(f"Unsupported calibrator type: {type(calibrator)!r}")
 
 

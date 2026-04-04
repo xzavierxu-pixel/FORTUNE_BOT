@@ -17,12 +17,22 @@ def parse_args() -> argparse.Namespace:
         choices=[
             "grouped_isotonic",
             "global_isotonic",
+            "grouped_sigmoid",
+            "global_sigmoid",
             "none",
         ],
-        default="grouped_isotonic",
+        default="global_isotonic",
     )
     parser.add_argument("--grouped-calibration-column", type=str, default="horizon_hours")
     parser.add_argument("--grouped-calibration-min-rows", type=int, default=20)
+    parser.add_argument("--random-seed", type=int, default=21)
+    parser.add_argument("--predictor-time-limit", type=int, default=300)
+    parser.add_argument("--num-bag-folds", type=int, default=None)
+    parser.add_argument("--num-bag-sets", type=int, default=None)
+    parser.add_argument("--num-stack-levels", type=int, default=None)
+    parser.add_argument("--auto-stack", dest="auto_stack", action="store_true")
+    parser.add_argument("--no-auto-stack", dest="auto_stack", action="store_false")
+    parser.set_defaults(auto_stack=None)
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--recent-days", type=int, default=None)
     parser.add_argument("--walk-forward-windows", type=int, default=3)
@@ -109,11 +119,25 @@ def main() -> None:
             args.grouped_calibration_column,
             "--grouped-calibration-min-rows",
             str(args.grouped_calibration_min_rows),
+            "--random-seed",
+            str(args.random_seed),
+            "--predictor-time-limit",
+            str(args.predictor_time_limit),
             "--target-mode",
             args.target_mode,
         ],
         args,
     )
+    if args.num_bag_folds is not None:
+        train_model_cmd.extend(["--num-bag-folds", str(args.num_bag_folds)])
+    if args.num_bag_sets is not None:
+        train_model_cmd.extend(["--num-bag-sets", str(args.num_bag_sets)])
+    if args.num_stack_levels is not None:
+        train_model_cmd.extend(["--num-stack-levels", str(args.num_stack_levels)])
+    if args.auto_stack is True:
+        train_model_cmd.append("--auto-stack")
+    elif args.auto_stack is False:
+        train_model_cmd.append("--no-auto-stack")
     run_step("Train model", train_model_cmd)
 
     if not args.skip_analysis:

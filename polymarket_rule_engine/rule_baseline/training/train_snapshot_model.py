@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 
 import joblib
 import numpy as np
@@ -18,8 +19,10 @@ from rule_baseline.features import build_market_feature_cache, preprocess_featur
 from rule_baseline.models import (
     DEFAULT_AUTOGUON_PRESETS,
     AUTOGLOUON_DEFAULT_CALIBRATION_MODE,
-    compute_trade_value_from_q as _compute_trade_value_from_q,
+    AUTOGLOUON_DEFAULT_TIME_LIMIT,
+    SUPPORTED_AUTOGLOUON_CALIBRATION_MODES,
     fit_autogluon_q_model,
+    compute_trade_value_from_q as _compute_trade_value_from_q,
     fit_model_payload,
     fit_regression_payload,
     infer_q_from_trade_value as _infer_q_from_trade_value,
@@ -172,11 +175,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
     parser.add_argument(
         "--calibration-mode",
-        choices=[
-            "grouped_isotonic",
-            "global_isotonic",
-            "none",
-        ],
+        choices=sorted(SUPPORTED_AUTOGLOUON_CALIBRATION_MODES),
         default=AUTOGLOUON_DEFAULT_CALIBRATION_MODE,
         help="Calibration strategy for probability outputs.",
     )
@@ -191,9 +190,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--history-start", type=str, default=None)
     parser.add_argument("--predictor-presets", type=str, default=DEFAULT_AUTOGUON_PRESETS)
-    parser.add_argument("--predictor-time-limit", type=int, default=None)
+    parser.add_argument("--predictor-time-limit", type=int, default=AUTOGLOUON_DEFAULT_TIME_LIMIT)
+    parser.add_argument("--random-seed", type=int, default=21)
     parser.add_argument("--grouped-calibration-column", type=str, default="horizon_hours")
     parser.add_argument("--grouped-calibration-min-rows", type=int, default=20)
+    parser.add_argument("--num-bag-folds", type=int, default=None)
+    parser.add_argument("--num-bag-sets", type=int, default=None)
+    parser.add_argument("--num-stack-levels", type=int, default=None)
+    parser.add_argument("--auto-stack", dest="auto_stack", action="store_true")
+    parser.add_argument("--no-auto-stack", dest="auto_stack", action="store_false")
+    parser.set_defaults(auto_stack=None)
     parser.add_argument("--refit-full", action="store_true")
     return parser.parse_args()
 
@@ -464,6 +470,7 @@ def main() -> None:
         raise RuntimeError("Empty training split.")
 
     if args.target_mode == "q":
+        training_started = time.perf_counter()
         model_artifact = fit_autogluon_q_model(
             df_train=df_train,
             df_valid=df_valid,
@@ -476,8 +483,16 @@ def main() -> None:
             split_boundaries=split.to_dict(),
             predictor_presets=args.predictor_presets,
             time_limit=args.predictor_time_limit,
+            random_seed=args.random_seed,
+            num_bag_folds=args.num_bag_folds,
+            num_bag_sets=args.num_bag_sets,
+            num_stack_levels=args.num_stack_levels,
+            auto_stack=args.auto_stack,
             refit_full=args.refit_full,
+            deploy_optimized=(args.artifact_mode == "online"),
+            calibration_holdout_policy="explicit_valid_split",
         )
+        training_wall_clock_sec = time.perf_counter() - training_started
         print(f"[INFO] Saved AutoGluon q bundle to {artifact_paths.model_bundle_dir}")
     elif args.target_mode == "residual_q":
         if args.artifact_mode != "offline":
@@ -520,11 +535,18 @@ def main() -> None:
             "bundle_dir": str(artifact_paths.model_bundle_dir),
             "predictor_presets": args.predictor_presets,
             "predictor_time_limit": args.predictor_time_limit,
+            "random_seed": int(args.random_seed),
+            "num_bag_folds": args.num_bag_folds,
+            "num_bag_sets": args.num_bag_sets,
+            "num_stack_levels": args.num_stack_levels,
+            "auto_stack": args.auto_stack,
             "refit_full": bool(args.refit_full),
             "grouped_calibration_column": args.grouped_calibration_column,
             "grouped_calibration_min_rows": int(args.grouped_calibration_min_rows),
             "runtime_manifest": model_artifact.runtime_manifest,
             "calibrator_meta": model_artifact.calibrator_meta,
+            "deployment_summary_path": str(artifact_paths.model_bundle_dir / "metadata" / "deployment_summary.json"),
+            "training_wall_clock_sec": float(training_wall_clock_sec),
         }
     else:
         training_summary["model_artifact"] = {

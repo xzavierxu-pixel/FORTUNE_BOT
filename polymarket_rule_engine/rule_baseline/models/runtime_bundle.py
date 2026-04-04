@@ -47,6 +47,7 @@ class RuntimeBundlePaths:
     feature_contract_path: Path
     calibrator_path: Path
     calibrator_meta_path: Path
+    deployment_summary_path: Path
 
     def ensure_dirs(self) -> None:
         for path in [self.root_dir, self.predictor_dir, self.calibration_dir, self.metadata_dir]:
@@ -63,6 +64,7 @@ def build_runtime_bundle_paths(bundle_dir: Path) -> RuntimeBundlePaths:
         feature_contract_path=bundle_dir / FEATURE_CONTRACT_NAME,
         calibrator_path=bundle_dir / "calibration" / CALIBRATOR_NAME,
         calibrator_meta_path=bundle_dir / "calibration" / CALIBRATOR_META_NAME,
+        deployment_summary_path=bundle_dir / "metadata" / "deployment_summary.json",
     )
 
 

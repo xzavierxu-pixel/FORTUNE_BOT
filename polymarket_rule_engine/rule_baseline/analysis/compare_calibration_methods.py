@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -16,9 +17,23 @@ from rule_baseline.training.train_snapshot_model import DROP_COLS, build_feature
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
-COMPARISON_PATH = config.ANALYSIS_DIR / "calibration_method_comparison.csv"
-PREDICTION_PATH = config.ANALYSIS_DIR / "calibration_method_predictions.csv"
-SUMMARY_PATH = config.ANALYSIS_DIR / "calibration_method_summary.txt"
+COMPARISON_PATH = config.ANALYSIS_DIR / "autogluon_calibration_expansion_results.csv"
+PREDICTION_PATH = config.ANALYSIS_DIR / "autogluon_calibration_expansion_predictions.csv"
+SUMMARY_PATH = config.ANALYSIS_DIR / "autogluon_calibration_expansion_summary.json"
+CALIBRATION_MODES = [
+    "none",
+    "global_isotonic",
+    "grouped_isotonic",
+    "global_sigmoid",
+    "grouped_sigmoid",
+    "beta_calibration",
+    "blend_raw_global_isotonic_15",
+    "blend_raw_global_isotonic_25",
+    "blend_raw_global_isotonic_35",
+    "blend_raw_beta_15",
+    "blend_raw_beta_25",
+    "blend_raw_beta_35",
+]
 
 
 def build_dataset() -> pd.DataFrame:
@@ -93,7 +108,7 @@ def main():
         ]
     ].copy()
 
-    for mode in ["none", "global_isotonic", "grouped_isotonic"]:
+    for mode in CALIBRATION_MODES:
         print(f"[INFO] Fitting calibration mode: {mode}")
         with TemporaryDirectory() as tmpdir:
             result = fit_autogluon_q_model(
@@ -120,21 +135,27 @@ def main():
     result_df.to_csv(COMPARISON_PATH, index=False)
     prediction_frame.to_csv(PREDICTION_PATH, index=False)
 
-    best_logloss = result_df.loc[result_df["mode"] != "market_price"].sort_values("logloss").iloc[0]
-    best_brier = result_df.loc[result_df["mode"] != "market_price"].sort_values("brier").iloc[0]
-    best_auc = result_df.loc[result_df["mode"] != "market_price"].sort_values("auc", ascending=False).iloc[0]
-
-    summary_lines = [
-        "Calibration method comparison on held-out test window",
-        f"train_rows={len(df_train)} calib_rows={len(df_calib)} test_rows={len(df_test)}",
-        "",
-        result_df.to_string(index=False),
-        "",
-        f"best_logloss={best_logloss['mode']} ({best_logloss['logloss']:.6f})",
-        f"best_brier={best_brier['mode']} ({best_brier['brier']:.6f})",
-        f"best_auc={best_auc['mode']} ({best_auc['auc']:.6f})",
-    ]
-    SUMMARY_PATH.write_text("\n".join(summary_lines), encoding="utf-8")
+    non_baseline_df = result_df.loc[result_df["mode"] != "market_price"].copy()
+    best_logloss = non_baseline_df.sort_values("logloss").iloc[0]
+    best_brier = non_baseline_df.sort_values("brier").iloc[0]
+    best_auc = non_baseline_df.sort_values("auc", ascending=False).iloc[0]
+    SUMMARY_PATH.write_text(
+        json.dumps(
+            {
+                "train_rows": int(len(df_train)),
+                "calibration_rows": int(len(df_calib)),
+                "test_rows": int(len(df_test)),
+                "modes_evaluated": CALIBRATION_MODES,
+                "best_logloss": {"mode": str(best_logloss["mode"]), "value": float(best_logloss["logloss"])},
+                "best_brier": {"mode": str(best_brier["mode"]), "value": float(best_brier["brier"])},
+                "best_auc": {"mode": str(best_auc["mode"]), "value": float(best_auc["auc"])},
+                "ranking": result_df.to_dict(orient="records"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
     print("\n=== Calibration Comparison ===")
     print(result_df.to_string(index=False))

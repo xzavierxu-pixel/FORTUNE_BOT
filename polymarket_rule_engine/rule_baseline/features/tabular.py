@@ -5,6 +5,8 @@ import pandas as pd
 
 from rule_baseline.features.market_feature_builders import build_market_feature_frame
 
+DEFAULT_FEATURE_VARIANT = "interaction_features"
+
 
 def build_market_feature_cache(
     raw_markets: pd.DataFrame,
@@ -165,6 +167,8 @@ def preprocess_features(
     else:
         out["rule_score"] = 0.0
 
+    out = apply_feature_variant(out, feature_variant=DEFAULT_FEATURE_VARIANT)
+
     numeric_columns = [
         "volume",
         "liquidity",
@@ -189,6 +193,12 @@ def preprocess_features(
         "selected_quote_local_gap_sec",
         "snapshot_target_ts",
         "selected_quote_ts",
+        "abs_price_q_gap",
+        "abs_price_center_gap",
+        "horizon_q_gap",
+        "spread_over_liquidity",
+        "quote_staleness_x_horizon",
+        "rule_score_x_q_full",
     ]
     for column in numeric_columns:
         if column in out.columns:
@@ -238,5 +248,95 @@ def preprocess_features(
 
     if "y" in out.columns:
         out["y"] = pd.to_numeric(out["y"], errors="coerce").fillna(0).astype(int)
+
+    return out
+
+
+def _safe_numeric(series: pd.Series | None, default: float = 0.0) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(series, errors="coerce").fillna(default).astype(float)
+
+
+def _safe_text(series: pd.Series | None) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype="string")
+    return series.astype("string").fillna("")
+
+
+def apply_feature_variant(
+    df_feat: pd.DataFrame,
+    *,
+    feature_variant: str = DEFAULT_FEATURE_VARIANT,
+) -> pd.DataFrame:
+    out = df_feat.copy()
+    if feature_variant == "baseline":
+        return out
+
+    # Shared experiment/training feature contract. Training must use the exact
+    # same augmentation path as experiments to avoid contract drift.
+    price = _safe_numeric(out.get("price"), default=0.0)
+    q_anchor = _safe_numeric(out.get("q_smooth"), default=0.5)
+    horizon = _safe_numeric(out.get("horizon_hours"), default=0.0)
+    log_horizon = _safe_numeric(out.get("log_horizon"), default=0.0) if "log_horizon" in out.columns else pd.Series(dtype=float)
+    if log_horizon.empty:
+        log_horizon = pd.Series(np.log1p(horizon.clip(lower=0.0)), index=out.index)
+    liquidity = _safe_numeric(out.get("liquidity"), default=0.0)
+    spread = _safe_numeric(out.get("spread"), default=0.0)
+    quote_offset = _safe_numeric(out.get("selected_quote_offset_sec"), default=0.0)
+    rule_score = _safe_numeric(out.get("rule_score"), default=0.0)
+    edge_lower = _safe_numeric(out.get("edge_lower_bound_full"), default=0.0) if "edge_lower_bound_full" in out.columns else pd.Series(0.0, index=out.index)
+    edge_std = _safe_numeric(out.get("edge_std_full"), default=0.0) if "edge_std_full" in out.columns else pd.Series(0.0, index=out.index)
+
+    out["abs_price_q_gap"] = (price - q_anchor).abs()
+    out["abs_price_center_gap"] = (price - 0.5).abs()
+    out["horizon_q_gap"] = horizon * out["abs_price_q_gap"]
+    out["log_horizon_x_liquidity"] = pd.Series(np.log1p(liquidity.clip(lower=0.0)), index=out.index) * _safe_numeric(log_horizon, default=0.0)
+    out["spread_over_liquidity"] = spread / (liquidity.abs() + 1.0)
+    out["quote_staleness_x_horizon"] = quote_offset * (horizon + 1.0)
+    out["rule_score_x_q_full"] = rule_score * q_anchor
+    out["edge_lower_bound_over_std"] = edge_lower / edge_std.replace(0.0, pd.NA).fillna(1.0)
+
+    if feature_variant == "market_structure_v2":
+        best_bid = _safe_numeric(out.get("bestBid"), default=0.0)
+        best_ask = _safe_numeric(out.get("bestAsk"), default=0.0)
+        mid_price = ((best_bid + best_ask) / 2.0).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+        liquidity_clob = _safe_numeric(out.get("liquidityClob"), default=0.0)
+        volume24_clob = _safe_numeric(out.get("volume24hrClob"), default=0.0)
+        volume1w_clob = _safe_numeric(out.get("volume1wkClob"), default=0.0)
+        rewards_max_spread = _safe_numeric(out.get("rewardsMaxSpread"), default=0.0)
+        out["book_mid_gap"] = (price - mid_price).abs()
+        out["spread_to_mid_ratio"] = spread / (mid_price.abs() + 1e-6)
+        out["quote_quality_score"] = 1.0 / (1.0 + out["spread_to_mid_ratio"].abs() + quote_offset / 60.0)
+        out["liquidity_pressure"] = liquidity_clob / (liquidity.abs() + 1.0)
+        out["clob_turnover_24h"] = volume24_clob / (liquidity_clob.abs() + 1.0)
+        out["clob_turnover_1w"] = volume1w_clob / (liquidity_clob.abs() + 1.0)
+        out["uncertainty_normalized_edge"] = edge_lower / (edge_std.abs() + 1e-6)
+        out["rule_confidence_gap"] = rule_score - out["abs_price_q_gap"]
+        out["reward_spread_alignment"] = rewards_max_spread - spread
+        out["horizon_term_structure"] = log_horizon * out["abs_price_center_gap"]
+        return out
+
+    if feature_variant == "interaction_plus_textlite":
+        question = _safe_text(out.get("question_market"))
+        description = _safe_text(out.get("description_market"))
+        combined = (question + " " + description).astype("string")
+        out["question_length_chars"] = question.str.len().astype(float)
+        out["description_length_chars"] = description.str.len().astype(float)
+        out["text_has_year"] = combined.str.contains(r"\b20\d{2}\b", regex=True, na=False).astype(int)
+        out["text_has_date_word"] = combined.str.contains(
+            r"\b(january|february|march|april|may|june|july|august|september|october|november|december|today|tomorrow)\b",
+            regex=True,
+            case=False,
+            na=False,
+        ).astype(int)
+        out["text_has_percent"] = combined.str.contains(r"%|percent", regex=True, case=False, na=False).astype(int)
+        out["text_has_currency"] = combined.str.contains(r"\$|usd|dollar|million|billion", regex=True, case=False, na=False).astype(int)
+        out["text_has_deadline_word"] = combined.str.contains(
+            r"\b(before|after|by|end of|deadline|close|closing)\b",
+            regex=True,
+            case=False,
+            na=False,
+        ).astype(int)
 
     return out

@@ -5,6 +5,7 @@ import heapq
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,7 @@ from rule_baseline.backtesting.backtest_portfolio_qmodel import (
     trade_pnl,
 )
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
+from rule_baseline.models import load_model_artifact
 from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, load_raw_markets, load_research_snapshots
 from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
@@ -52,6 +54,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recent-days", type=int, default=None)
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--compare-model-path", type=str, default=None)
     return parser.parse_args()
 
 
@@ -427,6 +430,48 @@ def compute_capital_timing_audit(trades_df: pd.DataFrame) -> dict[str, float | i
     }
 
 
+def compute_decision_parity_summary(reference_candidates: pd.DataFrame, comparison_candidates: pd.DataFrame) -> dict[str, object]:
+    key_cols = ["market_id", "snapshot_time"]
+    if reference_candidates.empty and comparison_candidates.empty:
+        return {
+            "reference_candidate_count": 0,
+            "comparison_candidate_count": 0,
+            "selected_overlap_count": 0,
+            "selected_overlap_ratio_reference": 0.0,
+            "selected_overlap_ratio_comparison": 0.0,
+        }
+
+    ref = reference_candidates.copy()
+    cmp = comparison_candidates.copy()
+    ref["snapshot_time"] = pd.to_datetime(ref["snapshot_time"], utc=True, errors="coerce")
+    cmp["snapshot_time"] = pd.to_datetime(cmp["snapshot_time"], utc=True, errors="coerce")
+    merged = ref.merge(cmp, on=key_cols, how="outer", suffixes=("_reference", "_comparison"), indicator=True)
+    overlap = merged[merged["_merge"] == "both"].copy()
+    q_gap = (
+        overlap["q_pred_reference"].astype(float) - overlap["q_pred_comparison"].astype(float)
+        if {"q_pred_reference", "q_pred_comparison"}.issubset(overlap.columns)
+        else pd.Series(dtype=float)
+    )
+    edge_gap = (
+        overlap["edge_prob_reference"].astype(float) - overlap["edge_prob_comparison"].astype(float)
+        if {"edge_prob_reference", "edge_prob_comparison"}.issubset(overlap.columns)
+        else pd.Series(dtype=float)
+    )
+    return {
+        "reference_candidate_count": int(len(ref)),
+        "comparison_candidate_count": int(len(cmp)),
+        "selected_overlap_count": int(len(overlap)),
+        "selected_overlap_ratio_reference": float(len(overlap) / len(ref)) if len(ref) else 0.0,
+        "selected_overlap_ratio_comparison": float(len(overlap) / len(cmp)) if len(cmp) else 0.0,
+        "reference_only_count": int((merged["_merge"] == "left_only").sum()),
+        "comparison_only_count": int((merged["_merge"] == "right_only").sum()),
+        "q_pred_abs_diff_mean": float(q_gap.abs().mean()) if not q_gap.empty else None,
+        "q_pred_abs_diff_max": float(q_gap.abs().max()) if not q_gap.empty else None,
+        "edge_prob_abs_diff_mean": float(edge_gap.abs().mean()) if not edge_gap.empty else None,
+        "edge_prob_abs_diff_max": float(edge_gap.abs().max()) if not edge_gap.empty else None,
+    }
+
+
 def main() -> None:
     args = parse_args()
     if args.artifact_mode != "offline":
@@ -485,6 +530,19 @@ def main() -> None:
     summary["split_boundaries"] = split.to_dict()
     summary["debug_filters"] = {"max_rows": args.max_rows, "recent_days": args.recent_days}
     write_json(summary_path, summary)
+
+    if args.compare_model_path:
+        comparator_payload = load_model_artifact(Path(args.compare_model_path))
+        comparison_candidates = prepare_execution_candidates(
+            snapshots,
+            rules,
+            market_feature_cache,
+            comparator_payload,
+            cfg,
+        )
+        parity_path = artifact_paths.backtest_dir / "backtest_execution_parity_decision_overlap.json"
+        write_json(parity_path, compute_decision_parity_summary(candidates, comparison_candidates))
+        print(f"[INFO] Saved execution parity decision overlap to {parity_path}")
 
     print(f"[INFO] Saved execution parity equity curve to {equity_path}")
     print(f"[INFO] Saved execution parity trade log to {trades_path}")

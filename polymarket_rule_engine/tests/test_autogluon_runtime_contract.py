@@ -1,12 +1,15 @@
 import os
 import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.datasets.artifacts import build_artifact_paths
+from rule_baseline.models.autogluon_qmodel import fit_autogluon_q_model
 from rule_baseline.training.train_rules_naive_output_rule import evaluate_rule_candidate
 
 
@@ -56,6 +59,64 @@ class ArtifactBundlePathTest(unittest.TestCase):
         self.assertEqual(paths.model_path.name, "q_model_bundle")
         self.assertEqual(paths.model_bundle_dir, paths.model_path)
         self.assertEqual(paths.legacy_model_path.name, "ensemble_snapshot_q.pkl")
+
+
+class AutoGluonMetadataContractTest(unittest.TestCase):
+    def test_runtime_manifest_records_seed_and_bagging_controls(self) -> None:
+        df_train = pd.DataFrame(
+            {
+                "price": [0.3, 0.7, 0.35, 0.65],
+                "domain": ["a", "b", "a", "b"],
+                "horizon_hours": [1, 1, 2, 2],
+                "y": [0, 1, 0, 1],
+            }
+        )
+        df_valid = pd.DataFrame(
+            {
+                "price": [0.4, 0.6],
+                "domain": ["a", "b"],
+                "horizon_hours": [1, 2],
+                "y": [0, 1],
+            }
+        )
+
+        class FakePredictor:
+            model_best = "WeightedEnsemble_L2"
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+            def fit(self, **kwargs):
+                self.fit_kwargs = kwargs
+                return self
+
+            def predict_proba(self, data, as_pandas=False, as_multiclass=False):
+                return [0.2] * len(data)
+
+        with TemporaryDirectory() as tmpdir:
+            with unittest.mock.patch(
+                "rule_baseline.models.autogluon_qmodel._load_tabular_predictor_class",
+                return_value=FakePredictor,
+            ):
+                result = fit_autogluon_q_model(
+                    df_train=df_train,
+                    df_valid=df_valid,
+                    feature_columns=["price", "domain", "horizon_hours"],
+                    bundle_dir=Path(tmpdir) / "bundle",
+                    artifact_mode="offline",
+                    split_boundaries={},
+                    random_seed=314,
+                    num_bag_folds=5,
+                    num_bag_sets=2,
+                    num_stack_levels=1,
+                    auto_stack=False,
+                )
+
+        self.assertEqual(result.runtime_manifest["random_seed"], 314)
+        self.assertEqual(result.runtime_manifest["num_bag_folds"], 5)
+        self.assertEqual(result.runtime_manifest["num_bag_sets"], 2)
+        self.assertEqual(result.runtime_manifest["num_stack_levels"], 1)
+        self.assertFalse(result.runtime_manifest["auto_stack"])
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # AutoGluon Q-Model Implementation Design
 ## 1. Document Status
-- Status: Draft for implementation- Scope: `polymarket_rule_engine/rule_baseline` offline artifact generation and `execution_engine` online inference integration- Primary audience: engineering- Primary decision: online production deploys one AutoGluon-based calibrated `q` model; `residual_q` remains offline research baseline only
+- Status: In progress; partially implemented as of 2026-04-04- Scope: `polymarket_rule_engine/rule_baseline` offline artifact generation and `execution_engine` online inference integration- Primary audience: engineering- Primary decision: online production deploys one AutoGluon-based calibrated `q` model; `residual_q` remains offline research baseline only- Usage note: this document now mixes original design intent with implementation status tracking; where historical baseline sections conflict with current code, the status sections added below should be treated as authoritative
 ## 2. Executive Summary
 This design updates the snapshot-model stack from the current custom sklearn-style ensemble payload to an AutoGluon-based `q` model while preserving the current execution semantics inside `execution_engine`.
 The latest codebase has already moved part of the rule contract forward:
@@ -8,7 +8,14 @@ The latest codebase has already moved part of the rule contract forward:
 This implementation keeps the current feature pipeline, rule matching semantics, and downstream trading logic, but replaces the model backend and artifact contract for the production `q` path.
 The target production shape is:
 1. rule artifacts remain the authoritative structural filter and match contract for online inference2. offline feature generation remains owned by the repository, not by AutoGluon internals3. AutoGluon trains the production `q` model on the generated feature table4. training exports a directory-style runtime bundle instead of a single sklearn/joblib payload as the primary production artifact5. online runtime loads the bundle once, loads the predictor once, and persists it in memory once6. online runtime continues to output: - `q_pred` - `trade_value_pred` - `direction_model` - `edge_prob` - `f_exec` - `growth_score`7. `residual_q` remains available offline for research comparison and is removed from the production runtime contract
+## 2.1 Current Completion Status
+Status legend:
+- Complete: implemented in the current branch and used by the main `rule_baseline` production-oriented training path- Partial: implemented in some modules or offline/research paths, but not yet wired through the live `execution_engine` production runtime- Not complete: still design-only or still blocked on downstream integration
+Current status snapshot as of 2026-04-04:
+1. Complete - rule bin construction is unified across offline and online retained labeled snapshots - rule selection is unified around full-history bucket statistics and the compact `q_full` schema - production `q` training in `train_snapshot_model.py` uses the AutoGluon path - runtime-bundle primitives exist in `rule_baseline/models/` and support manifest, feature contract, calibrator persistence, and bundle loading2. Partial - backtesting and some analysis code can consume the new runtime bundle, but legacy payload support remains in parallel - the bundle layout is functional but narrower than the full target design; bundle-internal deployment metadata is still incomplete - workflow documentation in `rule_baseline/WORKFLOW_AND_MODULES.md` reflects the new training path, but this design document still preserves older baseline sections for historical context3. Not complete - `execution_engine` still defaults to `ensemble_snapshot_q.pkl` and still loads a `joblib` dict payload - live prewarm does not yet load a `TabularPredictor` bundle or call `persist()` at startup - live inference still branches on `target_mode` and still retains production-path handling for `residual_q` and `expected_*` - `execution_engine/requirements-live.txt` has not yet been updated for the AutoGluon runtime dependency set - deployment-level validation for startup latency, memory footprint, and live bundle residency is not yet recorded in repository artifacts
 ## 3. Problem Statement
+Historical note:
+- Sections 3 and 4 are preserved as the original gap analysis that motivated this work- Several statements in those sections no longer describe the current branch head because parts of the implementation have since landed- Use Section 2.1 as the current status summary when this document conflicts with code
 The latest codebase still has three mismatches that need to be resolved.
 ### 3.1 Production model backend is still tied to custom sklearn payloads
 Current model training in `rule_baseline/training/train_snapshot_model.py` still:
@@ -152,6 +159,8 @@ The following must remain unchanged in this implementation:
 1. price and horizon rule matching semantics2. current feature-table construction semantics3. `compute_trade_value_from_q`4. `compute_growth_and_direction`5. `select_target_side`6. allocation and submission logic
 This implementation changes the source of `q_pred`, not the semantics of what the trading system does with `q_pred`.
 ## 13. Migration Plan
+Current phase status as of 2026-04-04:
+1. Phase 1: complete2. Phase 2: mostly complete3. Phase 3: partial in `rule_baseline`, not yet integrated into `execution_engine` live runtime4. Phase 4: not complete
 ### 13.1 Phase 1: Make current-state documentation and rule policy consistent
 1. update workflow docs to match the latest rule and model code reality2. unify offline and online rule-selection logic3. keep current runtime stable while rule semantics are clarified
 ### 13.2 Phase 2: Add AutoGluon production training path
@@ -162,6 +171,8 @@ This implementation changes the source of `q_pred`, not the semantics of what th
 1. remove online `residual_q` support2. remove online `expected_pnl` and `expected_roi` support3. simplify production config and runtime loading
 ### 13.5 File-Level Implementation Checklist
 This checklist is the intended execution order for implementation.
+Current batch status as of 2026-04-04:
+1. Batch A: complete2. Batch B: mostly complete3. Batch C: mostly complete4. Batch D: not complete5. Batch E: partial6. Batch F: partial7. Batch G: partial
 #### Batch A: Unify rule logic and inputs
 1. Update `rule_baseline/datasets/snapshots.py` - change offline `bin_source` to use the full retained snapshot frame - keep funnel reporting explicit about the new full-data bin reference behavior2. Update `rule_baseline/training/train_rules_naive_output_rule.py` - remove the offline/online selection-logic split - keep one authoritative rule-selection formula - preserve `q_full` rule schema as the only selected-rule contract3. Update `rule_baseline/WORKFLOW_AND_MODULES.md` - remove outdated statements about offline `train+valid`-only bin or rule definition behavior - document unified rule logic across offline and online4. Validate rule artifacts - regenerate `trading_rules.csv` - inspect `rule_training_summary.json` - inspect `rule_funnel_summary.json`
 #### Batch B: Introduce AutoGluon production q training
@@ -198,6 +209,8 @@ Required checks:
 Required checks:
 1. startup load time2. predictor persist success3. memory footprint4. latency for batch size 1 and small micro-batches5. latency and quality comparison between original best model and any `refit_full()` deployment candidate
 ## 15. Acceptance Criteria
+Current acceptance status as of 2026-04-04:
+1. Complete: rule online and offline logic are unified2. Complete: offline training can produce a deployable AutoGluon-based `q` bundle3. Not complete: `execution_engine` cannot yet load the bundle once and keep it resident in memory through the new adapter path4. Not complete: online inference still retains `residual_q` and `expected_*` branching in the live path5. Partial: downstream selection and allocation semantics remain intact in backtesting and training-side parity code, but live runtime is still on the legacy loader path6. Partial: production docs in `rule_baseline` reflect q-only deployment, but repository-wide deployment/runtime docs are not yet fully reconciled7. Complete: `residual_q` remains usable offline as a research baseline8. Not complete: deployment latency and memory have not yet been formally measured and accepted in tracked artifacts
 The implementation is complete when all of the following are true.
 1. rule online and offline logic are unified2. offline training can produce a deployable AutoGluon-based `q` bundle3. `execution_engine` can load the bundle once and keep it resident in memory4. online inference no longer requires `residual_q` logic5. downstream selection and allocation semantics remain intact apart from expected score changes6. production docs state clearly that only `q` is deployed online7. `residual_q` remains usable offline as a research baseline8. deployment latency and memory are measured and accepted
 ## 16. Risks and Mitigations
