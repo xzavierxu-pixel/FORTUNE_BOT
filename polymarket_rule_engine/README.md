@@ -69,6 +69,39 @@ python rule_baseline/workflow/run_pipeline.py `
   --skip-baselines
 ```
 
+---
+
+## AutoGluon Migration Notes
+
+The production `q` path now uses an AutoGluon runtime bundle instead of the old single-file `ensemble_snapshot_q.pkl` payload.
+
+Key changes:
+- Production online inference is `q`-only.
+- Rule selection logic is unified between offline and online artifacts.
+- The canonical model artifact is `data/<mode>/models/q_model_bundle/`.
+- `residual_q`, `expected_pnl`, and `expected_roi` remain offline research paths only.
+
+Runtime bundle layout:
+
+```text
+data/<mode>/models/q_model_bundle/
+  runtime_manifest.json
+  feature_contract.json
+  predictor/
+  calibration/
+    calibrator.pkl
+    calibrator_meta.json
+```
+
+Recommended training command:
+
+```powershell
+python rule_baseline/training/train_snapshot_model.py `
+  --artifact-mode offline `
+  --target-mode q `
+  --calibration-mode grouped_isotonic
+```
+
 适合做逻辑联调，不适合拿来判断策略是否有效。
 
 ---

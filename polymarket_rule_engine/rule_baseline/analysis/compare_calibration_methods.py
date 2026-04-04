@@ -1,6 +1,7 @@
 import os
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
@@ -10,7 +11,7 @@ from rule_baseline.datasets.snapshots import load_raw_markets, load_snapshots
 from rule_baseline.datasets.splits import compute_train_valid_boundary
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
-from rule_baseline.models import fit_model_payload, predict_probabilities
+from rule_baseline.models import fit_autogluon_q_model
 from rule_baseline.training.train_snapshot_model import DROP_COLS, build_feature_table, load_rules
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
@@ -92,17 +93,20 @@ def main():
         ]
     ].copy()
 
-    for mode in ["none", "valid_isotonic", "cv_isotonic"]:
-        fit_valid = df_calib if mode == "valid_isotonic" else pd.DataFrame(columns=df_feat.columns)
+    for mode in ["none", "global_isotonic", "grouped_isotonic"]:
         print(f"[INFO] Fitting calibration mode: {mode}")
-        payload = fit_model_payload(
-            df_train,
-            fit_valid,
-            feature_columns=feature_columns,
-            target_column="y",
-            calibration_mode=mode,
-        )
-        probs = predict_probabilities(payload, df_test)
+        with TemporaryDirectory() as tmpdir:
+            result = fit_autogluon_q_model(
+                df_train=df_train,
+                df_valid=df_calib,
+                feature_columns=feature_columns,
+                calibration_mode=mode,
+                bundle_dir=Path(tmpdir) / f"bundle_{mode}",
+                artifact_mode="offline",
+                split_boundaries={},
+                predictor_presets="medium_quality",
+            )
+        probs = result.predict(df_test)
         metrics = compute_metrics(df_test["y"].astype(int).values, probs)
         metrics["mode"] = mode
         rows.append(metrics)

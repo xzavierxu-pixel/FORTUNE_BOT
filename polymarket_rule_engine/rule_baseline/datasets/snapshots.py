@@ -481,7 +481,7 @@ def prepare_rule_training_frame(
     allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
     funnel_summary["snapshot_funnel"].append(_stage_summary("after_dataset_split", snapshots))
-    bin_source = snapshots.copy() if artifact_mode == "online" else snapshots[snapshots["dataset_split"].isin(["train", "valid"])].copy()
+    bin_source = snapshots.copy()
     snapshots = build_rule_bins(
         snapshots,
         price_bin_step=price_bin_step,
@@ -490,7 +490,7 @@ def prepare_rule_training_frame(
         max_price=max_price,
     )
     funnel_summary["snapshot_funnel"].append(
-        _stage_summary("after_rule_bins_with_train_valid_reference", snapshots)
+        _stage_summary("after_rule_bins_with_full_retained_reference", snapshots)
     )
     return snapshots, split, funnel_summary
 

@@ -1,0 +1,115 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+import joblib
+
+
+RUNTIME_BUNDLE_DIRNAME = "q_model_bundle"
+RUNTIME_MANIFEST_NAME = "runtime_manifest.json"
+FEATURE_CONTRACT_NAME = "feature_contract.json"
+CALIBRATOR_NAME = "calibrator.pkl"
+CALIBRATOR_META_NAME = "calibrator_meta.json"
+
+
+@dataclass(frozen=True)
+class FeatureContract:
+    feature_columns: tuple[str, ...]
+    numeric_columns: tuple[str, ...]
+    categorical_columns: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {
+            "feature_columns": list(self.feature_columns),
+            "numeric_columns": list(self.numeric_columns),
+            "categorical_columns": list(self.categorical_columns),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "FeatureContract":
+        return cls(
+            feature_columns=tuple(str(value) for value in payload.get("feature_columns", [])),
+            numeric_columns=tuple(str(value) for value in payload.get("numeric_columns", [])),
+            categorical_columns=tuple(str(value) for value in payload.get("categorical_columns", [])),
+        )
+
+
+@dataclass(frozen=True)
+class RuntimeBundlePaths:
+    root_dir: Path
+    predictor_dir: Path
+    calibration_dir: Path
+    metadata_dir: Path
+    runtime_manifest_path: Path
+    feature_contract_path: Path
+    calibrator_path: Path
+    calibrator_meta_path: Path
+
+    def ensure_dirs(self) -> None:
+        for path in [self.root_dir, self.predictor_dir, self.calibration_dir, self.metadata_dir]:
+            path.mkdir(parents=True, exist_ok=True)
+
+
+def build_runtime_bundle_paths(bundle_dir: Path) -> RuntimeBundlePaths:
+    return RuntimeBundlePaths(
+        root_dir=bundle_dir,
+        predictor_dir=bundle_dir / "predictor",
+        calibration_dir=bundle_dir / "calibration",
+        metadata_dir=bundle_dir / "metadata",
+        runtime_manifest_path=bundle_dir / RUNTIME_MANIFEST_NAME,
+        feature_contract_path=bundle_dir / FEATURE_CONTRACT_NAME,
+        calibrator_path=bundle_dir / "calibration" / CALIBRATOR_NAME,
+        calibrator_meta_path=bundle_dir / "calibration" / CALIBRATOR_META_NAME,
+    )
+
+
+def is_runtime_bundle(path: Path) -> bool:
+    candidate = path if path.is_dir() else path.parent / RUNTIME_BUNDLE_DIRNAME
+    return candidate.is_dir() and (candidate / RUNTIME_MANIFEST_NAME).exists()
+
+
+def resolve_runtime_bundle_dir(path: Path) -> Path:
+    if path.is_dir() and (path / RUNTIME_MANIFEST_NAME).exists():
+        return path
+    candidate = path.parent / RUNTIME_BUNDLE_DIRNAME
+    if candidate.is_dir() and (candidate / RUNTIME_MANIFEST_NAME).exists():
+        return candidate
+    raise FileNotFoundError(f"Runtime bundle not found for path: {path}")
+
+
+def write_bundle_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+
+
+def read_bundle_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+    if not isinstance(payload, dict):
+        raise TypeError(f"Expected JSON object at {path}, got {type(payload)!r}.")
+    return payload
+
+
+def save_feature_contract(path: Path, feature_contract: FeatureContract) -> None:
+    write_bundle_json(path, feature_contract.to_dict())
+
+
+def load_feature_contract(path: Path) -> FeatureContract:
+    return FeatureContract.from_dict(read_bundle_json(path))
+
+
+def save_calibrator(path: Path, calibrator: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(calibrator, path)
+
+
+def load_calibrator(path: Path) -> object:
+    return joblib.load(path)
+
+
+def dataclass_to_dict(value: Any) -> dict[str, Any]:
+    return asdict(value)

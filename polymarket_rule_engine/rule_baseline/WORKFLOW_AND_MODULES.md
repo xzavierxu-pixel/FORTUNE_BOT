@@ -32,7 +32,8 @@ The pipeline runs market annotations by default between raw fetch and snapshot b
 Use `--skip-annotations` only when you intentionally want to reuse an existing annotation artifact.
 
 Hard rule:
-- In `offline`, `test` is evaluation-only. It must never influence rule definition, bin construction, model fitting, or calibration. It is reserved for final diagnostics and backtesting only.
+- In `offline`, `test` is evaluation-only. It must never influence rule definition, model fitting, or calibration. It is reserved for final diagnostics and backtesting only.
+- Rule-bin construction is now unified across `offline` and `online`: both modes derive price/horizon bins from the full retained labeled snapshot frame after quality filtering and split assignment.
 
 Mode boundary table:
 
@@ -40,9 +41,9 @@ Mode boundary table:
 |---|---|---|---|
 | Raw fetch | Resolved markets only | Resolved markets only | Unresolved live markets |
 | Snapshot build | Resolved markets only | Resolved markets only | No training snapshots |
-| Rule bins | `train + valid` only | all labeled rows (`train + valid`) | read-only |
-| Rule existence / bucket eligibility | `train + valid` only | all labeled rows (`train + valid`) | read-only |
-| Rule scoring / parameter estimation | `train` / `valid` only | all labeled rows (`train + valid`) | read-only |
+| Rule bins | all retained labeled rows (`train + valid + test`) | all retained labeled rows (`train + valid`) | read-only |
+| Rule existence / bucket eligibility | all retained labeled rows | all retained labeled rows | read-only |
+| Rule scoring / parameter estimation | all retained labeled rows | all retained labeled rows | read-only |
 | Model fit | `train` only | `train` only | no fit |
 | Calibration fit | `valid` only | latest 20-day `valid` only | no calibration fit |
 | Final evaluation / backtest | `test` only | none | none |
@@ -131,9 +132,10 @@ Purpose:
 - Load enriched snapshots
 - Consume the canonical market annotation artifact built earlier in the pipeline
 - Apply rule bins on price and horizon
-- In `offline`, split into train/valid/test and define rule bins from train+valid only
-- In `online`, split into train/valid with the last 20 days as valid and define rule bins from all labeled rows
-- Select rule buckets by sample thresholds, direction consistency, and positive conservative edge
+- In `offline`, split into train/valid/test and keep `test` for evaluation only
+- In `online`, split into train/valid with the last 20 days as valid
+- Use one unified rule-selection formula in both modes
+- Select rule buckets from full labeled-history statistics with the compact `q_full` runtime schema
 
 Main data layer used:
 - `rule_baseline/datasets/snapshots.py`
@@ -149,16 +151,17 @@ python rule_baseline/training/train_snapshot_model.py --artifact-mode offline
 ```
 
 Current default combination:
-- classifier hyperparameters: `conservative_tree`
-- calibration mode: `horizon_valid_isotonic`
+- predictor presets: `medium_quality`
+- calibration mode: `grouped_isotonic`
 
 Purpose:
 - Match snapshots to selected rules
 - Build the model feature table
-- Train the ensemble classifier/regressor
+- Train the production `q` model with AutoGluon Tabular
 - In `offline`, fit on train and calibrate on valid
 - In `online`, fit on train and use the most recent 20 days as valid for calibration
-- Export predictions and model artifacts
+- Export predictions and a directory-style runtime bundle for the production `q` path
+- Keep `residual_q` / `expected_*` only as offline research payloads
 
 Main layers used:
 - Data: `rule_baseline/datasets/`
@@ -218,7 +221,11 @@ Purpose:
 - Keep model training and inference logic in one place
 
 Files:
-- `tree_ensembles.py`: ensemble classifier/regressor, preprocessors, calibration, prediction helpers
+- `autogluon_qmodel.py`: AutoGluon `q` training and bundle export
+- `runtime_bundle.py`: runtime-bundle paths and metadata helpers
+- `runtime_adapter.py`: shared model-loader and q-only inference adapter
+- `scoring.py`: shared q/trade-value conversion helpers
+- `tree_ensembles.py`: legacy ensemble classifier/regressor helpers for research-only paths
 
 ### `rule_baseline/training`
 
@@ -313,3 +320,22 @@ These files are still real implementations, not compatibility wrappers:
 These scripts are not part of the main pipeline, but may still be useful as diagnostics or experiments:
 - `rule_baseline/analysis/analyze_qmodel_trades.py`
 - `rule_baseline/analysis/analyze_raw_markets.py`
+
+## 6. Production bundle contract
+
+The production `q` artifact is no longer a single `joblib` dict payload. The canonical runtime artifact is:
+
+```text
+data/<mode>/models/q_model_bundle/
+  runtime_manifest.json
+  feature_contract.json
+  predictor/
+  calibration/
+    calibrator.pkl
+    calibrator_meta.json
+```
+
+Runtime rules:
+- `execution_engine` preloads the bundle once at startup.
+- The predictor is persisted once at startup when the backend supports `persist()`.
+- Live inference is q-only. Research-only `target_mode` branching is not part of the production runtime contract.

@@ -15,16 +15,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--calibration-mode",
         choices=[
-            "valid_isotonic",
-            "valid_sigmoid",
-            "domain_valid_isotonic",
-            "horizon_valid_isotonic",
-            "cv_isotonic",
-            "cv_sigmoid",
+            "grouped_isotonic",
+            "global_isotonic",
             "none",
         ],
-        default="horizon_valid_isotonic",
+        default="grouped_isotonic",
     )
+    parser.add_argument("--grouped-calibration-column", type=str, default="horizon_hours")
+    parser.add_argument("--grouped-calibration-min-rows", type=int, default=20)
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--recent-days", type=int, default=None)
     parser.add_argument("--walk-forward-windows", type=int, default=3)
@@ -107,6 +105,10 @@ def main() -> None:
             "rule_baseline/training/train_snapshot_model.py",
             "--calibration-mode",
             args.calibration_mode,
+            "--grouped-calibration-column",
+            args.grouped_calibration_column,
+            "--grouped-calibration-min-rows",
+            str(args.grouped_calibration_min_rows),
             "--target-mode",
             args.target_mode,
         ],

@@ -6,8 +6,8 @@ import sys
 from dataclasses import dataclass
 from datetime import timedelta
 from math import sqrt
+from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 
@@ -17,7 +17,12 @@ from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, load_r
 from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
-from rule_baseline.models import predict_probabilities, predict_regression
+from rule_baseline.models import (
+    compute_trade_value_from_q as _compute_trade_value_from_q,
+    infer_q_from_trade_value as _infer_q_from_trade_value,
+    load_model_artifact,
+)
+from rule_baseline.models.runtime_adapter import ModelArtifactAdapter, build_legacy_adapter
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
@@ -122,30 +127,15 @@ def load_rules(path) -> pd.DataFrame:
 
 
 def load_model_payload(model_path):
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found at {model_path}.")
-    return joblib.load(model_path)
+    return load_model_artifact(model_path)
 
 
 def compute_trade_value_from_q(candidates: pd.DataFrame, q_pred: np.ndarray) -> np.ndarray:
-    price = candidates["price"].astype(float).values
-    direction = candidates["rule_direction"].astype(int).values
-    return np.where(
-        direction > 0,
-        q_pred / np.clip(price, 1e-6, 1.0) - 1.0 - config.FEE_RATE,
-        (price - q_pred) / np.clip(1.0 - price, 1e-6, 1.0) - config.FEE_RATE,
-    )
+    return _compute_trade_value_from_q(candidates, q_pred, direction_column="rule_direction")
 
 
 def infer_q_from_trade_value(candidates: pd.DataFrame, trade_value_pred: np.ndarray) -> np.ndarray:
-    price = candidates["price"].astype(float).values
-    direction = candidates["rule_direction"].astype(int).values
-    q_pred = np.where(
-        direction > 0,
-        price * (trade_value_pred + 1.0 + config.FEE_RATE),
-        price - (1.0 - price) * (trade_value_pred + config.FEE_RATE),
-    )
-    return np.clip(q_pred, 0.0, 1.0)
+    return _infer_q_from_trade_value(candidates, trade_value_pred, direction_column="rule_direction")
 
 
 def derive_domain_whitelist(rules: pd.DataFrame) -> set[str] | None:
@@ -242,14 +232,23 @@ def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
     return matched.reset_index(drop=True)
 
 
-def predict_candidates(candidates: pd.DataFrame, market_feature_cache: pd.DataFrame, payload: dict) -> pd.DataFrame:
+def _resolve_model_artifact(model_artifact) -> ModelArtifactAdapter:
+    if isinstance(model_artifact, ModelArtifactAdapter):
+        return model_artifact
+    if isinstance(model_artifact, dict):
+        return build_legacy_adapter(model_artifact, Path("<in-memory>"))
+    raise TypeError(f"Unsupported model artifact type: {type(model_artifact)!r}")
+
+
+def predict_candidates(candidates: pd.DataFrame, market_feature_cache: pd.DataFrame, payload) -> pd.DataFrame:
     model_input = candidates.copy()
     model_input["leaf_id"] = model_input["rule_leaf_id"]
     model_input["direction"] = model_input["rule_direction"]
     model_input["group_key"] = model_input["rule_group_key"]
     df_feat = preprocess_features(model_input, market_feature_cache)
     out = candidates.copy()
-    target_mode = payload.get("target_mode", "q")
+    model_artifact = _resolve_model_artifact(payload)
+    target_mode = model_artifact.target_mode
     supplemental_cols = [
         "source_host",
         "selected_quote_offset_sec",
@@ -261,16 +260,7 @@ def predict_candidates(candidates: pd.DataFrame, market_feature_cache: pd.DataFr
         if column in df_feat.columns and column not in out.columns:
             out[column] = df_feat[column].values
 
-    if target_mode == "q":
-        out["q_pred"] = predict_probabilities(payload, df_feat)
-        out["trade_value_pred"] = compute_trade_value_from_q(out, out["q_pred"].values)
-    elif target_mode == "residual_q":
-        residual_pred = predict_regression(payload, df_feat)
-        out["q_pred"] = np.clip(out["price"].astype(float).values + residual_pred, 0.0, 1.0)
-        out["trade_value_pred"] = compute_trade_value_from_q(out, out["q_pred"].values)
-    else:
-        out["trade_value_pred"] = predict_regression(payload, df_feat)
-        out["q_pred"] = infer_q_from_trade_value(out, out["trade_value_pred"].values)
+    out["q_pred"], out["trade_value_pred"] = model_artifact.predict_outputs(out, df_feat)
     return out
 
 

@@ -15,7 +15,17 @@ from rule_baseline.datasets.snapshots import load_raw_markets, load_research_sna
 from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
-from rule_baseline.models import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
+from rule_baseline.models import (
+    DEFAULT_AUTOGUON_PRESETS,
+    AUTOGLOUON_DEFAULT_CALIBRATION_MODE,
+    compute_trade_value_from_q as _compute_trade_value_from_q,
+    fit_autogluon_q_model,
+    fit_model_payload,
+    fit_regression_payload,
+    infer_q_from_trade_value as _infer_q_from_trade_value,
+    predict_probabilities,
+    predict_regression,
+)
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
@@ -163,15 +173,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--calibration-mode",
         choices=[
-            "valid_isotonic",
-            "valid_sigmoid",
-            "domain_valid_isotonic",
-            "horizon_valid_isotonic",
-            "cv_isotonic",
-            "cv_sigmoid",
+            "grouped_isotonic",
+            "global_isotonic",
             "none",
         ],
-        default="horizon_valid_isotonic",
+        default=AUTOGLOUON_DEFAULT_CALIBRATION_MODE,
         help="Calibration strategy for probability outputs.",
     )
     parser.add_argument(
@@ -184,6 +190,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recent-days", type=int, default=None)
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--predictor-presets", type=str, default=DEFAULT_AUTOGUON_PRESETS)
+    parser.add_argument("--predictor-time-limit", type=int, default=None)
+    parser.add_argument("--grouped-calibration-column", type=str, default="horizon_hours")
+    parser.add_argument("--grouped-calibration-min-rows", type=int, default=20)
+    parser.add_argument("--refit-full", action="store_true")
     return parser.parse_args()
 
 
@@ -330,25 +341,11 @@ def trade_value_metrics(df: pd.DataFrame) -> dict[str, float | int | None]:
 
 
 def compute_trade_value_from_q(df: pd.DataFrame, q_pred: pd.Series | pd.Index | np.ndarray) -> np.ndarray:
-    direction = df["direction"].astype(int).values
-    price = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
-    q_value = np.asarray(q_pred, dtype=float).clip(1e-6, 1 - 1e-6)
-    return np.where(
-        direction > 0,
-        q_value / price - 1.0 - config.FEE_RATE,
-        (price - q_value) / np.maximum(1.0 - price, 1e-6) - config.FEE_RATE,
-    )
+    return _compute_trade_value_from_q(df, q_pred, direction_column="direction")
 
 
 def infer_q_from_trade_value(df: pd.DataFrame, trade_value_pred: np.ndarray) -> np.ndarray:
-    direction = df["direction"].astype(int).values
-    price = df["price"].astype(float).clip(1e-6, 1 - 1e-6).values
-    q_pred = np.where(
-        direction > 0,
-        price * (trade_value_pred + 1.0 + config.FEE_RATE),
-        price - (1.0 - price) * (trade_value_pred + config.FEE_RATE),
-    )
-    return np.clip(q_pred, 0.0, 1.0)
+    return _infer_q_from_trade_value(df, trade_value_pred, direction_column="direction")
 
 
 def add_training_targets(df_feat: pd.DataFrame) -> pd.DataFrame:
@@ -372,17 +369,16 @@ def save_model(payload: dict, model_path) -> None:
     print(f"[INFO] Saved ensemble payload to {model_path}")
 
 
-def export_predictions(payload: dict, df_feat: pd.DataFrame, artifact_paths, artifact_mode: str) -> dict:
-    target_mode = payload.get("target_mode", "q")
+def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, artifact_mode: str, target_mode: str) -> dict:
     if target_mode == "q":
-        q_pred = predict_probabilities(payload, df_feat)
+        q_pred = model_artifact.predict(df_feat)
         trade_value_pred = compute_trade_value_from_q(df_feat, q_pred)
     elif target_mode == "residual_q":
-        residual_pred = predict_regression(payload, df_feat)
+        residual_pred = predict_regression(model_artifact, df_feat)
         q_pred = np.clip(df_feat["price"].astype(float).values + residual_pred, 0.0, 1.0)
         trade_value_pred = compute_trade_value_from_q(df_feat, q_pred)
     else:
-        trade_value_pred = predict_regression(payload, df_feat)
+        trade_value_pred = predict_regression(model_artifact, df_feat)
         q_pred = infer_q_from_trade_value(df_feat, trade_value_pred)
 
     export_columns = [
@@ -429,6 +425,8 @@ def export_predictions(payload: dict, df_feat: pd.DataFrame, artifact_paths, art
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
+    if args.artifact_mode == "online" and args.target_mode != "q":
+        raise ValueError("Online production artifacts support only target_mode='q'.")
 
     rebuild_canonical_merged()
     snapshots = load_research_snapshots(
@@ -459,56 +457,83 @@ def main() -> None:
     df_feat = add_training_targets(df_feat)
 
     feature_columns = [column for column in df_feat.columns if column not in DROP_COLS]
-    if args.artifact_mode == "offline":
-        df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
-        df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
-    else:
-        df_train = df_feat.copy()
-        df_valid = pd.DataFrame(columns=df_feat.columns)
+    df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
+    df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
 
     if df_train.empty:
         raise RuntimeError("Empty training split.")
 
     if args.target_mode == "q":
-        payload = fit_model_payload(
-            df_train,
-            df_valid,
+        model_artifact = fit_autogluon_q_model(
+            df_train=df_train,
+            df_valid=df_valid,
             feature_columns=feature_columns,
-            target_column="y",
             calibration_mode=args.calibration_mode,
+            grouped_calibration_column=args.grouped_calibration_column,
+            grouped_calibration_min_rows=args.grouped_calibration_min_rows,
+            bundle_dir=artifact_paths.model_bundle_dir,
+            artifact_mode=args.artifact_mode,
+            split_boundaries=split.to_dict(),
+            predictor_presets=args.predictor_presets,
+            time_limit=args.predictor_time_limit,
+            refit_full=args.refit_full,
         )
+        print(f"[INFO] Saved AutoGluon q bundle to {artifact_paths.model_bundle_dir}")
     elif args.target_mode == "residual_q":
-        payload = fit_regression_payload(
+        if args.artifact_mode != "offline":
+            raise ValueError("Research target_mode='residual_q' is only supported in offline mode.")
+        model_artifact = fit_regression_payload(
             df_train,
             feature_columns=feature_columns,
             target_column="residual_q_target",
         )
     else:
+        if args.artifact_mode != "offline":
+            raise ValueError(f"Research target_mode='{args.target_mode}' is only supported in offline mode.")
         target_column = "expected_pnl_target" if args.target_mode == "expected_pnl" else "expected_roi_target"
-        payload = fit_regression_payload(
+        model_artifact = fit_regression_payload(
             df_train,
             feature_columns=feature_columns,
             target_column=target_column,
         )
 
-    payload["artifact_mode"] = args.artifact_mode
-    payload["target_mode"] = args.target_mode
-    payload["split_boundaries"] = split.to_dict()
-    save_model(payload, artifact_paths.model_path)
+    if args.target_mode != "q":
+        model_artifact["artifact_mode"] = args.artifact_mode
+        model_artifact["target_mode"] = args.target_mode
+        model_artifact["split_boundaries"] = split.to_dict()
+        save_model(model_artifact, artifact_paths.legacy_model_path)
 
-    metrics_by_split = export_predictions(payload, df_feat, artifact_paths, args.artifact_mode)
+    metrics_by_split = export_predictions(model_artifact, df_feat, artifact_paths, args.artifact_mode, args.target_mode)
+    training_summary = {
+        "artifact_mode": args.artifact_mode,
+        "calibration_mode": args.calibration_mode,
+        "target_mode": args.target_mode,
+        "feature_count": len(feature_columns),
+        "rows_by_split": df_feat["dataset_split"].value_counts().to_dict(),
+        "metrics_by_split": metrics_by_split,
+        "boundaries": split.to_dict(),
+        "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+    }
+    if args.target_mode == "q":
+        training_summary["model_artifact"] = {
+            "backend": "autogluon_q_bundle",
+            "bundle_dir": str(artifact_paths.model_bundle_dir),
+            "predictor_presets": args.predictor_presets,
+            "predictor_time_limit": args.predictor_time_limit,
+            "refit_full": bool(args.refit_full),
+            "grouped_calibration_column": args.grouped_calibration_column,
+            "grouped_calibration_min_rows": int(args.grouped_calibration_min_rows),
+            "runtime_manifest": model_artifact.runtime_manifest,
+            "calibrator_meta": model_artifact.calibrator_meta,
+        }
+    else:
+        training_summary["model_artifact"] = {
+            "backend": "legacy_payload",
+            "path": str(artifact_paths.legacy_model_path),
+        }
     write_json(
         artifact_paths.model_training_summary_path,
-        {
-            "artifact_mode": args.artifact_mode,
-            "calibration_mode": args.calibration_mode,
-            "target_mode": args.target_mode,
-            "feature_count": len(feature_columns),
-            "rows_by_split": df_feat["dataset_split"].value_counts().to_dict(),
-            "metrics_by_split": metrics_by_split,
-            "boundaries": split.to_dict(),
-            "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
-        },
+        training_summary,
     )
 
     print(f"[INFO] Saved published predictions to {artifact_paths.predictions_path}")
