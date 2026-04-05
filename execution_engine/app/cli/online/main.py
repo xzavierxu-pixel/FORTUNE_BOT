@@ -15,6 +15,7 @@ if str(ROOT_DIR) not in sys.path:
 from execution_engine.online.analysis.labels import build_daily_label_analysis
 from execution_engine.online.execution.monitor import monitor_order_lifecycle
 from execution_engine.online.pipeline.submit_window import complete_post_submit_monitor, run_submit_window
+from execution_engine.online.reporting.artifact_retention import compact_run_artifacts
 from execution_engine.online.streaming.manager import stream_market_data
 from execution_engine.runtime.config import load_config
 
@@ -171,6 +172,23 @@ def _cmd_run_submit_window_post_submit(args: argparse.Namespace) -> None:
     print(f"manifest={result.run_manifest_path}")
 
 
+def _cmd_compact_run_artifacts(args: argparse.Namespace) -> None:
+    if args.run_id:
+        os.environ["PEG_RUN_ID"] = args.run_id
+    os.environ["PEG_RUN_MODE"] = "artifact_retention"
+    cfg = load_config()
+    result = compact_run_artifacts(
+        cfg,
+        full_retention_days=args.full_days if args.full_days >= 0 else None,
+        debug_retention_days=args.debug_days if args.debug_days >= 0 else None,
+    )
+    print(f"scanned_run_count={result.scanned_run_count}")
+    print(f"compacted_run_count={result.compacted_run_count}")
+    print(f"deleted_file_count={result.deleted_file_count}")
+    print(f"deleted_dir_count={result.deleted_dir_count}")
+    print(f"manifest={result.manifest_path}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified CLI for the online execution pipeline.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -207,6 +225,15 @@ def build_parser() -> argparse.ArgumentParser:
     post_submit.add_argument("--run-id", default=None)
     post_submit.add_argument("--run-date", default=None)
     post_submit.set_defaults(handler=_cmd_run_submit_window_post_submit)
+
+    compact = subparsers.add_parser(
+        "compact-run-artifacts",
+        description="Compact old run artifacts by deleting debug and non-core files beyond retention windows.",
+    )
+    compact.add_argument("--run-id", default=None)
+    compact.add_argument("--full-days", type=int, default=-1)
+    compact.add_argument("--debug-days", type=int, default=-1)
+    compact.set_defaults(handler=_cmd_compact_run_artifacts)
 
     return parser
 

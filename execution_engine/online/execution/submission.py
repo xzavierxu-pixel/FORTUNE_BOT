@@ -9,7 +9,7 @@ import time
 
 import pandas as pd
 
-from execution_engine.integrations.providers.balance_provider import FileBalanceProvider
+from execution_engine.integrations.providers.balance_provider import build_balance_provider
 from execution_engine.integrations.trading.clob_client import build_clob_client
 from execution_engine.integrations.trading.nonce import NonceManager
 from execution_engine.integrations.trading.order_manager import reconcile, submit_order, sweep_expired_orders
@@ -178,13 +178,11 @@ def _capacity_reason(
     row: Dict[str, Any],
     state: StateStore,
     cfg: PegConfig,
-    balance_provider: FileBalanceProvider,
+    balance_provider: Any,
 ) -> str | None:
     amount_usdc = to_float(row.get("stake_usdc"))
     if amount_usdc <= 0:
         return None
-    if state.open_orders_count >= cfg.max_open_orders:
-        return "OPEN_ORDERS_LIMIT"
     if cfg.max_position_per_market_usdc > 0:
         exposure = state.get_market_exposure(str(row.get("market_id") or ""), _selected_outcome_index(row), "BUY")
         if exposure + amount_usdc > cfg.max_position_per_market_usdc:
@@ -207,7 +205,7 @@ def _wait_for_capacity(
     cfg: PegConfig,
     row: Dict[str, Any],
     clob_client: Any,
-    balance_provider: FileBalanceProvider,
+    balance_provider: Any,
 ) -> tuple[StateStore, int]:
     wait_count = 0
     while True:
@@ -257,7 +255,7 @@ def submit_selected_orders(
     sweep_expired_orders(cfg, clob_client)
     reconcile(cfg, clob_client)
     nonce_manager = NonceManager(cfg.nonce_path)
-    balance_provider = FileBalanceProvider(cfg.balances_path)
+    balance_provider = build_balance_provider(cfg, clob_client)
     fee_rate = load_fee_rate(cfg)
 
     for row in eligible_rows.to_dict(orient="records"):

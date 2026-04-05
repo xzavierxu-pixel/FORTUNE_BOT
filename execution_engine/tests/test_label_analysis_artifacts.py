@@ -156,6 +156,7 @@ class LabelAnalysisArtifactsTest(unittest.TestCase):
             cfg = SimpleNamespace(
                 run_id="run-1",
                 run_mode="submit_window",
+                artifact_policy="debug",
                 run_snapshot_processed_markets_path=run_dir / "snapshot_score" / "processed_markets.csv",
                 run_snapshot_raw_inputs_path=run_dir / "snapshot_score" / "raw_snapshot_inputs.jsonl",
                 run_snapshot_normalized_path=run_dir / "snapshot_score" / "normalized_snapshots.csv",

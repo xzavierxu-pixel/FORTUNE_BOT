@@ -9,7 +9,8 @@ import json
 
 import pandas as pd
 
-from execution_engine.integrations.trading.order_manager import transition_order
+from execution_engine.integrations.trading.clob_client import build_clob_client
+from execution_engine.integrations.trading.order_manager import request_cancel
 from execution_engine.integrations.trading.state_machine import TERMINAL_STATES
 from execution_engine.online.execution.positions import load_open_position_rows
 from execution_engine.online.exits.pnl import realized_pnl_usdc
@@ -84,6 +85,7 @@ def _settlement_price(position: Dict[str, Any], resolved_label: Dict[str, str]) 
 
 
 def settle_resolved_positions(cfg: PegConfig) -> SettlementCloseResult:
+    client = build_clob_client(cfg) if not cfg.dry_run and cfg.clob_enabled else None
     positions = load_open_position_rows(cfg)
     resolved_by_market = _resolved_label_lookup(cfg)
     latest_orders = _latest_orders_by_attempt(read_jsonl_many(list_run_artifact_paths(cfg.runs_root_dir, "orders.jsonl")))
@@ -149,11 +151,14 @@ def settle_resolved_positions(cfg: PegConfig) -> SettlementCloseResult:
             current_status = str(order.get("status") or "").upper()
             if current_status in TERMINAL_STATES:
                 continue
-            cancel_requested = transition_order(order, "CANCEL_REQUESTED", "MARKET_RESOLVED")
-            state.record_order(cancel_requested)
-            canceled = transition_order(cancel_requested, "CANCELED", "MARKET_RESOLVED")
-            state.record_order(canceled)
-            canceled_exit_order_count += 1
+            terminal = request_cancel(
+                order,
+                cfg,
+                clob_client=client,
+                reason="MARKET_RESOLVED",
+                failure_reason="CANCEL_FAILED_MARKET_RESOLVED",
+            )
+            canceled_exit_order_count += int(str(terminal.get("status") or "").upper() == "CANCELED")
 
     _write_jsonl(_settlements_path(cfg), settlement_rows)
     return SettlementCloseResult(

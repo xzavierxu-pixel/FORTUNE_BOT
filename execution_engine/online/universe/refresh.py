@@ -157,18 +157,10 @@ def _load_rule_baseline_helpers(cfg: PegConfig) -> Dict[str, Any]:
         is_short_term_crypto_market,
         resolve_category,
     )
-    from rule_baseline.domain_extractor.market_annotations import (  # type: ignore
-        MarketSourceParser,
-        infer_category_from_source,
-        normalize_outcomes,
-    )
 
     return {
         "is_short_term_crypto_market": is_short_term_crypto_market,
         "resolve_category": resolve_category,
-        "MarketSourceParser": MarketSourceParser,
-        "infer_category_from_source": infer_category_from_source,
-        "normalize_outcomes": normalize_outcomes,
     }
 
 
@@ -222,28 +214,11 @@ def _build_binary_market_row(
 
     resolve_category = helpers["resolve_category"]
     is_short_term_crypto_market = helpers["is_short_term_crypto_market"]
-    MarketSourceParser = helpers["MarketSourceParser"]
-    infer_category_from_source = helpers["infer_category_from_source"]
-    normalize_outcomes = helpers["normalize_outcomes"]
 
     tags = event.get("tags") or market.get("tags") or []
     category_raw = str(resolve_category(tags) or "UNKNOWN").upper()
     if is_short_term_crypto_market(market, category_raw):
         return None, "filtered_crypto_short_term"
-
-    resolution_source = str(market.get("resolutionSource") or "")
-    description = str(market.get("description") or "")
-    source_url = resolution_source or (MarketSourceParser.extract_url_from_text(description) or "UNKNOWN")
-    domain_parsed, sub_domain, source_url = MarketSourceParser.parse_domain_parts(source_url)
-    category_parsed = str(
-        infer_category_from_source(
-            pd.Series([domain_parsed]),
-            pd.Series([str(market.get("gameId") or event.get("gameId") or "")]),
-        ).iloc[0]
-    )
-    category = category_parsed if category_parsed != "UNKNOWN" else category_raw
-    market_type, outcome_pattern = normalize_outcomes(json.dumps(outcomes, ensure_ascii=True))
-    domain = domain_parsed if domain_parsed not in {"", "UNKNOWN"} else "UNKNOWN"
 
     return {
         "market_id": market_id,
@@ -254,18 +229,19 @@ def _build_binary_market_row(
         "start_time_utc": str(market.get("startDate") or market.get("createdAt") or ""),
         "created_at_utc": str(market.get("createdAt") or market.get("creationDate") or ""),
         "end_time_utc": _to_iso(end_time),
-        "resolution_source": resolution_source,
+        "resolution_source": str(market.get("resolutionSource") or ""),
         "game_id": str(market.get("gameId") or event.get("gameId") or "UNKNOWN"),
         "remaining_hours": round(remaining_hours, 6),
-        "category": category,
+        "category": category_raw,
         "category_raw": category_raw,
-        "category_parsed": category_parsed,
-        "domain": domain,
-        "domain_parsed": domain_parsed or "UNKNOWN",
-        "sub_domain": sub_domain or "UNKNOWN",
-        "source_url": source_url or "UNKNOWN",
-        "market_type": market_type or "UNKNOWN",
-        "outcome_pattern": outcome_pattern or "UNKNOWN",
+        "category_parsed": "UNKNOWN",
+        "category_override_flag": False,
+        "domain": "UNKNOWN",
+        "domain_parsed": "UNKNOWN",
+        "sub_domain": "",
+        "source_url": "UNKNOWN",
+        "market_type": "UNKNOWN",
+        "outcome_pattern": "UNKNOWN",
         "accepting_orders": _to_bool(market.get("acceptingOrders") or market.get("accepting_orders")),
         "volume": _to_float(market.get("volume") or market.get("volumeNum")),
         "best_bid": _to_float(market.get("bestBid")),

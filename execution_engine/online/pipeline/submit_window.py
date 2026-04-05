@@ -25,6 +25,7 @@ from execution_engine.online.pipeline.lifecycle import (
 )
 from execution_engine.online.pipeline.prewarm import OnlineRuntimeContainer, build_runtime_container
 from execution_engine.online.reporting.deferred_writer import DeferredWriter
+from execution_engine.online.reporting.candidate_audit import build_candidate_audit
 from execution_engine.online.reporting.run_summary import publish_run_summary
 from execution_engine.online.scoring.live import LiveInferenceResult, run_live_inference
 from execution_engine.online.scoring.selection import allocate_candidates, build_selection_decisions, select_target_side
@@ -40,6 +41,10 @@ from execution_engine.shared.time import bj_now_iso, to_bj_iso, to_iso, utc_now
 def _write_manifest(path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _debug_artifacts_enabled(cfg: PegConfig) -> bool:
+    return str(getattr(cfg, "artifact_policy", "minimal") or "minimal").strip().lower() == "debug"
 
 
 def _now_fields(prefix: str) -> Dict[str, str]:
@@ -59,6 +64,19 @@ def _merge_unique_columns(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFra
     return pd.concat([left.reset_index(drop=True), addable.reset_index(drop=True)], axis=1)
 
 
+def _concat_row_frames(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
+    if existing.empty:
+        return incoming.reset_index(drop=True).copy()
+    if incoming.empty:
+        return existing.reset_index(drop=True).copy()
+
+    ordered_columns = list(existing.columns)
+    ordered_columns.extend(column for column in incoming.columns if column not in ordered_columns)
+    left = existing.reindex(columns=ordered_columns)
+    right = incoming.reindex(columns=ordered_columns)
+    return pd.concat([left.reset_index(drop=True), right.reset_index(drop=True)], ignore_index=True)
+
+
 def _write_selection_snapshot(path, selection: pd.DataFrame) -> None:
     if selection.empty:
         return
@@ -68,7 +86,7 @@ def _write_selection_snapshot(path, selection: pd.DataFrame) -> None:
             existing = pd.read_csv(path, dtype=str)
         except pd.errors.EmptyDataError:
             existing = pd.DataFrame()
-    combined = pd.concat([existing, selection.copy()], ignore_index=True)
+    combined = _concat_row_frames(existing, selection.copy())
     dedupe_keys = [
         column
         for column in ["run_id", "batch_id", "market_id", "selected_token_id", "rule_group_key", "rule_leaf_id"]
@@ -96,7 +114,7 @@ def _append_csv_snapshot(path, frame: pd.DataFrame, *, dedupe_keys: list[str] | 
         return
     incoming = frame.reset_index(drop=True).copy()
     existing = _load_csv_frame(path)
-    combined = pd.concat([existing, incoming], ignore_index=True)
+    combined = _concat_row_frames(existing, incoming)
     keys = [column for column in (dedupe_keys or []) if column in combined.columns]
     if keys:
         for column in keys:
@@ -134,25 +152,33 @@ def _with_batch_metadata(frame: pd.DataFrame, cfg: PegConfig, batch_id: str) -> 
 
 
 def _write_snapshot_score_manifest(cfg: PegConfig) -> None:
+    debug_enabled = _debug_artifacts_enabled(cfg)
     payload = {
         "generated_at_utc": to_iso(utc_now()),
         "generated_at_bj": bj_now_iso(),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
-        "processed_markets_path": str(cfg.run_snapshot_processed_markets_path),
-        "raw_snapshot_inputs_path": str(cfg.run_snapshot_raw_inputs_path),
-        "normalized_snapshots_path": str(cfg.run_snapshot_normalized_path),
-        "feature_inputs_path": str(cfg.run_snapshot_feature_inputs_path),
-        "rule_hits_path": str(cfg.run_snapshot_rule_hits_path),
-        "model_outputs_path": str(cfg.run_snapshot_model_outputs_path),
+        "artifact_policy": str(getattr(cfg, "artifact_policy", "minimal") or "minimal"),
+        "debug_artifacts_enabled": debug_enabled,
         "selection_decisions_path": str(cfg.run_snapshot_selection_path),
-        "processed_market_count": int(len(_load_csv_frame(cfg.run_snapshot_processed_markets_path))),
-        "normalized_snapshot_count": int(len(_load_csv_frame(cfg.run_snapshot_normalized_path))),
-        "feature_input_count": int(len(_load_csv_frame(cfg.run_snapshot_feature_inputs_path))),
-        "rule_hit_count": int(len(_load_csv_frame(cfg.run_snapshot_rule_hits_path))),
-        "model_output_count": int(len(_load_csv_frame(cfg.run_snapshot_model_outputs_path))),
         "selection_decision_count": int(len(_load_csv_frame(cfg.run_snapshot_selection_path))),
     }
+    if debug_enabled:
+        payload.update(
+            {
+                "processed_markets_path": str(cfg.run_snapshot_processed_markets_path),
+                "raw_snapshot_inputs_path": str(cfg.run_snapshot_raw_inputs_path),
+                "normalized_snapshots_path": str(cfg.run_snapshot_normalized_path),
+                "feature_inputs_path": str(cfg.run_snapshot_feature_inputs_path),
+                "rule_hits_path": str(cfg.run_snapshot_rule_hits_path),
+                "model_outputs_path": str(cfg.run_snapshot_model_outputs_path),
+                "processed_market_count": int(len(_load_csv_frame(cfg.run_snapshot_processed_markets_path))),
+                "normalized_snapshot_count": int(len(_load_csv_frame(cfg.run_snapshot_normalized_path))),
+                "feature_input_count": int(len(_load_csv_frame(cfg.run_snapshot_feature_inputs_path))),
+                "rule_hit_count": int(len(_load_csv_frame(cfg.run_snapshot_rule_hits_path))),
+                "model_output_count": int(len(_load_csv_frame(cfg.run_snapshot_model_outputs_path))),
+            }
+        )
     _write_manifest(cfg.run_snapshot_score_manifest_path, payload)
 
 
@@ -172,32 +198,33 @@ def _persist_batch_training_artifacts(
     model_outputs = _with_batch_metadata(select_target_side(inference_result.rule_model.model_outputs), cfg, batch_id)
     selection_snapshot = _with_batch_metadata(selection, cfg, batch_id)
 
-    _append_csv_snapshot(
-        cfg.run_snapshot_processed_markets_path,
-        processed_markets,
-        dedupe_keys=["run_id", "batch_id", "market_id", "selected_reference_token_id"],
-    )
-    _append_jsonl_snapshot(cfg.run_snapshot_raw_inputs_path, raw_snapshot_inputs)
-    _append_csv_snapshot(
-        cfg.run_snapshot_normalized_path,
-        normalized_snapshots,
-        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time"],
-    )
-    _append_csv_snapshot(
-        cfg.run_snapshot_rule_hits_path,
-        rule_hits,
-        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
-    )
-    _append_csv_snapshot(
-        cfg.run_snapshot_feature_inputs_path,
-        feature_inputs,
-        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
-    )
-    _append_csv_snapshot(
-        cfg.run_snapshot_model_outputs_path,
-        model_outputs,
-        dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
-    )
+    if _debug_artifacts_enabled(cfg):
+        _append_csv_snapshot(
+            cfg.run_snapshot_processed_markets_path,
+            processed_markets,
+            dedupe_keys=["run_id", "batch_id", "market_id", "selected_reference_token_id"],
+        )
+        _append_jsonl_snapshot(cfg.run_snapshot_raw_inputs_path, raw_snapshot_inputs)
+        _append_csv_snapshot(
+            cfg.run_snapshot_normalized_path,
+            normalized_snapshots,
+            dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time"],
+        )
+        _append_csv_snapshot(
+            cfg.run_snapshot_rule_hits_path,
+            rule_hits,
+            dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+        )
+        _append_csv_snapshot(
+            cfg.run_snapshot_feature_inputs_path,
+            feature_inputs,
+            dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+        )
+        _append_csv_snapshot(
+            cfg.run_snapshot_model_outputs_path,
+            model_outputs,
+            dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+        )
     _write_selection_snapshot(cfg.run_snapshot_selection_path, selection_snapshot)
     _write_snapshot_score_manifest(cfg)
 
@@ -208,6 +235,8 @@ def _write_post_submit_output(
     selection: pd.DataFrame,
     attempt_frame: pd.DataFrame,
 ) -> None:
+    if not _debug_artifacts_enabled(runtime.cfg):
+        return
     model_outputs = select_target_side(inference_result.rule_model.model_outputs).reset_index(drop=True)
     feature_inputs = inference_result.rule_model.feature_inputs.reset_index(drop=True)
     if model_outputs.empty and feature_inputs.empty:
@@ -281,7 +310,7 @@ def _write_post_submit_output(
             existing = pd.read_csv(runtime.cfg.run_submit_post_submit_features_path, dtype=str)
         except pd.errors.EmptyDataError:
             existing = pd.DataFrame()
-    combined = pd.concat([existing, output], ignore_index=True)
+    combined = _concat_row_frames(existing, output)
     runtime.cfg.run_submit_post_submit_features_path.parent.mkdir(parents=True, exist_ok=True)
     combined.to_csv(runtime.cfg.run_submit_post_submit_features_path, index=False)
 
@@ -1123,6 +1152,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
     final_status = "completed"
     if str(monitor_summary["post_submit_monitor_status"]) == "failed":
         final_status = "completed_with_post_submit_failure"
+    audit_result = build_candidate_audit(cfg)
     manifest = {
         "generated_at_utc": to_iso(utc_now()),
         "generated_at_bj": bj_now_iso(),
@@ -1148,7 +1178,10 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         "submitted_order_count": int(submitted_order_count),
         "submit_rejection_count": int(submit_rejection_count),
         "selection_decisions_path": str(cfg.run_snapshot_selection_path),
-        "post_submit_features_path": str(cfg.run_submit_post_submit_features_path),
+        "audit_market_path": audit_result.market_audit_path,
+        "audit_funnel_summary_path": audit_result.funnel_summary_path,
+        "audit_market_count": int(audit_result.market_count),
+        "audit_candidate_event_count": int(audit_result.candidate_event_count),
         "underfilled_batch_count": int(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
         "final_status": final_status,
@@ -1192,6 +1225,8 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
             for page in page_results
         ],
     }
+    if _debug_artifacts_enabled(cfg):
+        manifest["post_submit_features_path"] = str(cfg.run_submit_post_submit_features_path)
     _write_manifest(cfg.run_submit_window_manifest_path, manifest)
     _update_metrics(cfg, metrics_payload)
     summary_manifest = {key: value for key, value in manifest.items() if key != "pages"}

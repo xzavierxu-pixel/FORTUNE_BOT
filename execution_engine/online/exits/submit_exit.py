@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from execution_engine.integrations.trading.clob_client import ClobClient, build_clob_client
 from execution_engine.integrations.trading.nonce import NonceManager
 from execution_engine.integrations.trading.order_manager import submit_order
+from execution_engine.integrations.trading.state_machine import TERMINAL_STATES
 from execution_engine.online.execution.positions import load_open_position_rows
 from execution_engine.online.execution.submission_support import (
     record_decision_created,
@@ -128,6 +129,7 @@ def submit_pending_exit_orders(
         str(row.get("parent_order_attempt_id") or ""): row
         for row in latest_orders.values()
         if str(row.get("execution_phase") or "ENTRY").upper() == "EXIT"
+        and str(row.get("status") or "").upper() not in TERMINAL_STATES
         and str(row.get("parent_order_attempt_id") or "")
     }
 

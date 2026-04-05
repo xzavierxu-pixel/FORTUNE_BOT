@@ -14,6 +14,8 @@ polymarket_rule_engine/data/offline/models/*
 polymarket_rule_engine/data/domain/*
 !polymarket_rule_engine/data/domain/market_domain_features.csv
 execution_engine/data/
+server_data/
+server_data_analysis/
 
 # Python ignore patterns
 __pycache__/
@@ -52,9 +54,17 @@ venv.bak/
 *.h5
 *.model
 *.weights
-!polymarket_rule_engine/data/offline/models/ensemble_snapshot_q.pkl
+!polymarket_rule_engine/data/offline/models
 
 # OS generated files
 .DS_Store
 Thumbs.db
 fortune_bot.env
+
+# Project-local AI workflow files
+AGENTS.md
+.codex/
+.gemini/
+.agents/
+docs/AI_WORKFLOW.md
+.ai/

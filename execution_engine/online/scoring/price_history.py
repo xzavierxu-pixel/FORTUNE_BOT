@@ -92,6 +92,54 @@ class LatestWsPrice:
     source_event_type: str
 
 
+def latest_price_from_token_state(row: Dict[str, Any], *, now: datetime) -> LatestWsPrice | None:
+    if not isinstance(row, dict):
+        return None
+    token_id = str(row.get("token_id") or "").strip()
+    if not token_id:
+        return None
+
+    best_bid = _to_float(row.get("best_bid"))
+    best_ask = _to_float(row.get("best_ask"))
+    mid_price = _to_float(row.get("mid_price"))
+    last_trade_price = _to_float(row.get("last_trade_price"))
+    price = None
+    if best_bid is not None and best_ask is not None and best_ask >= best_bid:
+        price = round((best_bid + best_ask) / 2.0, 6)
+    elif mid_price is not None and mid_price > 0:
+        price = round(mid_price, 6)
+    elif last_trade_price is not None and last_trade_price > 0:
+        price = round(last_trade_price, 6)
+    elif best_ask is not None and best_ask > 0:
+        price = round(best_ask, 6)
+    elif best_bid is not None and best_bid > 0:
+        price = round(best_bid, 6)
+    if price is None or price <= 0:
+        return None
+
+    event_time = _parse_received_at(row.get("latest_event_at_utc")) or now
+    return LatestWsPrice(
+        token_id=token_id,
+        event_time=event_time,
+        price=float(price),
+        source_event_type=str(row.get("latest_event_type") or "token_state"),
+    )
+
+
+def build_latest_live_prices_from_token_state(
+    token_state_by_token: Dict[str, Dict[str, Any]],
+    token_ids: Iterable[str],
+    *,
+    now: datetime,
+) -> Dict[str, LatestWsPrice]:
+    latest_by_token: Dict[str, LatestWsPrice] = {}
+    for token_id in {str(value) for value in token_ids if str(value)}:
+        latest = latest_price_from_token_state(token_state_by_token.get(token_id, {}), now=now)
+        if latest is not None:
+            latest_by_token[token_id] = latest
+    return latest_by_token
+
+
 @dataclass(frozen=True)
 class PricePoint:
     ts: int

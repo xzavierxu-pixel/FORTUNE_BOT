@@ -48,7 +48,11 @@ class MarketStreamManager:
         self.state_by_token: Dict[str, Dict[str, Any]] = {
             target.token_id: build_initial_token_state(target) for target in self.targets
         }
-        self.raw_writer = RawEventBuffer(cfg.shared_ws_raw_dir, cfg.online_market_ws_raw_flush_events)
+        self.raw_writer = RawEventBuffer(
+            cfg.shared_ws_raw_dir,
+            cfg.online_market_ws_raw_flush_events,
+            enabled=cfg.online_market_ws_raw_enabled,
+        )
         self.stop_event = asyncio.Event()
         self.started_at = utc_now()
         self.completed_at: Any = None

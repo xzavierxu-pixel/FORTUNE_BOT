@@ -6,13 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 import sys
 
-import joblib
 import pandas as pd
 
 from execution_engine.runtime.config import PegConfig
 
 _RULE_RUNTIME_CACHE: dict[str, "RuleRuntime"] = {}
-_MODEL_PAYLOAD_CACHE: dict[str, dict[str, Any]] = {}
+_MODEL_PAYLOAD_CACHE: dict[str, Any] = {}
 
 
 def _ensure_rule_engine_import_path(cfg: PegConfig) -> None:
@@ -47,22 +46,28 @@ class RuleModelResult:
     viable_candidates: pd.DataFrame
 
 
-def load_model_payload(cfg: PegConfig) -> dict[str, Any]:
+def load_model_payload(cfg: PegConfig):
     cache_key = str(cfg.rule_engine_model_path.resolve())
     cached = _MODEL_PAYLOAD_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    payload = joblib.load(cfg.rule_engine_model_path)
-    if not isinstance(payload, dict):
-        raise TypeError(f"Expected dict model payload at {cfg.rule_engine_model_path}, got {type(payload)!r}.")
+    _ensure_rule_engine_import_path(cfg)
+    from rule_baseline.models import load_model_artifact  # type: ignore
+
+    payload = load_model_artifact(cfg.rule_engine_model_path)
+    if str(getattr(payload, "target_mode", "")) != "q":
+        raise ValueError(
+            f"execution_engine live runtime only supports q-model artifacts, got target_mode={payload.target_mode!r}"
+        )
     _MODEL_PAYLOAD_CACHE[cache_key] = payload
     return payload
 
 
-def get_feature_contract(payload: dict[str, Any]) -> FeatureContract:
-    feature_columns = tuple(str(value) for value in (payload.get("feature_columns") or ()))
-    numeric_columns = tuple(str(value) for value in (payload.get("numeric_columns") or ()))
-    categorical_columns = tuple(str(value) for value in (payload.get("categorical_columns") or ()))
+def get_feature_contract(payload) -> FeatureContract:
+    contract = payload.feature_contract
+    feature_columns = tuple(str(value) for value in contract.feature_columns)
+    numeric_columns = tuple(str(value) for value in contract.numeric_columns)
+    categorical_columns = tuple(str(value) for value in contract.categorical_columns)
     return FeatureContract(
         feature_columns=feature_columns,
         numeric_columns=numeric_columns,
@@ -161,7 +166,7 @@ def evaluate_matched_snapshots(
     market_feature_cache: pd.DataFrame,
     rules_frame: pd.DataFrame,
     *,
-    payload: dict[str, Any] | None = None,
+    payload: Any | None = None,
 ) -> RuleModelResult:
     _ = rules_frame
     if matched.empty:

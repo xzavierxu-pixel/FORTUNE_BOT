@@ -91,9 +91,6 @@ def check_basic_risk(
     if decision_id and state.seen_recent_decision(decision_id, cfg.dup_window_sec):
         return False, "DUPLICATE_DECISION"
 
-    if state.open_orders_count >= cfg.max_open_orders:
-        return False, "OPEN_ORDERS_LIMIT"
-
     if cfg.max_position_per_market_usdc > 0:
         market_id = str(signal.get("market_id", ""))
         outcome_index = int(signal.get("outcome_index", 0))

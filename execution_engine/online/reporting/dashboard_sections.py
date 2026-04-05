@@ -19,14 +19,15 @@ def render_cards(rows: List[Dict[str, Any]]) -> str:
     latest = rows[0] if rows else {}
     latest_counts = latest.get("counts", {}) if isinstance(latest.get("counts"), dict) else {}
     total_orders = sum(int((row.get("counts") or {}).get("orders", 0)) for row in rows)
-    total_snapshots = sum(int((row.get("counts") or {}).get("normalized_snapshots", 0)) for row in rows)
+    total_audited_markets = sum(int((row.get("counts") or {}).get("audit_markets", 0)) for row in rows)
     cards = [
         ("Total Runs", total_runs),
         ("Runs Today", today_runs),
-        ("Latest Snapshots", latest_counts.get("normalized_snapshots", 0)),
+        ("Latest Audited Markets", latest_counts.get("audit_markets", 0)),
+        ("Latest Selections", latest_counts.get("selection_decisions", 0)),
         ("Latest Orders", latest_counts.get("orders", 0)),
         ("Total Orders", total_orders),
-        ("Total Snapshots", total_snapshots),
+        ("Total Audited Markets", total_audited_markets),
         ("Latest Run", latest.get("run_id", "-")),
     ]
     return "".join(
@@ -47,8 +48,7 @@ def render_rows(rows: List[Dict[str, Any]]) -> str:
             f"<td>{escape(str(row.get('run_mode', '')))}</td>"
             f"<td>{escape(str(row.get('status', '')))}</td>"
             f"<td>{escape('yes' if row.get('dry_run') else 'no')}</td>"
-            f"<td>{escape(format_num(counts.get('normalized_snapshots', 0)))}</td>"
-            f"<td>{escape(format_num(counts.get('rule_hits', 0)))}</td>"
+            f"<td>{escape(format_num(counts.get('audit_markets', 0)))}</td>"
             f"<td>{escape(format_num(counts.get('selection_decisions', 0)))}</td>"
             f"<td>{escape(format_num(counts.get('orders', 0)))}</td>"
             f"<td>{escape(format_num(counts.get('fills', 0)))}</td>"
@@ -73,8 +73,7 @@ def aggregate_daily(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             {
                 "run_date": run_date,
                 "runs": 0,
-                "snapshots": 0,
-                "rule_hits": 0,
+                "audit_markets": 0,
                 "selections": 0,
                 "orders": 0,
                 "fills": 0,
@@ -82,8 +81,7 @@ def aggregate_daily(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             },
         )
         bucket["runs"] += 1
-        bucket["snapshots"] += int(counts.get("normalized_snapshots", 0))
-        bucket["rule_hits"] += int(counts.get("rule_hits", 0))
+        bucket["audit_markets"] += int(counts.get("audit_markets", 0))
         bucket["selections"] += int(counts.get("selection_decisions", 0))
         bucket["orders"] += int(counts.get("orders", 0))
         bucket["fills"] += int(counts.get("fills", 0))
@@ -206,8 +204,7 @@ def render_daily_rows(rows: List[Dict[str, Any]]) -> str:
             "<tr>"
             f"<td>{escape(str(row['run_date']))}</td>"
             f"<td>{escape(format_num(row['runs']))}</td>"
-            f"<td>{escape(format_num(row['snapshots']))}</td>"
-            f"<td>{escape(format_num(row['rule_hits']))}</td>"
+            f"<td>{escape(format_num(row['audit_markets']))}</td>"
             f"<td>{escape(format_num(row['selections']))}</td>"
             f"<td>{escape(format_num(row['orders']))}</td>"
             f"<td>{escape(format_num(row['fills']))}</td>"

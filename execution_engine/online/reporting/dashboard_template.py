@@ -244,8 +244,7 @@ def build_dashboard_html(
             <tr>
               <th>Date</th>
               <th>Runs</th>
-              <th>Snapshots</th>
-              <th>Rule Hits</th>
+              <th>Audited Markets</th>
               <th>Selections</th>
               <th>Orders</th>
               <th>Fills</th>
@@ -270,8 +269,7 @@ def build_dashboard_html(
             <th>Mode</th>
             <th>Status</th>
             <th>Dry</th>
-            <th>Snapshots</th>
-            <th>Rule Hits</th>
+            <th>Audited Markets</th>
             <th>Selections</th>
             <th>Orders</th>
             <th>Fills</th>

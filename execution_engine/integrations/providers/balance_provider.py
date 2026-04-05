@@ -7,6 +7,7 @@ import json
 from typing import Optional
 
 from execution_engine.integrations.trading.clob_client import ClobClient
+from execution_engine.runtime.config import PegConfig
 
 
 class FileBalanceProvider:
@@ -29,3 +30,11 @@ class ClobBalanceProvider:
 
     def get_available_usdc(self) -> Optional[float]:
         return self.clob_client.get_balance_usdc()
+
+
+def build_balance_provider(cfg: PegConfig, clob_client: ClobClient | None = None) -> object:
+    if not cfg.dry_run and cfg.clob_enabled:
+        client = clob_client
+        if client is not None:
+            return ClobBalanceProvider(client)
+    return FileBalanceProvider(cfg.balances_path)

@@ -25,7 +25,7 @@ class OnlineRuntimeContainer:
     rule_runtime: RuleRuntime
     rules_frame: pd.DataFrame
     horizon_profile: RuleHorizonProfile
-    model_payload: dict[str, Any]
+    model_payload: Any
     feature_contract: FeatureContract
     fee_rate: float
 
@@ -33,6 +33,9 @@ class OnlineRuntimeContainer:
 def build_runtime_container(cfg: PegConfig) -> OnlineRuntimeContainer:
     rules_frame = load_rules_frame(cfg)
     model_payload = load_model_payload(cfg)
+    persist = getattr(model_payload, "persist", None)
+    if callable(persist):
+        persist()
     return OnlineRuntimeContainer(
         cfg=cfg,
         rule_runtime=load_rule_runtime(cfg),

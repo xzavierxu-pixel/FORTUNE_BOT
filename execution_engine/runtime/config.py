@@ -93,6 +93,8 @@ def _resolve_rule_engine_defaults() -> tuple[Path, Path]:
     )
     default_model_path = _first_existing_path(
         [
+            RULE_BASELINE_DATASETS_DIR / "models" / "q_model_bundle",
+            RULE_ENGINE_OFFLINE_DIR / "models" / "q_model_bundle",
             RULE_BASELINE_DATASETS_DIR / "ensemble_snapshot_q.pkl",
             RULE_BASELINE_DATASETS_DIR / "models" / "ensemble_snapshot_q.pkl",
             RULE_ENGINE_OFFLINE_DIR / "models" / "ensemble_snapshot_q.pkl",
@@ -108,6 +110,9 @@ class PegConfig:
     run_id: str
     run_date: str
     run_mode: str
+    artifact_policy: str
+    artifact_retention_full_days: int
+    artifact_retention_debug_days: int
 
     # Directories
     base_data_dir: Path
@@ -158,6 +163,8 @@ class PegConfig:
     run_submit_orders_submitted_path: Path
     run_submit_post_submit_features_path: Path
     run_submit_window_manifest_path: Path
+    run_audit_market_path: Path
+    run_audit_funnel_summary_path: Path
     run_deferred_reports_path: Path
     run_monitor_manifest_path: Path
     run_label_manifest_path: Path
@@ -263,6 +270,7 @@ class PegConfig:
     online_market_ws_connect_timeout_sec: int
     online_market_ws_reconnect_backoff_sec: int
     online_market_ws_max_tokens_per_connection: int
+    online_market_ws_raw_enabled: bool
     online_market_ws_raw_flush_events: int
     online_market_ws_state_flush_sec: int
     online_token_state_max_age_sec: int
@@ -287,7 +295,8 @@ class PegConfig:
         self.shared_state_dir.mkdir(parents=True, exist_ok=True)
         self.runtime_state_dir.mkdir(parents=True, exist_ok=True)
         self.shared_token_state_dir.mkdir(parents=True, exist_ok=True)
-        self.shared_ws_raw_dir.mkdir(parents=True, exist_ok=True)
+        if self.online_market_ws_raw_enabled:
+            self.shared_ws_raw_dir.mkdir(parents=True, exist_ok=True)
         self.shared_labels_dir.mkdir(parents=True, exist_ok=True)
         self.token_cache_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -322,6 +331,9 @@ def load_config() -> PegConfig:
         run_id=run_id,
         run_date=run_date,
         run_mode=run_mode,
+        artifact_policy=_sanitize_run_component(_get_env("PEG_ARTIFACT_POLICY", "minimal"), "minimal").lower(),
+        artifact_retention_full_days=_get_int("PEG_ARTIFACT_RETENTION_FULL_DAYS", 7),
+        artifact_retention_debug_days=_get_int("PEG_ARTIFACT_RETENTION_DEBUG_DAYS", 2),
         base_data_dir=base_data_dir,
         shared_data_dir=shared_data_dir,
         runs_root_dir=runs_root_dir,
@@ -428,6 +440,12 @@ def load_config() -> PegConfig:
         ),
         run_submit_window_manifest_path=Path(
             _get_env("PEG_RUN_SUBMIT_WINDOW_MANIFEST_PATH", str(data_dir / "submit_window" / "manifest.json"))
+        ),
+        run_audit_market_path=Path(
+            _get_env("PEG_RUN_AUDIT_MARKET_PATH", str(data_dir / "audit" / "market_audit.csv"))
+        ),
+        run_audit_funnel_summary_path=Path(
+            _get_env("PEG_RUN_AUDIT_FUNNEL_SUMMARY_PATH", str(data_dir / "audit" / "funnel_summary.json"))
         ),
         run_deferred_reports_path=Path(
             _get_env("PEG_RUN_DEFERRED_REPORTS_PATH", str(data_dir / "deferred" / "reports.jsonl"))
@@ -549,6 +567,7 @@ def load_config() -> PegConfig:
         online_market_ws_connect_timeout_sec=_get_int("PEG_ONLINE_MARKET_WS_CONNECT_TIMEOUT_SEC", 20),
         online_market_ws_reconnect_backoff_sec=_get_int("PEG_ONLINE_MARKET_WS_RECONNECT_BACKOFF_SEC", 5),
         online_market_ws_max_tokens_per_connection=_get_int("PEG_ONLINE_MARKET_WS_MAX_TOKENS_PER_CONNECTION", 20),
+        online_market_ws_raw_enabled=_get_bool("PEG_ONLINE_MARKET_WS_RAW_ENABLED", False),
         online_market_ws_raw_flush_events=_get_int("PEG_ONLINE_MARKET_WS_RAW_FLUSH_EVENTS", 100),
         online_market_ws_state_flush_sec=_get_int("PEG_ONLINE_MARKET_WS_STATE_FLUSH_SEC", 5),
         online_token_state_max_age_sec=_get_int("PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC", 7200),

@@ -303,7 +303,7 @@ def apply_live_price_filter(
             provisional_states[market_id] = LIVE_SPREAD_TOO_WIDE
             continue
         live_mid = _to_float(enriched.get("mid_price"))
-        if not (float(cfg.rule_engine_min_price) < live_mid < float(cfg.rule_engine_max_price)):
+        if not (float(cfg.rule_engine_min_price) <= live_mid <= float(cfg.rule_engine_max_price)):
             enriched["live_filter_state"] = INVALID_PRICE
             enriched["live_filter_reason"] = "invalid_live_mid_price"
             stage2_rows.append(enriched)

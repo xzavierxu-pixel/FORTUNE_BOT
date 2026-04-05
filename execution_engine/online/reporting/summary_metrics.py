@@ -23,25 +23,36 @@ def _count_csv_rows_many(paths: List[Any]) -> int:
     return sum(count_csv_rows(path) for path in paths)
 
 
+def _debug_artifacts_enabled(cfg: PegConfig) -> bool:
+    return str(getattr(cfg, "artifact_policy", "minimal") or "minimal").strip().lower() == "debug"
+
+
 def build_counts(cfg: PegConfig) -> Dict[str, int]:
     run_submit_attempt_paths = list_artifact_paths_recursive(cfg.data_dir, "submission_attempts.csv")
     run_orders_submitted_paths = list_artifact_paths_recursive(cfg.data_dir, "orders_submitted.jsonl")
-    return {
+    counts = {
         "decisions": count_jsonl(cfg.decisions_path),
         "orders": count_jsonl(cfg.orders_path),
         "events": count_jsonl(cfg.events_path),
         "fills": count_jsonl(cfg.fills_path),
         "rejections": count_jsonl(cfg.rejections_path),
         "alerts": count_jsonl(cfg.alerts_path),
-        "processed_markets": count_csv_rows(cfg.run_snapshot_processed_markets_path),
-        "normalized_snapshots": count_csv_rows(cfg.run_snapshot_normalized_path),
-        "feature_inputs": count_csv_rows(cfg.run_snapshot_feature_inputs_path),
-        "rule_hits": count_csv_rows(cfg.run_snapshot_rule_hits_path),
-        "model_outputs": count_csv_rows(cfg.run_snapshot_model_outputs_path),
         "selection_decisions": count_csv_rows(cfg.run_snapshot_selection_path),
+        "audit_markets": count_csv_rows(cfg.run_audit_market_path),
         "submission_attempts": _count_csv_rows_many(run_submit_attempt_paths),
         "orders_submitted": sum(count_jsonl(path) for path in run_orders_submitted_paths),
     }
+    if _debug_artifacts_enabled(cfg):
+        counts.update(
+            {
+                "processed_markets": count_csv_rows(cfg.run_snapshot_processed_markets_path),
+                "normalized_snapshots": count_csv_rows(cfg.run_snapshot_normalized_path),
+                "feature_inputs": count_csv_rows(cfg.run_snapshot_feature_inputs_path),
+                "rule_hits": count_csv_rows(cfg.run_snapshot_rule_hits_path),
+                "model_outputs": count_csv_rows(cfg.run_snapshot_model_outputs_path),
+            }
+        )
+    return counts
 
 
 def build_rejection_reasons(cfg: PegConfig) -> Dict[str, int]:

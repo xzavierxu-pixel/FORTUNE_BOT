@@ -14,8 +14,8 @@ from execution_engine.runtime.config import PegConfig
 from execution_engine.online.execution.positions import load_open_market_ids, load_pending_market_ids
 from execution_engine.online.scoring.price_history import (
     ClobPriceHistoryClient,
+    build_latest_live_prices_from_token_state,
     build_historical_price_features,
-    load_latest_ws_prices,
     merge_price_points,
 )
 
@@ -238,8 +238,8 @@ def build_snapshot_inputs(
         by=["remaining_hours", "end_time_utc", "market_id"],
         ascending=[True, True, True],
     ).reset_index(drop=True)
-    latest_ws_prices = load_latest_ws_prices(
-        cfg,
+    latest_ws_prices = build_latest_live_prices_from_token_state(
+        token_state_by_token,
         (
             str(row.get("selected_reference_token_id") or "")
             for row in universe_rows.to_dict(orient="records")

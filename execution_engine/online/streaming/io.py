@@ -14,13 +14,16 @@ from execution_engine.online.streaming.token_state import TokenSubscriptionTarge
 
 
 class RawEventBuffer:
-    def __init__(self, root_dir: Path, flush_events: int) -> None:
+    def __init__(self, root_dir: Path, flush_events: int, *, enabled: bool = True) -> None:
         self.root_dir = root_dir
+        self.enabled = enabled
         self.flush_events = max(flush_events, 1)
         self._buffers: Dict[Path, List[str]] = defaultdict(list)
         self.raw_event_count = 0
 
     def append(self, shard_id: int, received_at: datetime, payload: Any) -> None:
+        if not self.enabled:
+            return
         path = self.root_dir / received_at.strftime("%Y-%m-%d") / received_at.strftime("%H") / f"shard_{shard_id:02d}.jsonl"
         record = {
             "received_at_utc": to_iso(received_at),
@@ -81,7 +84,8 @@ def write_stream_manifest(
         "shared_token_state_path": str(cfg.token_state_current_path),
         "shared_token_state_json_path": str(cfg.token_state_current_json_path),
         "run_token_state_path": str(cfg.run_stream_token_state_path),
-        "raw_event_root_dir": str(cfg.shared_ws_raw_dir),
+        "raw_event_root_dir": str(cfg.shared_ws_raw_dir) if cfg.online_market_ws_raw_enabled else "",
+        "raw_capture_enabled": bool(cfg.online_market_ws_raw_enabled),
         "targets": serialize_targets(targets),
         "shards": shard_stats,
     }

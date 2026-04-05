@@ -26,6 +26,10 @@ from execution_engine.shared.io import (
 from execution_engine.shared.time import bj_now_iso, parse_utc, to_bj_iso, to_iso, utc_now
 
 
+def _debug_artifacts_enabled(cfg: PegConfig) -> bool:
+    return str(getattr(cfg, "artifact_policy", "minimal") or "minimal").strip().lower() == "debug"
+
+
 def _latest_orders_by_attempt(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     latest: Dict[str, Dict[str, Any]] = {}
     for row in rows:
@@ -61,6 +65,15 @@ def _build_batch_lifecycle_exports(
     open_positions: List[Dict[str, Any]],
     opened_position_events: List[Dict[str, Any]],
 ) -> Dict[str, int]:
+    if not _debug_artifacts_enabled(cfg):
+        return {
+            "exported_submit_dirs": 0,
+            "exported_fill_rows": 0,
+            "exported_cancel_rows": 0,
+            "exported_open_position_rows": 0,
+            "exported_open_position_event_rows": 0,
+        }
+
     fills_by_attempt: Dict[str, List[Dict[str, Any]]] = {}
     for fill in fills:
         order_attempt_id = str(fill.get("order_attempt_id", "") or "")
@@ -217,17 +230,19 @@ def _export_shared_orders_live(
         reverse=True,
     )
 
+    debug_enabled = _debug_artifacts_enabled(cfg)
     write_jsonl(cfg.orders_live_latest_orders_path, latest_order_rows)
-    write_jsonl(cfg.orders_live_fills_path, fill_rows)
-    write_jsonl(cfg.orders_live_cancels_path, cancel_rows)
-    write_jsonl(cfg.orders_live_opened_positions_path, open_position_rows)
     write_jsonl(cfg.orders_live_opened_position_events_path, opened_position_events)
+    if debug_enabled:
+        write_jsonl(cfg.orders_live_fills_path, fill_rows)
+        write_jsonl(cfg.orders_live_cancels_path, cancel_rows)
+        write_jsonl(cfg.orders_live_opened_positions_path, open_position_rows)
 
     return {
         "shared_latest_order_count": len(latest_order_rows),
-        "shared_fill_count": len(fill_rows),
-        "shared_cancel_count": len(cancel_rows),
-        "shared_open_position_count": len(open_position_rows),
+        "shared_fill_count": len(fill_rows) if debug_enabled else 0,
+        "shared_cancel_count": len(cancel_rows) if debug_enabled else 0,
+        "shared_open_position_count": len(open_position_rows) if debug_enabled else 0,
         "shared_opened_position_event_count": len(opened_position_events),
     }
 
@@ -352,6 +367,8 @@ def monitor_order_lifecycle(
         "generated_at_bj": bj_now_iso(),
         "run_id": cfg.run_id,
         "run_mode": cfg.run_mode,
+        "artifact_policy": str(getattr(cfg, "artifact_policy", "minimal") or "minimal"),
+        "debug_artifacts_enabled": _debug_artifacts_enabled(cfg),
         "sleep_sec": int(max(sleep_sec, 0)),
         "dry_run": cfg.dry_run,
         "latest_order_count": int(len(latest_orders)),
@@ -369,9 +386,6 @@ def monitor_order_lifecycle(
         **export_counts,
         **shared_export_counts,
         "orders_live_latest_orders_path": str(cfg.orders_live_latest_orders_path),
-        "orders_live_fills_path": str(cfg.orders_live_fills_path),
-        "orders_live_cancels_path": str(cfg.orders_live_cancels_path),
-        "orders_live_opened_positions_path": str(cfg.orders_live_opened_positions_path),
         "orders_live_opened_position_events_path": str(cfg.orders_live_opened_position_events_path),
         "exit_candidate_count": int(exit_result.candidate_count),
         "exit_submitted_count": int(exit_result.submitted_count),
@@ -382,6 +396,14 @@ def monitor_order_lifecycle(
         "settlement_path": exit_result.settlement_path,
         "orders_root": str(cfg.runs_root_dir),
     }
+    if _debug_artifacts_enabled(cfg):
+        manifest.update(
+            {
+                "orders_live_fills_path": str(cfg.orders_live_fills_path),
+                "orders_live_cancels_path": str(cfg.orders_live_cancels_path),
+                "orders_live_opened_positions_path": str(cfg.orders_live_opened_positions_path),
+            }
+        )
     _write_manifest(cfg.run_monitor_manifest_path, manifest)
 
     if publish_summary_enabled:

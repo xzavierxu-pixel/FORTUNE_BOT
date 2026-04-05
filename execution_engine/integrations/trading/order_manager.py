@@ -14,9 +14,6 @@ from execution_engine.runtime.models import DecisionRecord, FillRecord, OrderRec
 from execution_engine.shared.logger import log_structured
 from execution_engine.shared.metrics import increment_metric
 from execution_engine.shared.time import parse_utc, to_iso, utc_now
-from execution_engine.online.execution.positions import load_open_position_rows, rebuild_open_positions_ledger
-
-
 def compute_effective_expiration_seconds(signal: Dict[str, object], cfg: PegConfig) -> Tuple[int, Optional[str]]:
     now = utc_now()
     valid_until = signal.get("valid_until_utc")
@@ -57,6 +54,23 @@ def _latest_orders_by_id(orders: List[Dict[str, object]]) -> Dict[str, Dict[str,
     return latest
 
 
+def _record_order_state(
+    cfg: PegConfig,
+    order: OrderRecord,
+    *,
+    metric_name: Optional[str] = None,
+) -> None:
+    orders_path = getattr(cfg, "orders_path", None)
+    logs_path = getattr(cfg, "logs_path", None)
+    metrics_path = getattr(cfg, "metrics_path", None)
+    if orders_path is not None:
+        append_jsonl(orders_path, order)
+    if logs_path is not None:
+        log_structured(logs_path, {"type": "order_state", **order})
+    if metric_name and metrics_path is not None:
+        increment_metric(metrics_path, metric_name, 1)
+
+
 def sweep_expired_orders(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
     orders = read_jsonl_many(list_run_artifact_paths(cfg.runs_root_dir, "orders.jsonl"))
     if not orders:
@@ -78,33 +92,22 @@ def sweep_expired_orders(cfg: PegConfig, clob_client: Optional[ClobClient] = Non
         except ValueError:
             continue
         if created_dt + timedelta(seconds=expiration_seconds) <= now:
-            if cfg.dry_run:
-                expired = transition_order(order, "EXPIRED", "TTL_EXPIRED")
-                append_jsonl(cfg.orders_path, expired)
-                log_structured(cfg.logs_path, {"type": "order_state", **expired})
-                increment_metric(cfg.metrics_path, "orders_expired", 1)
-                continue
-            updated = transition_order(order, "CANCEL_REQUESTED", "TTL_EXPIRED")
-            append_jsonl(cfg.orders_path, updated)
-            log_structured(cfg.logs_path, {"type": "order_state", **updated})
             clob_order_id = order.get("clob_order_id")
-            if clob_order_id:
-                try:
-                    client.cancel_order(str(clob_order_id))
-                    canceled = transition_order(updated, "CANCELED", "TTL_EXPIRED")
-                    append_jsonl(cfg.orders_path, canceled)
-                    log_structured(cfg.logs_path, {"type": "order_state", **canceled})
-                    increment_metric(cfg.metrics_path, "orders_canceled", 1)
-                except Exception:
-                    error = transition_order(updated, "ERROR", "CANCEL_FAILED")
-                    append_jsonl(cfg.orders_path, error)
-                    log_structured(cfg.logs_path, {"type": "order_state", **error})
-                    increment_metric(cfg.metrics_path, "orders_error", 1)
+            if clob_order_id or cfg.dry_run:
+                request_cancel(
+                    order,
+                    cfg,
+                    clob_client=client,
+                    reason="TTL_EXPIRED",
+                    missing_clob_status="EXPIRED",
+                    missing_clob_reason="TTL_EXPIRED",
+                    failure_reason="CANCEL_FAILED",
+                )
             else:
+                updated = transition_order(order, "CANCEL_REQUESTED", "TTL_EXPIRED")
+                _record_order_state(cfg, updated)
                 expired = transition_order(updated, "EXPIRED", "TTL_EXPIRED")
-                append_jsonl(cfg.orders_path, expired)
-                log_structured(cfg.logs_path, {"type": "order_state", **expired})
-                increment_metric(cfg.metrics_path, "orders_expired", 1)
+                _record_order_state(cfg, expired, metric_name="orders_expired")
 
 
 def transition_order(order: OrderRecord, new_status: str, reason: Optional[str] = None) -> OrderRecord:
@@ -120,17 +123,39 @@ def transition_order(order: OrderRecord, new_status: str, reason: Optional[str] 
     return updated
 
 
-def request_cancel(order: OrderRecord, cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> OrderRecord:
-    updated = transition_order(order, "CANCEL_REQUESTED")
+def request_cancel(
+    order: OrderRecord,
+    cfg: PegConfig,
+    clob_client: Optional[ClobClient] = None,
+    *,
+    reason: Optional[str] = None,
+    missing_clob_status: str = "ERROR",
+    missing_clob_reason: Optional[str] = "MISSING_CLOB_ORDER_ID",
+    failure_reason: str = "CANCEL_FAILED",
+) -> OrderRecord:
+    updated = transition_order(order, "CANCEL_REQUESTED", reason)
+    _record_order_state(cfg, updated)
     if cfg.dry_run:
-        return updated
+        canceled = transition_order(updated, "CANCELED", reason)
+        _record_order_state(cfg, canceled, metric_name="orders_canceled")
+        return canceled
 
     client = clob_client or NullClobClient()
     clob_order_id = order.get("clob_order_id")
     if not clob_order_id:
-        return transition_order(updated, "ERROR", "MISSING_CLOB_ORDER_ID")
-    _ = client.cancel_order(str(clob_order_id))
-    return transition_order(updated, "CANCELED")
+        terminal = transition_order(updated, missing_clob_status, missing_clob_reason)
+        metric_name = "orders_error" if str(missing_clob_status).upper() == "ERROR" else "orders_expired"
+        _record_order_state(cfg, terminal, metric_name=metric_name)
+        return terminal
+    try:
+        _ = client.cancel_order(str(clob_order_id))
+    except Exception:
+        error = transition_order(updated, "ERROR", failure_reason)
+        _record_order_state(cfg, error, metric_name="orders_error")
+        return error
+    canceled = transition_order(updated, "CANCELED", reason)
+    _record_order_state(cfg, canceled, metric_name="orders_canceled")
+    return canceled
 
 
 def _extract_field(row: Dict[str, object], names: List[str]) -> Optional[object]:
@@ -141,6 +166,8 @@ def _extract_field(row: Dict[str, object], names: List[str]) -> Optional[object]
 
 
 def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
+    from execution_engine.online.execution.positions import load_open_position_rows, rebuild_open_positions_ledger
+
     if cfg.dry_run:
         return
 

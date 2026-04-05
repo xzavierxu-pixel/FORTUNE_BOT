@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 from typing import Any
 import json
@@ -74,27 +73,30 @@ def _normalize_domains_against_offline_reference(
     offline_annotations: pd.DataFrame,
     rule_config,
 ) -> pd.DataFrame:
-    if offline_annotations.empty or "domain_parsed" not in offline_annotations.columns:
+    if offline_annotations.empty or "domain" not in offline_annotations.columns:
         return annotations
 
-    domain_counts = Counter(
+    allowed_domains = {
         str(domain)
-        for domain in offline_annotations["domain_parsed"].fillna("").astype(str)
-        if str(domain) not in {"", "UNKNOWN"}
-    )
-    if not domain_counts:
+        for domain in offline_annotations["domain"].fillna("").astype(str)
+        if str(domain) not in {"", "UNKNOWN", "OTHER"}
+    }
+    if not allowed_domains:
         return annotations
 
     out = annotations.copy()
 
-    def normalize_domain(domain: str) -> str:
-        if domain in {"", "UNKNOWN"}:
+    def normalize_domain(candidate: str) -> str:
+        if candidate in {"", "UNKNOWN"}:
             return "UNKNOWN"
-        if domain_counts.get(domain, 0) < rule_config.LOW_FREQUENCY_DOMAIN_COUNT:
+        if candidate in allowed_domains:
+            return candidate
+        if candidate == "OTHER":
             return "OTHER"
-        return domain
+        return "OTHER"
 
-    out["domain"] = out["domain_parsed"].fillna("UNKNOWN").astype(str).apply(normalize_domain)
+    domain_source = "domain_candidate" if "domain_candidate" in out.columns else "domain"
+    out["domain"] = out[domain_source].fillna("UNKNOWN").astype(str).apply(normalize_domain)
     return out
 
 
@@ -130,7 +132,7 @@ def build_online_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd.DataFr
     if annotation_inputs.empty:
         return pd.DataFrame(columns=_ANNOTATION_COLUMNS)
 
-    annotations = build_market_annotations(annotation_inputs.fillna(""))
+    annotations = build_market_annotations(annotation_inputs.fillna(""), include_domain_candidate=True)
     if annotations.empty:
         return pd.DataFrame(columns=_ANNOTATION_COLUMNS)
 
@@ -141,7 +143,7 @@ def build_online_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd.DataFr
         offline_annotations=offline_annotations,
         rule_config=rule_config,
     )
-    return annotations.drop_duplicates(subset=["market_id"]).reset_index(drop=True)
+    return annotations[_ANNOTATION_COLUMNS].drop_duplicates(subset=["market_id"]).reset_index(drop=True)
 
 
 def apply_online_market_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd.DataFrame:

@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
-from execution_engine.integrations.providers.balance_provider import FileBalanceProvider
+from execution_engine.integrations.providers.balance_provider import build_balance_provider
 from execution_engine.runtime.config import PegConfig
 from execution_engine.runtime.state import StateStore
 
@@ -59,18 +59,21 @@ def allocate_candidates(
     if candidates.empty:
         return candidates.copy()
 
-    balance_provider = FileBalanceProvider(cfg.balances_path)
+    balance_provider = build_balance_provider(cfg)
     available_cash = balance_provider.get_available_usdc()
-    bankroll = float(cfg.initial_bankroll_usdc)
-    if bankroll <= 0:
-        return pd.DataFrame()
-
-    available_capacity = max(0.0, bankroll - float(state.net_exposure_usdc))
-    remaining_cash = (
-        min(float(available_cash), available_capacity)
-        if available_cash is not None
-        else available_capacity
-    )
+    if not cfg.dry_run and cfg.clob_enabled:
+        bankroll = max(_to_float(available_cash), 0.0)
+        remaining_cash = bankroll
+    else:
+        bankroll = float(cfg.initial_bankroll_usdc)
+        if bankroll <= 0:
+            return pd.DataFrame()
+        available_capacity = max(0.0, bankroll - float(state.net_exposure_usdc))
+        remaining_cash = (
+            min(float(available_cash), available_capacity)
+            if available_cash is not None
+            else available_capacity
+        )
     selected_rows: List[Dict[str, Any]] = []
     ranked = candidates.copy()
     if "snapshot_time" not in ranked.columns:

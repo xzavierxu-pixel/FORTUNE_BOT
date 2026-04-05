@@ -224,25 +224,12 @@ def _predict_from_feature_inputs(
     rule_hits: pd.DataFrame,
     feature_inputs: pd.DataFrame,
 ) -> pd.DataFrame:
-    from rule_baseline.backtesting.backtest_portfolio_qmodel import (  # type: ignore
-        compute_trade_value_from_q,
-        infer_q_from_trade_value,
-    )
-    from rule_baseline.models import predict_probabilities, predict_regression  # type: ignore
-
     contract_inputs = _ensure_feature_contract(feature_inputs, runtime.feature_contract)
     predicted = rule_hits.copy()
-    target_mode = runtime.model_payload.get("target_mode", "q")
-    if target_mode == "q":
-        predicted["q_pred"] = predict_probabilities(runtime.model_payload, contract_inputs)
-        predicted["trade_value_pred"] = compute_trade_value_from_q(predicted, predicted["q_pred"].values)
-    elif target_mode == "residual_q":
-        residual_pred = predict_regression(runtime.model_payload, contract_inputs)
-        predicted["q_pred"] = (predicted["price"].astype(float).values + residual_pred).clip(0.0, 1.0)
-        predicted["trade_value_pred"] = compute_trade_value_from_q(predicted, predicted["q_pred"].values)
-    else:
-        predicted["trade_value_pred"] = predict_regression(runtime.model_payload, contract_inputs)
-        predicted["q_pred"] = infer_q_from_trade_value(predicted, predicted["trade_value_pred"].values)
+    q_pred = runtime.model_payload.predict_q(contract_inputs)
+    trade_value_pred = runtime.model_payload.predict_trade_value(predicted, contract_inputs)
+    predicted["q_pred"] = q_pred
+    predicted["trade_value_pred"] = trade_value_pred
     return predicted
 
 
