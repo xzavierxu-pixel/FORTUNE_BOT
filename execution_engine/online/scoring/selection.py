@@ -29,6 +29,17 @@ def _to_int(value: Any, default: int | None = None) -> int | None:
         return default
 
 
+def filter_candidates_by_growth_score(
+    candidates: pd.DataFrame,
+    *,
+    min_growth_score: float = 0.2,
+) -> pd.DataFrame:
+    if candidates.empty or "growth_score" not in candidates.columns:
+        return candidates.copy()
+    scores = pd.to_numeric(candidates["growth_score"], errors="coerce")
+    return candidates.loc[scores > float(min_growth_score)].copy()
+
+
 def select_target_side(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
@@ -56,8 +67,12 @@ def allocate_candidates(
     state: StateStore,
     bt_cfg: Any,
 ) -> pd.DataFrame:
-    if candidates.empty:
-        return candidates.copy()
+    filtered_candidates = filter_candidates_by_growth_score(
+        candidates,
+        min_growth_score=float(getattr(cfg, "online_min_growth_score", 0.2)),
+    )
+    if filtered_candidates.empty:
+        return filtered_candidates
 
     balance_provider = build_balance_provider(cfg)
     available_cash = balance_provider.get_available_usdc()
@@ -75,7 +90,7 @@ def allocate_candidates(
             else available_capacity
         )
     selected_rows: List[Dict[str, Any]] = []
-    ranked = candidates.copy()
+    ranked = filtered_candidates.copy()
     if "snapshot_time" not in ranked.columns:
         ranked["snapshot_time"] = pd.NaT
     if "edge_final" not in ranked.columns:
@@ -115,6 +130,8 @@ def build_selection_decisions(
     model_outputs: pd.DataFrame,
     selected: pd.DataFrame,
     cfg: PegConfig,
+    *,
+    min_growth_score: float = 0.2,
 ) -> pd.DataFrame:
     if model_outputs.empty:
         return pd.DataFrame()
@@ -145,6 +162,8 @@ def build_selection_decisions(
         selected_for_submission = picked is not None
         if selected_for_submission:
             selection_reason = "allocated"
+        elif growth_score <= min_growth_score:
+            selection_reason = "growth_below_threshold"
         elif growth_score <= 0:
             selection_reason = "no_positive_growth"
         else:

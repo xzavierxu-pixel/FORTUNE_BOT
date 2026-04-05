@@ -105,6 +105,15 @@ class RuleRuntimeBundleLoadingTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "only supports q-model artifacts"):
                     load_model_payload(cfg)
 
+    def test_load_model_payload_requires_runtime_bundle_directory(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            cfg = SimpleNamespace(
+                rule_engine_dir=Path.cwd() / "polymarket_rule_engine",
+                rule_engine_model_path=Path(tmpdir) / "ensemble_snapshot_q.pkl",
+            )
+            with self.assertRaisesRegex(FileNotFoundError, "requires a runtime bundle directory"):
+                load_model_payload(cfg)
+
 
 if __name__ == "__main__":
     unittest.main()

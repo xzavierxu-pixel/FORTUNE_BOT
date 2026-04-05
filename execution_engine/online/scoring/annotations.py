@@ -95,7 +95,7 @@ def _normalize_domains_against_offline_reference(
             return "OTHER"
         return "OTHER"
 
-    domain_source = "domain_candidate" if "domain_candidate" in out.columns else "domain"
+    domain_source = "domain" if "domain" in out.columns else "domain_candidate"
     out["domain"] = out[domain_source].fillna("UNKNOWN").astype(str).apply(normalize_domain)
     return out
 

@@ -184,7 +184,7 @@ def send_email(subject: str, body: str) -> None:
     recipient = os.getenv("ALERT_EMAIL_TO", "").strip()
     port = env_int("SMTP_PORT", 465)
     use_ssl = os.getenv("SMTP_USE_SSL", "1").strip().lower() in {"1", "true", "yes", "on"}
-    subject_prefix = os.getenv("ALERT_SUBJECT_PREFIX", "[fortune-bot]").strip()
+    subject_prefix = os.getenv("ALERT_SUBJECT_PREFIX", "[version3]").strip()
 
     if not host or not username or not password or not sender or not recipient:
         raise RuntimeError("SMTP configuration is incomplete")

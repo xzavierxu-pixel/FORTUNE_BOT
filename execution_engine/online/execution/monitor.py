@@ -14,6 +14,7 @@ from execution_engine.integrations.trading.clob_client import build_clob_client
 from execution_engine.online.exits import manage_exit_lifecycle
 from execution_engine.integrations.trading.order_manager import reconcile, sweep_expired_orders
 from execution_engine.online.execution.positions import load_open_position_rows, refresh_market_state_cache
+from execution_engine.online.reporting.execution_audit import build_run_execution_audit
 from execution_engine.online.reporting.run_summary import publish_run_summary
 from execution_engine.shared.io import (
     append_jsonl,
@@ -395,6 +396,7 @@ def monitor_order_lifecycle(
         "exit_manifest_path": exit_result.exit_manifest_path,
         "settlement_path": exit_result.settlement_path,
         "orders_root": str(cfg.runs_root_dir),
+        "execution_audit": build_run_execution_audit(cfg),
     }
     if _debug_artifacts_enabled(cfg):
         manifest.update(

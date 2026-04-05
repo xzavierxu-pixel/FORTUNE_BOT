@@ -93,11 +93,8 @@ def _resolve_rule_engine_defaults() -> tuple[Path, Path]:
     )
     default_model_path = _first_existing_path(
         [
-            RULE_BASELINE_DATASETS_DIR / "models" / "q_model_bundle",
-            RULE_ENGINE_OFFLINE_DIR / "models" / "q_model_bundle",
-            RULE_BASELINE_DATASETS_DIR / "ensemble_snapshot_q.pkl",
-            RULE_BASELINE_DATASETS_DIR / "models" / "ensemble_snapshot_q.pkl",
-            RULE_ENGINE_OFFLINE_DIR / "models" / "ensemble_snapshot_q.pkl",
+            RULE_BASELINE_DATASETS_DIR / "models" / "q_model_bundle_deploy",
+            RULE_ENGINE_OFFLINE_DIR / "models" / "q_model_bundle_deploy",
         ]
     )
     return default_rules_path, default_model_path
@@ -276,6 +273,7 @@ class PegConfig:
     online_token_state_max_age_sec: int
     online_capacity_wait_poll_sec: int
     online_price_cap_safety_buffer: float
+    online_min_growth_score: float
     online_deferred_artifacts_enabled: bool
     submit_window_run_monitor_after: bool
     submit_window_monitor_sleep_sec: int
@@ -424,18 +422,18 @@ def load_config() -> PegConfig:
             _get_env("PEG_RUN_SNAPSHOT_SELECTION_PATH", str(data_dir / "snapshot_score" / "selection_decisions.csv"))
         ),
         run_submit_manifest_path=Path(
-            _get_env("PEG_RUN_SUBMIT_MANIFEST_PATH", str(data_dir / "submit_hourly" / "manifest.json"))
+            _get_env("PEG_RUN_SUBMIT_MANIFEST_PATH", str(data_dir / "submit_window" / "manifest.json"))
         ),
         run_submit_attempts_path=Path(
-            _get_env("PEG_RUN_SUBMIT_ATTEMPTS_PATH", str(data_dir / "submit_hourly" / "submission_attempts.csv"))
+            _get_env("PEG_RUN_SUBMIT_ATTEMPTS_PATH", str(data_dir / "submit_window" / "submission_attempts.csv"))
         ),
         run_submit_orders_submitted_path=Path(
-            _get_env("PEG_RUN_SUBMIT_ORDERS_SUBMITTED_PATH", str(data_dir / "submit_hourly" / "orders_submitted.jsonl"))
+            _get_env("PEG_RUN_SUBMIT_ORDERS_SUBMITTED_PATH", str(data_dir / "submit_window" / "orders_submitted.jsonl"))
         ),
         run_submit_post_submit_features_path=Path(
             _get_env(
                 "PEG_RUN_SUBMIT_POST_SUBMIT_FEATURES_PATH",
-                str(data_dir / "submit_hourly" / "post_submit_model_features.csv"),
+                str(data_dir / "submit_window" / "post_submit_model_features.csv"),
             )
         ),
         run_submit_window_manifest_path=Path(
@@ -481,9 +479,9 @@ def load_config() -> PegConfig:
             _get_env("PEG_SUBMIT_PHASE_LOCK_PATH", str(shared_state_dir / "runtime" / "submit_window_submit_phase.lock"))
         ),
         initial_bankroll_usdc=_get_float("PEG_INITIAL_BANKROLL_USDC", 100.0),
-        max_trade_amount_usdc=_get_float("PEG_MAX_TRADE_AMOUNT_USDC", 5.0),
+        max_trade_amount_usdc=_get_float("PEG_MAX_TRADE_AMOUNT_USDC", 4.0),
         order_usdc=_get_float("PEG_ORDER_USDC", 5.0),
-        order_ttl_sec=_get_int("PEG_ORDER_TTL_SEC", 300),
+        order_ttl_sec=_get_int("PEG_ORDER_TTL_SEC", 3600),
         signal_ttl_sec_min=_get_int("PEG_SIGNAL_TTL_SEC_MIN", 300),
         signal_ttl_sec_max=_get_int("PEG_SIGNAL_TTL_SEC_MAX", 600),
         price_dev_abs=_get_float("PEG_PRICE_DEV_ABS", 0.05),
@@ -499,7 +497,7 @@ def load_config() -> PegConfig:
         dup_window_sec=_get_int("PEG_DUP_WINDOW_SEC", 5),
         min_time_to_close_sec=_get_int("PEG_MIN_TIME_TO_CLOSE_SEC", 900),
         max_open_orders=_get_int("PEG_MAX_OPEN_ORDERS", 20),
-        max_position_per_market_usdc=_get_float("PEG_MAX_POSITION_PER_MARKET_USDC", 5.0),
+        max_position_per_market_usdc=_get_float("PEG_MAX_POSITION_PER_MARKET_USDC", 4.0),
         max_net_exposure_usdc=_get_float("PEG_MAX_NET_EXPOSURE_USDC", 100.0),
         max_exposure_per_category_usdc=_get_float("PEG_MAX_EXPOSURE_PER_CATEGORY_USDC", 0.0),
         fat_finger_high=_get_float("PEG_FAT_FINGER_HIGH", 0.99),
@@ -549,7 +547,7 @@ def load_config() -> PegConfig:
         rule_engine_min_price=_get_float("PEG_RULE_ENGINE_MIN_PRICE", 0.2),
         rule_engine_max_price=_get_float("PEG_RULE_ENGINE_MAX_PRICE", 0.8),
         rule_engine_max_horizon_hours=_get_float("PEG_RULE_ENGINE_MAX_HORIZON_HOURS", 1000.0),
-        online_universe_window_hours=_get_float("PEG_ONLINE_UNIVERSE_WINDOW_HOURS", 24.0),
+        online_universe_window_hours=_get_float("PEG_ONLINE_UNIVERSE_WINDOW_HOURS", 12.0),
         online_market_batch_size=_get_int("PEG_ONLINE_MARKET_BATCH_SIZE", 20),
         online_gamma_event_page_size=_get_int("PEG_ONLINE_GAMMA_EVENT_PAGE_SIZE", 50),
         online_require_two_token_markets=_get_bool("PEG_ONLINE_REQUIRE_TWO_TOKEN_MARKETS", True),
@@ -573,6 +571,7 @@ def load_config() -> PegConfig:
         online_token_state_max_age_sec=_get_int("PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC", 7200),
         online_capacity_wait_poll_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_POLL_SEC", 30),
         online_price_cap_safety_buffer=_get_float("PEG_ONLINE_PRICE_CAP_SAFETY_BUFFER", 0.01),
+        online_min_growth_score=_get_float("PEG_MIN_GROWTH_SCORE", 0.2),
         online_deferred_artifacts_enabled=_get_bool("PEG_ONLINE_DEFERRED_ARTIFACTS_ENABLED", False),
         submit_window_run_monitor_after=_get_bool("PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER", True),
         submit_window_monitor_sleep_sec=_get_int("PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC", 0),

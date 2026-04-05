@@ -11,6 +11,7 @@ import math
 import urllib.parse
 import urllib.request
 import bisect
+import sys
 
 from execution_engine.runtime.config import PegConfig
 
@@ -268,6 +269,40 @@ def merge_price_points(
     return [merged[key] for key in sorted(merged)]
 
 
+def _load_rule_snapshot_config(cfg: PegConfig) -> tuple[int, int, int]:
+    rule_engine_dir = str(getattr(cfg, "rule_engine_dir", "") or "")
+    if rule_engine_dir and rule_engine_dir not in sys.path:
+        sys.path.insert(0, rule_engine_dir)
+    from rule_baseline.utils import config as rule_config  # type: ignore
+
+    return (
+        int(rule_config.SNAP_WINDOW_SEC),
+        int(rule_config.STALE_QUOTE_MAX_OFFSET_SEC),
+        int(rule_config.STALE_QUOTE_MAX_GAP_SEC),
+    )
+
+
+def build_source_host(
+    *,
+    source_url: Any,
+    resolution_source: Any,
+    domain: Any,
+) -> str:
+    for candidate in (source_url, resolution_source):
+        raw = str(candidate or "").strip()
+        if not raw or raw.upper() == "UNKNOWN":
+            continue
+        if "://" not in raw:
+            raw = f"http://{raw}"
+        parsed = urllib.parse.urlparse(raw)
+        host = (parsed.netloc or "").strip().lower()
+        if host:
+            return host
+
+    fallback = str(domain or "").strip().lower()
+    return fallback if fallback else "UNKNOWN"
+
+
 def _find_prices_batch(
     timestamps: List[int],
     prices: List[float],
@@ -367,6 +402,45 @@ def _safe_std(values: List[float]) -> float | None:
     mean = sum(values) / len(values)
     variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
     return round(math.sqrt(max(variance, 0.0)), 6)
+
+
+def build_quote_window_features(
+    cfg: PegConfig,
+    *,
+    merged_points: List[PricePoint],
+    target_ts: int,
+) -> Dict[str, float | int | str | bool | None]:
+    snap_window_sec, stale_offset_sec, stale_gap_sec = _load_rule_snapshot_config(cfg)
+    quote_meta = _find_prices_batch(
+        [int(point.ts) for point in merged_points],
+        [float(point.price) for point in merged_points],
+        [int(target_ts)],
+        window_sec=snap_window_sec,
+    )[0]
+    offset_sec = quote_meta.get("offset_sec")
+    local_gap_sec = quote_meta.get("local_gap_sec")
+    stale_quote_flag = (
+        quote_meta.get("price") is None
+        or (offset_sec is not None and float(offset_sec) > stale_offset_sec)
+        or (local_gap_sec is not None and float(local_gap_sec) > stale_gap_sec)
+    )
+    points_in_window = float(quote_meta.get("points_in_window") or 0.0)
+    offset_for_quality = min(max(float(offset_sec or 0.0), 0.0), float(snap_window_sec))
+    snapshot_quality_score = (
+        1.0 - offset_for_quality / max(float(snap_window_sec), 1.0)
+    ) * (1.0 + math.log1p(max(points_in_window, 0.0)))
+    return {
+        "selected_quote_ts": quote_meta.get("selected_ts"),
+        "snapshot_target_ts": int(target_ts),
+        "selected_quote_side": quote_meta.get("point_side") or "UNKNOWN",
+        "selected_quote_offset_sec": float(offset_sec) if offset_sec is not None else None,
+        "selected_quote_points_in_window": points_in_window,
+        "selected_quote_left_gap_sec": float(quote_meta["left_gap_sec"]) if quote_meta.get("left_gap_sec") is not None else None,
+        "selected_quote_right_gap_sec": float(quote_meta["right_gap_sec"]) if quote_meta.get("right_gap_sec") is not None else None,
+        "selected_quote_local_gap_sec": float(local_gap_sec) if local_gap_sec is not None else None,
+        "stale_quote_flag": bool(stale_quote_flag),
+        "snapshot_quality_score": float(snapshot_quality_score),
+    }
 
 
 def build_historical_price_features(

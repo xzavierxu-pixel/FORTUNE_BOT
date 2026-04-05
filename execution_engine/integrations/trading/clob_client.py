@@ -77,6 +77,15 @@ def _to_dict(obj: Any) -> Dict[str, Any]:
     return {"raw": str(obj)}
 
 
+def _normalize_usdc_amount(value: float | None) -> float | None:
+    if value is None:
+        return None
+    # py-clob-client may expose collateral balances in micro-USDC integer units.
+    if value >= 1_000_000 and float(value).is_integer():
+        return value / 1_000_000.0
+    return value
+
+
 class ClobClient:
     def get_midpoint(self, token_id: str) -> Optional[float]:
         raise NotImplementedError
@@ -199,6 +208,8 @@ class LiveClobClient(ClobClient):
             allowance = float(allowance_val) if allowance_val is not None else None
         except (TypeError, ValueError):
             return None
+        balance = _normalize_usdc_amount(balance)
+        allowance = _normalize_usdc_amount(allowance)
         if balance is not None and allowance is not None:
             return min(balance, allowance)
         return balance if balance is not None else allowance

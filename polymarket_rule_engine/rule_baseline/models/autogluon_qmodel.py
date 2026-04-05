@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from copy import deepcopy
+import shutil
 import time
 import random
 from typing import Any
@@ -11,6 +13,7 @@ import pandas as pd
 
 from rule_baseline.models.runtime_bundle import (
     FeatureContract,
+    FULL_TRAINING_BUNDLE_DIRNAME,
     build_runtime_bundle_paths,
     save_calibrator,
     save_feature_contract,
@@ -30,6 +33,11 @@ DEFAULT_GROUP_COLUMN = "horizon_hours"
 DEFAULT_GROUP_MIN_ROWS = 20
 DEFAULT_RANDOM_SEED = 21
 DEFAULT_TIME_LIMIT = 300
+DEFAULT_PREDICTOR_HYPERPARAMETERS = {
+    "GBM": {},
+    "CAT": {},
+    "XGB": {},
+}
 SUPPORTED_CALIBRATION_MODES = {
     "none",
     "global_isotonic",
@@ -81,6 +89,8 @@ def _extract_group_values(df: pd.DataFrame, group_column: str) -> pd.Series:
 @dataclass
 class AutoGluonQTrainingResult:
     bundle_dir: Path
+    full_bundle_dir: Path
+    deploy_bundle_dir: Path
     predictor: Any
     feature_contract: FeatureContract
     calibration_mode: str
@@ -131,12 +141,44 @@ class AutoGluonQTrainingResult:
         return np.clip(apply_probability_calibrator(self.calibrator, raw_prob), 0.0, 1.0)
 
 
+def _reset_bundle_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def _copy_runtime_bundle_metadata(
+    *,
+    source_dir: Path,
+    target_dir: Path,
+    feature_contract: FeatureContract,
+    calibrator: object | None,
+    calibrator_meta: dict[str, Any],
+    runtime_manifest: dict[str, Any],
+) -> None:
+    bundle_paths = build_runtime_bundle_paths(target_dir)
+    bundle_paths.ensure_dirs()
+    save_feature_contract(bundle_paths.feature_contract_path, feature_contract)
+    write_bundle_json(bundle_paths.runtime_manifest_path, runtime_manifest)
+    write_bundle_json(bundle_paths.calibrator_meta_path, calibrator_meta)
+    write_bundle_json(
+        bundle_paths.deployment_summary_path,
+        {
+            **runtime_manifest.get("deployment_validation", {}),
+            "source_bundle_dir": str(source_dir),
+        },
+    )
+    if calibrator is not None:
+        save_calibrator(bundle_paths.calibrator_path, calibrator)
+
+
 def fit_autogluon_q_model(
     *,
     df_train: pd.DataFrame,
     df_valid: pd.DataFrame,
     feature_columns: list[str],
     bundle_dir: Path,
+    full_bundle_dir: Path | None = None,
     artifact_mode: str,
     split_boundaries: dict[str, Any],
     calibration_mode: str = DEFAULT_CALIBRATION_MODE,
@@ -176,15 +218,22 @@ def fit_autogluon_q_model(
         valid_data = valid_features.copy()
         valid_data[label_column] = df_valid[label_column].astype(int).values
 
-    bundle_paths = build_runtime_bundle_paths(bundle_dir)
-    bundle_paths.ensure_dirs()
+    deploy_bundle_dir = bundle_dir
+    training_bundle_dir = full_bundle_dir or bundle_dir.parent / FULL_TRAINING_BUNDLE_DIRNAME
+    deploy_bundle_paths = build_runtime_bundle_paths(deploy_bundle_dir)
+    full_bundle_paths = build_runtime_bundle_paths(training_bundle_dir)
+    _reset_bundle_dir(deploy_bundle_dir)
+    if training_bundle_dir != deploy_bundle_dir:
+        _reset_bundle_dir(training_bundle_dir)
+    deploy_bundle_paths.ensure_dirs()
+    full_bundle_paths.ensure_dirs()
 
     TabularPredictor = _load_tabular_predictor_class()
     predictor = TabularPredictor(
         label=label_column,
         problem_type="binary",
         eval_metric="log_loss",
-        path=str(bundle_paths.predictor_dir),
+        path=str(full_bundle_paths.predictor_dir),
     )
     fit_kwargs: dict[str, Any] = {
         "train_data": train_data,
@@ -210,6 +259,8 @@ def fit_autogluon_q_model(
         fit_kwargs["time_limit"] = time_limit
     if predictor_hyperparameters:
         fit_kwargs["hyperparameters"] = predictor_hyperparameters
+    else:
+        fit_kwargs["hyperparameters"] = deepcopy(DEFAULT_PREDICTOR_HYPERPARAMETERS)
     random.seed(int(random_seed))
     np.random.seed(int(random_seed))
     fit_started = time.perf_counter()
@@ -310,13 +361,38 @@ def fit_autogluon_q_model(
         else:
             raise ValueError(f"Unsupported AutoGluon calibration_mode: {calibration_mode}")
 
+    clone_seconds = None
+    clone_ok = False
+    clone_error = ""
+    if training_bundle_dir != deploy_bundle_dir:
+        clone_started = time.perf_counter()
+        try:
+            predictor.clone_for_deployment(
+                path=str(deploy_bundle_paths.predictor_dir),
+                model="best",
+                dirs_exist_ok=True,
+            )
+            clone_ok = True
+        except Exception as exc:
+            clone_error = str(exc)
+            raise
+        finally:
+            clone_seconds = time.perf_counter() - clone_started
+    else:
+        clone_ok = True
+        clone_seconds = 0.0
+
+    deployment_predictor = predictor
+    if training_bundle_dir != deploy_bundle_dir:
+        deployment_predictor = TabularPredictor.load(str(deploy_bundle_paths.predictor_dir))
+
     persist_seconds = None
     persist_ok = False
     persist_error = ""
     if deploy_optimized:
         persist_started = time.perf_counter()
         try:
-            predictor.persist()
+            deployment_predictor.persist()
             persist_ok = True
         except Exception as exc:
             persist_error = str(exc)
@@ -328,10 +404,13 @@ def fit_autogluon_q_model(
         "target_mode": "q",
         "label_column": label_column,
         "artifact_mode": artifact_mode,
-        "predictor_path": str(bundle_paths.predictor_dir.relative_to(bundle_paths.root_dir)).replace("\\", "/"),
+        "predictor_path": str(deploy_bundle_paths.predictor_dir.relative_to(deploy_bundle_paths.root_dir)).replace("\\", "/"),
         "predictor_name": predictor_name,
         "refit_full_used": bool(refit_full),
         "deployment_optimized": bool(deploy_optimized),
+        "bundle_role": "deployment",
+        "full_bundle_dir": str(training_bundle_dir),
+        "deploy_bundle_dir": str(deploy_bundle_dir),
         "split_boundaries": split_boundaries,
         "calibration_mode": calibration_mode,
         "grouped_calibration_column": grouped_calibration_column,
@@ -348,6 +427,7 @@ def fit_autogluon_q_model(
             "time_limit": time_limit,
             "random_seed": int(random_seed),
             "label_column": label_column,
+            "predictor_hyperparameters": fit_kwargs.get("hyperparameters"),
             "fit_rows": int(len(df_train)),
             "calibration_rows": int(len(df_valid)),
             "calibration_mode": calibration_mode,
@@ -356,6 +436,9 @@ def fit_autogluon_q_model(
         },
         "deployment_validation": {
             "fit_duration_sec": float(fit_duration_sec),
+            "clone_for_deployment_ok": bool(clone_ok),
+            "clone_for_deployment_duration_sec": float(clone_seconds) if clone_seconds is not None else None,
+            "clone_for_deployment_error": clone_error,
             "persist_attempted": bool(deploy_optimized),
             "persist_ok": bool(persist_ok),
             "persist_duration_sec": float(persist_seconds) if persist_seconds is not None else None,
@@ -365,16 +448,36 @@ def fit_autogluon_q_model(
         "calibration_rows": int(len(df_valid)),
     }
 
-    save_feature_contract(bundle_paths.feature_contract_path, feature_contract)
-    write_bundle_json(bundle_paths.runtime_manifest_path, runtime_manifest)
-    write_bundle_json(bundle_paths.calibrator_meta_path, calibrator_meta)
-    write_bundle_json(bundle_paths.deployment_summary_path, runtime_manifest["deployment_validation"])
-    if calibrator is not None:
-        save_calibrator(bundle_paths.calibrator_path, calibrator)
+    full_runtime_manifest = dict(runtime_manifest)
+    full_runtime_manifest.update(
+        {
+            "bundle_role": "full_training",
+            "predictor_path": str(full_bundle_paths.predictor_dir.relative_to(full_bundle_paths.root_dir)).replace("\\", "/"),
+        }
+    )
+
+    _copy_runtime_bundle_metadata(
+        source_dir=training_bundle_dir,
+        target_dir=training_bundle_dir,
+        feature_contract=feature_contract,
+        calibrator=calibrator,
+        calibrator_meta=calibrator_meta,
+        runtime_manifest=full_runtime_manifest,
+    )
+    _copy_runtime_bundle_metadata(
+        source_dir=training_bundle_dir,
+        target_dir=deploy_bundle_dir,
+        feature_contract=feature_contract,
+        calibrator=calibrator,
+        calibrator_meta=calibrator_meta,
+        runtime_manifest=runtime_manifest,
+    )
 
     return AutoGluonQTrainingResult(
-        bundle_dir=bundle_dir,
-        predictor=predictor,
+        bundle_dir=deploy_bundle_dir,
+        full_bundle_dir=training_bundle_dir,
+        deploy_bundle_dir=deploy_bundle_dir,
+        predictor=deployment_predictor,
         feature_contract=feature_contract,
         calibration_mode=calibration_mode,
         calibrator=calibrator,

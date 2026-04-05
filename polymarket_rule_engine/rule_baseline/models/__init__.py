@@ -9,6 +9,7 @@ from rule_baseline.models.autogluon_qmodel import (
 from rule_baseline.models.runtime_adapter import ModelArtifactAdapter, load_model_artifact
 from rule_baseline.models.runtime_bundle import (
     FeatureContract,
+    FULL_TRAINING_BUNDLE_DIRNAME,
     RUNTIME_BUNDLE_DIRNAME,
     RuntimeBundlePaths,
     build_runtime_bundle_paths,

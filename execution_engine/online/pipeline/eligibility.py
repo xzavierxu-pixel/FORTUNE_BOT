@@ -133,10 +133,6 @@ def apply_structural_coarse_filter(
     remaining = candidates["remaining_hours"]
     slack = max(float(cfg.online_coarse_horizon_slack_hours), 0.0)
     configured_horizon_limit = float(cfg.online_universe_window_hours)
-    if not rules_frame.empty and "h_max" in rules_frame.columns:
-        rule_horizon_limit = pd.to_numeric(rules_frame["h_max"], errors="coerce").dropna()
-        if not rule_horizon_limit.empty:
-            configured_horizon_limit = max(configured_horizon_limit, float(rule_horizon_limit.max()))
 
     candidates.loc[missing_end_mask, ["coarse_filter_state", "coarse_filter_reason"]] = [
         STRUCTURAL_REJECT,

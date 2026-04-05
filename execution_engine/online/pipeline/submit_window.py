@@ -26,9 +26,15 @@ from execution_engine.online.pipeline.lifecycle import (
 from execution_engine.online.pipeline.prewarm import OnlineRuntimeContainer, build_runtime_container
 from execution_engine.online.reporting.deferred_writer import DeferredWriter
 from execution_engine.online.reporting.candidate_audit import build_candidate_audit
+from execution_engine.online.reporting.execution_audit import build_run_execution_audit
 from execution_engine.online.reporting.run_summary import publish_run_summary
 from execution_engine.online.scoring.live import LiveInferenceResult, run_live_inference
-from execution_engine.online.scoring.selection import allocate_candidates, build_selection_decisions, select_target_side
+from execution_engine.online.scoring.selection import (
+    allocate_candidates,
+    build_selection_decisions,
+    filter_candidates_by_growth_score,
+    select_target_side,
+)
 from execution_engine.online.streaming.manager import StreamRunResult, stream_market_data
 from execution_engine.online.universe.page_source import EventPageResult, fetch_event_page
 from execution_engine.runtime.config import PegConfig
@@ -72,9 +78,13 @@ def _concat_row_frames(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.Dat
 
     ordered_columns = list(existing.columns)
     ordered_columns.extend(column for column in incoming.columns if column not in ordered_columns)
-    left = existing.reindex(columns=ordered_columns)
-    right = incoming.reindex(columns=ordered_columns)
-    return pd.concat([left.reset_index(drop=True), right.reset_index(drop=True)], ignore_index=True)
+    left = existing.reindex(columns=ordered_columns).reset_index(drop=True)
+    right = incoming.reindex(columns=ordered_columns).reset_index(drop=True)
+    # Rebuild from row records so pandas does not hit the deprecated concat path for
+    # frames that contain all-NA placeholder columns after reindexing.
+    rows = left.to_dict(orient="records")
+    rows.extend(right.to_dict(orient="records"))
+    return pd.DataFrame.from_records(rows, columns=ordered_columns)
 
 
 def _write_selection_snapshot(path, selection: pd.DataFrame) -> None:
@@ -325,6 +335,7 @@ class SubmitWindowBatchResult:
     live_state_missing_count: int
     live_state_stale_count: int
     invalid_price_count: int
+    growth_filtered_count: int
     selected_count: int
     submitted_count: int
     underfilled: bool
@@ -431,6 +442,7 @@ def _build_submit_window_manifest(
     live_state_missing_count: int,
     live_state_stale_count: int,
     invalid_price_count: int,
+    growth_filtered_count: int,
     selected_count: int,
     submit_attempted_count: int,
     submitted_order_count: int,
@@ -463,12 +475,14 @@ def _build_submit_window_manifest(
         "live_state_missing_count": int(live_state_missing_count),
         "live_state_stale_count": int(live_state_stale_count),
         "invalid_price_count": int(invalid_price_count),
+        "growth_filtered_count": int(growth_filtered_count),
         "selected_count": int(selected_count),
         "submit_attempted_count": int(submit_attempted_count),
         "submitted_order_count": int(submitted_order_count),
         "submit_rejection_count": int(submit_rejection_count),
         "selection_decisions_path": str(cfg.run_snapshot_selection_path),
         "post_submit_features_path": str(cfg.run_submit_post_submit_features_path),
+        "execution_audit": build_run_execution_audit(cfg),
         "underfilled_batch_count": int(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
         "final_status": final_status,
@@ -494,6 +508,7 @@ def _build_submit_window_manifest(
                         "live_state_missing_count": batch.live_state_missing_count,
                         "live_state_stale_count": batch.live_state_stale_count,
                         "invalid_price_count": batch.invalid_price_count,
+                        "growth_filtered_count": batch.growth_filtered_count,
                         "selected_count": batch.selected_count,
                         "submitted_count": batch.submitted_count,
                         "underfilled": batch.underfilled,
@@ -590,6 +605,7 @@ def complete_post_submit_monitor(cfg: PegConfig) -> SubmitWindowResult:
             "final_status": final_status,
             "post_submit_started_at_bj": str(manifest.get("post_submit_started_at_bj") or bj_now_iso()),
             "post_submit_finished_at_bj": bj_now_iso(),
+            "execution_audit": build_run_execution_audit(cfg),
         }
     )
     _write_manifest(cfg.run_submit_window_manifest_path, manifest)
@@ -676,6 +692,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
             live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
             invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
+            growth_filtered_count=0,
             selected_count=0,
             submitted_count=0,
             underfilled=bool(len(batch.frame) < max(int(runtime.cfg.online_market_batch_size), 1)),
@@ -711,6 +728,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
             live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
             invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
+            growth_filtered_count=0,
             selected_count=0,
             submitted_count=0,
             underfilled=bool(len(batch.frame) < max(int(runtime.cfg.online_market_batch_size), 1)),
@@ -724,17 +742,27 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             submit_result=_empty_result_noop(runtime.cfg, status="empty_viable_candidates"),
         )
     state = StateStore(runtime.cfg)
+    growth_filtered_candidates = filter_candidates_by_growth_score(
+        viable_candidates,
+        min_growth_score=float(runtime.cfg.online_min_growth_score),
+    )
+    growth_filtered_count = max(int(len(viable_candidates)) - int(len(growth_filtered_candidates)), 0)
     selected = (
         allocate_candidates(
-            viable_candidates,
+            growth_filtered_candidates,
             runtime.cfg,
             state,
             runtime.rule_runtime.backtest_config,
         )
-        if not viable_candidates.empty
+        if not growth_filtered_candidates.empty
         else pd.DataFrame()
     )
-    selection = build_selection_decisions(model_outputs, selected, runtime.cfg)
+    selection = build_selection_decisions(
+        model_outputs,
+        selected,
+        runtime.cfg,
+        min_growth_score=float(runtime.cfg.online_min_growth_score),
+    )
     if selection.empty:
         live_state_counts = inference_result.live_filter.state_counts
         token_age_series = pd.to_numeric(inference_result.live_filter.eligible.get("token_state_age_sec"), errors="coerce")
@@ -748,6 +776,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
             live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
             invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
+            growth_filtered_count=growth_filtered_count,
             selected_count=0,
             submitted_count=0,
             underfilled=bool(len(batch.frame) < max(int(runtime.cfg.online_market_batch_size), 1)),
@@ -816,6 +845,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
         live_state_missing_count=int(live_state_counts.get("LIVE_STATE_MISSING", 0)),
         live_state_stale_count=int(live_state_counts.get("LIVE_STATE_STALE", 0)),
         invalid_price_count=int(live_state_counts.get("INVALID_PRICE", 0)),
+        growth_filtered_count=growth_filtered_count,
         selected_count=int(
             len(
                 selection[
@@ -968,6 +998,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
     live_state_missing_count = 0
     live_state_stale_count = 0
     invalid_price_count = 0
+    growth_filtered_count = 0
     selected_count = 0
     submit_attempted_count = 0
     token_state_age_weighted_sum = 0.0
@@ -1014,6 +1045,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
             live_state_missing_count += batch.live_state_missing_count
             live_state_stale_count += batch.live_state_stale_count
             invalid_price_count += batch.invalid_price_count
+            growth_filtered_count += batch.growth_filtered_count
             selected_count += batch.selected_count
             submit_attempted_count += batch.submit_result.attempted_count
             if batch.live_eligible_count > 0:
@@ -1079,7 +1111,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         0,
     )
     selected_not_attempted_count = max(selected_count - submit_attempted_count, 0)
-    live_eligible_not_selected_count = max(live_eligible_count - selected_count, 0)
+    live_eligible_not_selected_count = max(live_eligible_count - selected_count - growth_filtered_count, 0)
     metrics_payload = {
         "gamma_event_page_fetch_latency_ms": sum(fetch_latencies_ms) / len(fetch_latencies_ms) if fetch_latencies_ms else 0.0,
         "expanded_market_count": float(expanded_market_count),
@@ -1096,6 +1128,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         "live_state_missing_count": float(live_state_missing_count),
         "live_state_stale_count": float(live_state_stale_count),
         "invalid_price_count": float(invalid_price_count),
+        "growth_filtered_count": float(growth_filtered_count),
         "selected_count": float(selected_count),
         "submit_attempted_count": float(submit_attempted_count),
         "inference_latency_ms": sum(inference_latencies_ms) / len(inference_latencies_ms) if inference_latencies_ms else 0.0,
@@ -1135,6 +1168,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         "stage2_live_state_stale_count": int(live_state_stale_count),
         "stage2_invalid_price_count": int(invalid_price_count),
         "stage2_unaccounted_count": int(unaccounted_live_stage_count),
+        "stage3_growth_filtered_count": int(growth_filtered_count),
         "stage3_selected_count": int(selected_count),
         "stage3_live_eligible_not_selected_count": int(live_eligible_not_selected_count),
         "stage4_submit_attempted_count": int(submit_attempted_count),
@@ -1173,6 +1207,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         "live_state_missing_count": int(live_state_missing_count),
         "live_state_stale_count": int(live_state_stale_count),
         "invalid_price_count": int(invalid_price_count),
+        "growth_filtered_count": int(growth_filtered_count),
         "selected_count": int(selected_count),
         "submit_attempted_count": int(submit_attempted_count),
         "submitted_order_count": int(submitted_order_count),
@@ -1207,6 +1242,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
                         "live_state_missing_count": batch.live_state_missing_count,
                         "live_state_stale_count": batch.live_state_stale_count,
                         "invalid_price_count": batch.invalid_price_count,
+                        "growth_filtered_count": batch.growth_filtered_count,
                         "selected_count": batch.selected_count,
                         "submitted_count": batch.submitted_count,
                         "underfilled": batch.underfilled,
@@ -1299,6 +1335,7 @@ def _rewrite_submit_window_manifest(
             "post_submit_monitor_enabled": cfg.submit_window_run_monitor_after,
             "post_submit_monitor_status": post_submit_status,
             "post_submit_monitor_error": "" if post_submit_status == "scheduled" else str(manifest.get("post_submit_monitor_error") or ""),
+            "execution_audit": build_run_execution_audit(cfg),
         }
     )
     if post_submit_status == "scheduled":
@@ -1334,6 +1371,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             "final_status": "skipped_previous_submit_phase_active",
             "blocking_submit_phase": existing_phase.payload,
             "metrics": {},
+            "execution_audit": build_run_execution_audit(cfg),
             **monitor_summary,
             "pages": [],
         }

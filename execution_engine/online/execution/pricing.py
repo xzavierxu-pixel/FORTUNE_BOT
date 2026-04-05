@@ -123,7 +123,7 @@ def build_submission_signal(
         "category": str(row.get("category") or ""),
         "domain": str(row.get("domain") or ""),
         "market_type": str(row.get("market_type") or ""),
-        "source_host": str(row.get("domain") or ""),
+        "source_host": str(row.get("source_host") or row.get("domain") or ""),
         "position_side": str(row.get("position_side") or ""),
         "rule_group_key": str(row.get("rule_group_key") or ""),
         "rule_leaf_id": int(float(row.get("rule_leaf_id") or 0)),

@@ -35,6 +35,9 @@ class ClobBalanceProvider:
 def build_balance_provider(cfg: PegConfig, clob_client: ClobClient | None = None) -> object:
     if not cfg.dry_run and cfg.clob_enabled:
         client = clob_client
-        if client is not None:
-            return ClobBalanceProvider(client)
+        if client is None:
+            from execution_engine.integrations.trading.clob_client import build_clob_client
+
+            client = build_clob_client(cfg)
+        return ClobBalanceProvider(client)
     return FileBalanceProvider(cfg.balances_path)

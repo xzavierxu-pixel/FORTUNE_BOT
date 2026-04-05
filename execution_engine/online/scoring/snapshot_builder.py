@@ -14,6 +14,8 @@ from execution_engine.runtime.config import PegConfig
 from execution_engine.online.execution.positions import load_open_market_ids, load_pending_market_ids
 from execution_engine.online.scoring.price_history import (
     ClobPriceHistoryClient,
+    build_quote_window_features,
+    build_source_host,
     build_latest_live_prices_from_token_state,
     build_historical_price_features,
     merge_price_points,
@@ -322,8 +324,6 @@ def build_snapshot_inputs(
         latest_event_ts_ms = _to_int((token_state_row or {}).get("latest_event_timestamp_ms"))
         selected_quote_ts = int(latest_event_ts_ms / 1000) if latest_event_ts_ms else now_ts
         raw_event_count = _to_float((token_state_row or {}).get("raw_event_count"), default=1.0)
-        quality = max(0.0, 1.0 - (age_sec or 0.0) / max(float(cfg.online_token_state_max_age_sec), 1.0))
-        quality *= max(1.0, min(raw_event_count, 10.0))
         try:
             history_points = history_client.fetch_history(
                 token_id,
@@ -334,6 +334,7 @@ def build_snapshot_inputs(
         except Exception:
             history_points = []
         merged_history = merge_price_points(history_points, latest_ws_price, now_ts=now_ts)
+        quote_window = build_quote_window_features(cfg, merged_points=merged_history, target_ts=now_ts)
         end_dt = _parse_utc(row.get("end_time_utc"))
         end_ts = int(end_dt.timestamp()) if end_dt is not None else now_ts
         history_features = build_historical_price_features(
@@ -361,22 +362,26 @@ def build_snapshot_inputs(
                 "closedTime": str(row.get("end_time_utc") or ""),
                 "delta_hours": 0.0,
                 "delta_hours_bucket": 0.0,
-                "selected_quote_offset_sec": float(age_sec or 0.0),
-                "selected_quote_points_in_window": float(max(raw_event_count, 1.0)),
-                "selected_quote_left_gap_sec": 0.0,
-                "selected_quote_right_gap_sec": 0.0,
-                "selected_quote_local_gap_sec": 0.0,
-                "selected_quote_ts": selected_quote_ts,
-                "snapshot_target_ts": now_ts,
-                "selected_quote_side": str((token_state_row or {}).get("subscription_source") or "reference_token"),
-                "stale_quote_flag": False,
-                "snapshot_quality_score": round(quality, 6),
+                "selected_quote_offset_sec": quote_window["selected_quote_offset_sec"],
+                "selected_quote_points_in_window": quote_window["selected_quote_points_in_window"],
+                "selected_quote_left_gap_sec": quote_window["selected_quote_left_gap_sec"],
+                "selected_quote_right_gap_sec": quote_window["selected_quote_right_gap_sec"],
+                "selected_quote_local_gap_sec": quote_window["selected_quote_local_gap_sec"],
+                "selected_quote_ts": quote_window["selected_quote_ts"] or selected_quote_ts,
+                "snapshot_target_ts": quote_window["snapshot_target_ts"],
+                "selected_quote_side": quote_window["selected_quote_side"],
+                "stale_quote_flag": quote_window["stale_quote_flag"],
+                "snapshot_quality_score": quote_window["snapshot_quality_score"],
                 "price_in_range_flag": bool(cfg.rule_engine_min_price < price < cfg.rule_engine_max_price),
                 "quality_pass": bool(cfg.rule_engine_min_price < price < cfg.rule_engine_max_price),
                 "category": str(row.get("category") or "UNKNOWN"),
                 "domain": str(row.get("domain") or "UNKNOWN"),
                 "market_type": str(row.get("market_type") or "UNKNOWN"),
-                "source_host": str(row.get("domain") or "UNKNOWN"),
+                "source_host": build_source_host(
+                    source_url=row.get("source_url"),
+                    resolution_source=row.get("resolution_source"),
+                    domain=row.get("domain"),
+                ),
                 "primary_outcome": str(row.get("outcome_0_label") or ""),
                 "secondary_outcome": str(row.get("outcome_1_label") or ""),
                 "market_duration_hours": market_duration_hours,

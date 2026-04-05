@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 
@@ -15,6 +14,7 @@ from rule_baseline.datasets.snapshots import load_raw_markets, load_research_sna
 from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
+from rule_baseline.models import load_model_artifact
 from rule_baseline.training.train_snapshot_model import add_training_targets, build_feature_table, load_rules
 from rule_baseline.utils import config
 
@@ -25,9 +25,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_feature_frame(artifact_mode: str) -> tuple[pd.DataFrame, list[str], dict]:
+def load_feature_frame(artifact_mode: str) -> tuple[pd.DataFrame, list[str], object]:
     artifact_paths = build_artifact_paths(artifact_mode)
-    payload = joblib.load(artifact_paths.model_path)
+    payload = load_model_artifact(artifact_paths.model_path)
 
     snapshots = load_research_snapshots()
     snapshots = snapshots[snapshots["quality_pass"]].copy()
@@ -44,7 +44,7 @@ def load_feature_frame(artifact_mode: str) -> tuple[pd.DataFrame, list[str], dic
     if df_feat.empty:
         raise RuntimeError("No feature rows available after rule matching.")
     df_feat = add_training_targets(df_feat)
-    return df_feat, list(payload["feature_columns"]), payload
+    return df_feat, list(payload.feature_contract.feature_columns), payload
 
 
 def feature_metadata(feature: str) -> tuple[str, str]:
@@ -124,10 +124,11 @@ def describe_categorical(series: pd.Series, prefix: str) -> dict[str, object]:
     }
 
 
-def build_feature_dqc(df_feat: pd.DataFrame, feature_columns: list[str], payload: dict) -> pd.DataFrame:
+def build_feature_dqc(df_feat: pd.DataFrame, feature_columns: list[str], payload: object) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    numeric_features = set(payload.get("numeric_columns", []))
-    categorical_features = set(payload.get("categorical_columns", []))
+    contract = payload.feature_contract
+    numeric_features = set(contract.numeric_columns)
+    categorical_features = set(contract.categorical_columns)
 
     for feature in feature_columns:
         group_name, meaning = feature_metadata(feature)

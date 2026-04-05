@@ -313,7 +313,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    default_attempts = ROOT / "execution_engine" / "data" / "runs" / "2026-03-19" / "EXP20260319_SUBMIT_FULL_01" / "submit_hourly" / "submission_attempts.csv"
+default_attempts = ROOT / "execution_engine" / "data" / "runs" / "2026-03-19" / "EXP20260319_SUBMIT_FULL_01" / "submit_window" / "submission_attempts.csv"
     default_normal_market_pairs = [
         "1633842:13859161527131805596386232961909653339330952192194039757131667984173198775581",
         "1633843:106795652436815554164476106798549407654605074130170338834752776791190474957501",

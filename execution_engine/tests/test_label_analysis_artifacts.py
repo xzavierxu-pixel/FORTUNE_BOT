@@ -1,16 +1,34 @@
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
 
 from execution_engine.online.analysis.label_history import load_scanned_market_ids, load_selection_history
-from execution_engine.online.pipeline.submit_window import _persist_batch_training_artifacts, _write_selection_snapshot
+from execution_engine.online.pipeline.submit_window import (
+    _concat_row_frames,
+    _persist_batch_training_artifacts,
+    _write_selection_snapshot,
+)
 
 
 class LabelAnalysisArtifactsTest(unittest.TestCase):
+    def test_concat_row_frames_avoids_future_warning_for_all_na_columns(self) -> None:
+        existing = pd.DataFrame([{"market_id": "market-1", "feature_a": "1.0"}])
+        incoming = pd.DataFrame([{"market_id": "market-2", "feature_b": None}])
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("error", FutureWarning)
+            combined = _concat_row_frames(existing, incoming)
+
+        self.assertEqual(len(caught), 0)
+        self.assertEqual(list(combined.columns), ["market_id", "feature_a", "feature_b"])
+        self.assertEqual(combined.iloc[0]["market_id"], "market-1")
+        self.assertEqual(combined.iloc[1]["market_id"], "market-2")
+
     def test_selection_snapshot_persists_rows_for_label_history(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             run_dir = Path(tmpdir)

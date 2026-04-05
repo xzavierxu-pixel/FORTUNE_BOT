@@ -4,7 +4,11 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from rule_baseline.models.runtime_bundle import RUNTIME_BUNDLE_DIRNAME, build_runtime_bundle_paths
+from rule_baseline.models.runtime_bundle import (
+    FULL_TRAINING_BUNDLE_DIRNAME,
+    RUNTIME_BUNDLE_DIRNAME,
+    build_runtime_bundle_paths,
+)
 from rule_baseline.utils import config
 
 ARTIFACT_MODES = {"offline", "online"}
@@ -27,6 +31,7 @@ class ArtifactPaths:
     rule_json_path: Path
     model_path: Path
     model_bundle_dir: Path
+    full_model_bundle_dir: Path
     legacy_model_path: Path
     predictions_path: Path
     predictions_full_path: Path
@@ -37,6 +42,7 @@ class ArtifactPaths:
 
     def ensure_dirs(self) -> None:
         bundle_paths = build_runtime_bundle_paths(self.model_bundle_dir)
+        full_bundle_paths = build_runtime_bundle_paths(self.full_model_bundle_dir)
         for path in [
             self.root_dir,
             self.edge_dir,
@@ -50,6 +56,7 @@ class ArtifactPaths:
         ]:
             path.mkdir(parents=True, exist_ok=True)
         bundle_paths.ensure_dirs()
+        full_bundle_paths.ensure_dirs()
 
 
 def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
@@ -74,6 +81,7 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         rule_json_path=root / "naive_rules" / "naive_trading_rules.json",
         model_path=root / "models" / RUNTIME_BUNDLE_DIRNAME,
         model_bundle_dir=root / "models" / RUNTIME_BUNDLE_DIRNAME,
+        full_model_bundle_dir=root / "models" / FULL_TRAINING_BUNDLE_DIRNAME,
         legacy_model_path=root / "models" / "ensemble_snapshot_q.pkl",
         predictions_path=root / "predictions" / "snapshots_with_predictions.csv",
         predictions_full_path=root / "predictions" / "snapshots_with_predictions_all.csv",

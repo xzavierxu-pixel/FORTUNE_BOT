@@ -56,8 +56,9 @@ class UnifiedRuleLogicTest(unittest.TestCase):
 class ArtifactBundlePathTest(unittest.TestCase):
     def test_model_path_points_to_runtime_bundle(self) -> None:
         paths = build_artifact_paths("offline")
-        self.assertEqual(paths.model_path.name, "q_model_bundle")
+        self.assertEqual(paths.model_path.name, "q_model_bundle_deploy")
         self.assertEqual(paths.model_bundle_dir, paths.model_path)
+        self.assertEqual(paths.full_model_bundle_dir.name, "q_model_bundle_full")
         self.assertEqual(paths.legacy_model_path.name, "ensemble_snapshot_q.pkl")
 
 
@@ -82,13 +83,25 @@ class AutoGluonMetadataContractTest(unittest.TestCase):
 
         class FakePredictor:
             model_best = "WeightedEnsemble_L2"
+            last_created = None
+            loaded_paths = []
 
             def __init__(self, **kwargs):
                 self.kwargs = kwargs
+                FakePredictor.last_created = self
 
             def fit(self, **kwargs):
                 self.fit_kwargs = kwargs
                 return self
+
+            def clone_for_deployment(self, path, model="best", return_clone=False, dirs_exist_ok=False):
+                Path(path).mkdir(parents=True, exist_ok=True)
+                return path
+
+            @classmethod
+            def load(cls, path):
+                cls.loaded_paths.append(str(path))
+                return cls.last_created
 
             def predict_proba(self, data, as_pandas=False, as_multiclass=False):
                 return [0.2] * len(data)
@@ -117,6 +130,12 @@ class AutoGluonMetadataContractTest(unittest.TestCase):
         self.assertEqual(result.runtime_manifest["num_bag_sets"], 2)
         self.assertEqual(result.runtime_manifest["num_stack_levels"], 1)
         self.assertFalse(result.runtime_manifest["auto_stack"])
+        self.assertEqual(
+            result.runtime_manifest["training_recipe"]["predictor_hyperparameters"],
+            {"GBM": {}, "CAT": {}, "XGB": {}},
+        )
+        self.assertEqual(result.deploy_bundle_dir.name, "bundle")
+        self.assertEqual(result.full_bundle_dir.name, "q_model_bundle_full")
 
 
 if __name__ == "__main__":

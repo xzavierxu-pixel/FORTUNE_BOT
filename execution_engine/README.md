@@ -6,7 +6,7 @@ Target-state design for the production submit-window path:
 
 - [SUBMIT_WINDOW_MAIN_PATH_IMPLEMENTATION_DESIGN.md](C:\Users\ROG\Desktop\fortune_bot\execution_engine\SUBMIT_WINDOW_MAIN_PATH_IMPLEMENTATION_DESIGN.md)
 
-Use the dedicated environment at `C:\Users\ROG\Desktop\fortune_bot\.venv-execution` for live trading and dry-runs. This keeps the official `py-clob-client` isolated from unrelated tools in the global Python environment.
+Use the dedicated environment at `C:\Users\ROG\Desktop\fortune_bot\.venv-execution` for live trading and dry-runs. This keeps the official `py-clob-client` isolated from unrelated tools in the global Python environment. The current deployment model expects Python `3.13` for live model compatibility.
 
 Run artifacts live under [execution_engine/data](C:\Users\ROG\Desktop\fortune_bot\execution_engine\data):
 
@@ -87,7 +87,7 @@ powershell -ExecutionPolicy Bypass -File execution_engine\app\scripts\online\lab
 - `execution_engine/app/scripts/env/`: environment/bootstrap scripts
 - `execution_engine/app/scripts/online/`: online pipeline scripts
 
-`bootstrap_venv.ps1` installs the local [py-clob-client](C:\Users\ROG\Desktop\fortune_bot\py-clob-client) clone in editable mode. That uses the official package metadata instead of the `py-clob-client` repo's pinned `requirements.txt`, so the online runtime stays isolated without forcing old versions into your global Python.
+`bootstrap_venv.ps1` and the Linux bootstrap script install `py-clob-client` from the official GitHub repository by default: [Polymarket/py-clob-client](https://github.com/Polymarket/py-clob-client). If a local [py-clob-client](C:\Users\ROG\Desktop\fortune_bot\py-clob-client) project exists with `setup.py` or `pyproject.toml`, the bootstrap scripts prefer that local checkout instead. You can also override the Git source with `FORTUNE_BOT_PY_CLOB_CLIENT_GIT_URL` and `FORTUNE_BOT_PY_CLOB_CLIENT_REF`. On Linux, the bootstrap script now defaults to `python3.13` and can be overridden with `FORTUNE_BOT_PYTHON_BIN`.
 
 ## Important environment variables
 
@@ -95,6 +95,7 @@ Core:
 
 - `PEG_DRY_RUN=1|0`
 - `PEG_RUN_ID=<id>`
+- `PEG_ORDER_TTL_SEC` default `900` seconds
 
 Rule engine integration:
 
@@ -159,6 +160,9 @@ Online shared artifacts under [execution_engine/data/shared](C:\Users\ROG\Deskto
 Per-run direct submission artifacts:
 
 - `submit_window/manifest.json`
+- `submit_window/submission_attempts.csv`
+- `submit_window/orders_submitted.jsonl`
+- `submit_window/post_submit_model_features.csv`
 
 Per-run order monitoring artifacts:
 

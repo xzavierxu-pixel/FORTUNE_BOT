@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from typing import Any, Dict
 
 import pandas as pd
@@ -13,6 +14,8 @@ from execution_engine.online.pipeline.prewarm import OnlineRuntimeContainer
 from execution_engine.online.scoring.price_history import (
     ClobPriceHistoryClient,
     PricePoint,
+    build_quote_window_features,
+    build_source_host,
     build_historical_price_features,
 )
 from execution_engine.online.scoring.rule_runtime import (
@@ -23,6 +26,14 @@ from execution_engine.online.scoring.rule_runtime import (
     prepare_feature_inputs,
 )
 from execution_engine.runtime.config import PegConfig
+
+LOGGER = logging.getLogger(__name__)
+_MODEL_INPUT_BRIDGE_COLUMNS = (
+    "market_id",
+    "snapshot_time",
+    "rule_group_key",
+    "rule_leaf_id",
+)
 
 
 def _utc_now() -> datetime:
@@ -134,7 +145,6 @@ def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFra
     for row in frame.to_dict(orient="records"):
         price = _to_float(row.get("live_mid_price"))
         token_state_age_sec = _to_float(row.get("token_state_age_sec"))
-        raw_event_count = max(_to_float(row.get("raw_event_count"), default=1.0), 1.0)
         end_dt = _parse_utc(row.get("end_time_utc"))
         end_ts = int(end_dt.timestamp()) if end_dt is not None else now_ts
         try:
@@ -150,14 +160,13 @@ def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFra
         if price > 0:
             merged_points.append(PricePoint(ts=now_ts, price=price, source="live_token_state"))
         merged_points.sort(key=lambda point: point.ts)
+        quote_window = build_quote_window_features(cfg, merged_points=merged_points, target_ts=now_ts)
         history_features = build_historical_price_features(
             current_price=price,
             now_ts=now_ts,
             end_ts=end_ts,
             merged_points=merged_points,
         )
-        quality = max(0.0, 1.0 - token_state_age_sec / max(float(cfg.online_token_state_max_age_sec), 1.0))
-        quality *= max(1.0, min(raw_event_count, 10.0))
         rows.append(
             {
                 "market_id": str(row.get("market_id") or ""),
@@ -170,20 +179,24 @@ def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFra
                 "scheduled_end": str(row.get("end_time_utc") or ""),
                 "closedTime": str(row.get("end_time_utc") or ""),
                 "delta_hours_bucket": 0.0,
-                "selected_quote_offset_sec": token_state_age_sec,
-                "selected_quote_points_in_window": raw_event_count,
-                "selected_quote_left_gap_sec": 0.0,
-                "selected_quote_right_gap_sec": 0.0,
-                "selected_quote_local_gap_sec": 0.0,
-                "selected_quote_ts": now_ts,
-                "snapshot_target_ts": now_ts,
-                "selected_quote_side": "reference_token",
-                "stale_quote_flag": False,
-                "snapshot_quality_score": round(quality, 6),
+                "selected_quote_offset_sec": quote_window["selected_quote_offset_sec"],
+                "selected_quote_points_in_window": quote_window["selected_quote_points_in_window"],
+                "selected_quote_left_gap_sec": quote_window["selected_quote_left_gap_sec"],
+                "selected_quote_right_gap_sec": quote_window["selected_quote_right_gap_sec"],
+                "selected_quote_local_gap_sec": quote_window["selected_quote_local_gap_sec"],
+                "selected_quote_ts": quote_window["selected_quote_ts"],
+                "snapshot_target_ts": quote_window["snapshot_target_ts"],
+                "selected_quote_side": quote_window["selected_quote_side"],
+                "stale_quote_flag": quote_window["stale_quote_flag"],
+                "snapshot_quality_score": quote_window["snapshot_quality_score"],
                 "domain": str(row.get("domain") or "UNKNOWN"),
                 "category": str(row.get("category") or "UNKNOWN"),
                 "market_type": str(row.get("market_type") or "UNKNOWN"),
-                "source_host": str(row.get("domain") or "UNKNOWN"),
+                "source_host": build_source_host(
+                    source_url=row.get("source_url"),
+                    resolution_source=row.get("resolution_source"),
+                    domain=row.get("domain"),
+                ),
                 "primary_outcome": str(row.get("outcome_0_label") or ""),
                 "secondary_outcome": str(row.get("outcome_1_label") or ""),
                 "market_duration_hours": _market_duration_hours(row.get("start_time_utc"), row.get("end_time_utc")),
@@ -212,11 +225,22 @@ def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFra
 def _ensure_feature_contract(frame: pd.DataFrame, feature_contract: FeatureContract) -> pd.DataFrame:
     out = frame.copy()
     categorical = set(feature_contract.categorical_columns)
+    missing_columns: list[str] = []
     for column in feature_contract.feature_columns:
         if column in out.columns:
             continue
+        missing_columns.append(column)
         out[column] = "UNKNOWN" if column in categorical else 0.0
-    return out
+    if missing_columns:
+        LOGGER.warning(
+            "Missing required feature_contract columns defaulted in live inference: %s",
+            ", ".join(sorted(missing_columns)),
+        )
+    keep_columns: list[str] = []
+    for column in [*_MODEL_INPUT_BRIDGE_COLUMNS, *feature_contract.feature_columns]:
+        if column in out.columns and column not in keep_columns:
+            keep_columns.append(column)
+    return out[keep_columns].copy()
 
 
 def _predict_from_feature_inputs(
@@ -224,13 +248,44 @@ def _predict_from_feature_inputs(
     rule_hits: pd.DataFrame,
     feature_inputs: pd.DataFrame,
 ) -> pd.DataFrame:
-    contract_inputs = _ensure_feature_contract(feature_inputs, runtime.feature_contract)
     predicted = rule_hits.copy()
-    q_pred = runtime.model_payload.predict_q(contract_inputs)
-    trade_value_pred = runtime.model_payload.predict_trade_value(predicted, contract_inputs)
+    q_pred = runtime.model_payload.predict_q(feature_inputs)
+    trade_value_pred = runtime.model_payload.predict_trade_value(predicted, feature_inputs)
     predicted["q_pred"] = q_pred
     predicted["trade_value_pred"] = trade_value_pred
     return predicted
+
+
+def _merge_growth_columns(predicted: pd.DataFrame, viable: pd.DataFrame) -> pd.DataFrame:
+    if predicted.empty:
+        return predicted.copy()
+
+    model_outputs = predicted.copy()
+    growth_columns = [
+        "market_id",
+        "snapshot_time",
+        "rule_group_key",
+        "rule_leaf_id",
+        "edge_prob",
+        "direction_model",
+        "edge_final",
+        "f_star",
+        "f_exec",
+        "g_net",
+        "growth_score",
+    ]
+    if viable.empty:
+        for column in growth_columns[4:]:
+            if column not in model_outputs.columns:
+                model_outputs[column] = None
+        return model_outputs
+
+    available_growth_columns = [column for column in growth_columns if column in viable.columns]
+    return model_outputs.merge(
+        viable[available_growth_columns],
+        on=["market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
+        how="left",
+    )
 
 
 @dataclass(frozen=True)
@@ -285,8 +340,10 @@ def run_live_inference(
         market_feature_cache,
         runtime.rule_runtime.preprocess_features,
     )
+    feature_inputs = _ensure_feature_contract(feature_inputs, runtime.feature_contract)
     predicted = _predict_from_feature_inputs(runtime, rule_hits, feature_inputs)
     viable = runtime.rule_runtime.compute_growth_and_direction(predicted, runtime.rule_runtime.backtest_config)
+    model_outputs = _merge_growth_columns(predicted, viable)
     if not viable.empty:
         viable = (
             viable.sort_values(
@@ -305,7 +362,7 @@ def run_live_inference(
         rule_model=RuleModelResult(
             rule_hits=rule_hits,
             feature_inputs=feature_inputs,
-            model_outputs=predicted,
+            model_outputs=model_outputs,
             viable_candidates=viable,
         ),
     )

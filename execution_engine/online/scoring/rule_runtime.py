@@ -51,6 +51,12 @@ def load_model_payload(cfg: PegConfig):
     cached = _MODEL_PAYLOAD_CACHE.get(cache_key)
     if cached is not None:
         return cached
+    runtime_manifest = cfg.rule_engine_model_path / "runtime_manifest.json"
+    if not cfg.rule_engine_model_path.is_dir() or not runtime_manifest.exists():
+        raise FileNotFoundError(
+            "execution_engine requires a runtime bundle directory at "
+            f"{cfg.rule_engine_model_path} (expected q_model_bundle_deploy with runtime_manifest.json)."
+        )
     _ensure_rule_engine_import_path(cfg)
     from rule_baseline.models import load_model_artifact  # type: ignore
 

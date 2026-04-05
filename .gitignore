@@ -10,6 +10,11 @@ polymarket_rule_engine/data/offline/edge/*
 !polymarket_rule_engine/data/offline/models/
 polymarket_rule_engine/data/offline/models/*
 !polymarket_rule_engine/data/offline/models/ensemble_snapshot_q.pkl
+!polymarket_rule_engine/data/offline/models/q_model_bundle_deploy/
+!polymarket_rule_engine/data/offline/models/q_model_bundle_deploy/**
+!polymarket_rule_engine/data/offline/metadata/
+polymarket_rule_engine/data/offline/metadata/*
+!polymarket_rule_engine/data/offline/metadata/model_training_summary.json
 !polymarket_rule_engine/data/domain/
 polymarket_rule_engine/data/domain/*
 !polymarket_rule_engine/data/domain/market_domain_features.csv
@@ -60,6 +65,7 @@ venv.bak/
 .DS_Store
 Thumbs.db
 fortune_bot.env
+version3.server.env
 
 # Project-local AI workflow files
 AGENTS.md

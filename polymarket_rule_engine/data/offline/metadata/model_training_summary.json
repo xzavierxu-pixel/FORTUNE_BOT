@@ -1,0 +1,163 @@
+{
+  "artifact_mode": "offline",
+  "calibration_mode": "global_isotonic",
+  "target_mode": "q",
+  "feature_count": 132,
+  "rows_by_split": {
+    "train": 152481,
+    "valid": 55104,
+    "test": 26839
+  },
+  "metrics_by_split": {
+    "test": {
+      "rows": 26839,
+      "logloss_price": 0.6785966126483611,
+      "logloss_model": 0.6229016592323596,
+      "brier_price": 0.24287821737024476,
+      "brier_model": 0.21678002592761828,
+      "auc_price": 0.5962043756460129,
+      "auc_model": 0.6977069761384644,
+      "mae_trade_value": 0.8732661629070211,
+      "rmse_trade_value": 1.0059405003200836,
+      "sign_accuracy": 0.6285629121800365
+    },
+    "train": {
+      "rows": 152481,
+      "logloss_price": 0.649479784662504,
+      "logloss_model": 0.44899413287599854,
+      "brier_price": 0.229412954292666,
+      "brier_model": 0.15209018108194503,
+      "auc_price": 0.6736544976903134,
+      "auc_model": 0.8605211423649792,
+      "mae_trade_value": 0.616200141497283,
+      "rmse_trade_value": 0.7829579986941887,
+      "sign_accuracy": 0.7580682183353992
+    },
+    "valid": {
+      "rows": 55104,
+      "logloss_price": 0.6796102645792234,
+      "logloss_model": 0.548373342303572,
+      "brier_price": 0.2432488337325784,
+      "brier_model": 0.1886756388929169,
+      "auc_price": 0.6083892284516836,
+      "auc_model": 0.7773178184078082,
+      "mae_trade_value": 0.8070546653323311,
+      "rmse_trade_value": 0.9608572321546105,
+      "sign_accuracy": 0.6832716318234611
+    },
+    "published": {
+      "rows": 26839,
+      "logloss_price": 0.6785966126483611,
+      "logloss_model": 0.6229016592323596,
+      "brier_price": 0.24287821737024476,
+      "brier_model": 0.21678002592761828,
+      "auc_price": 0.5962043756460129,
+      "auc_model": 0.6977069761384644,
+      "mae_trade_value": 0.8732661629070211,
+      "rmse_trade_value": 1.0059405003200836,
+      "sign_accuracy": 0.6285629121800365
+    }
+  },
+  "boundaries": {
+    "train_start": "2024-10-31T00:00:00+00:00",
+    "train_end": "2026-02-04T11:04:36+00:00",
+    "valid_start": "2026-02-04T11:04:37+00:00",
+    "valid_end": "2026-03-06T11:04:36+00:00",
+    "test_start": "2026-03-06T11:04:37+00:00",
+    "test_end": "2026-04-05T11:04:37+00:00"
+  },
+  "debug_filters": {
+    "max_rows": null,
+    "recent_days": null
+  },
+  "model_artifact": {
+    "backend": "autogluon_q_bundle",
+    "bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_deploy",
+    "deploy_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_deploy",
+    "full_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_full",
+    "predictor_presets": "medium_quality",
+    "predictor_hyperparameters_profile": "gbm_cat",
+    "predictor_time_limit": 300,
+    "random_seed": 21,
+    "num_bag_folds": null,
+    "num_bag_sets": null,
+    "num_stack_levels": null,
+    "auto_stack": null,
+    "refit_full": true,
+    "grouped_calibration_column": "horizon_hours",
+    "grouped_calibration_min_rows": 20,
+    "runtime_manifest": {
+      "artifact_version": 1,
+      "model_family": "autogluon_tabular_q",
+      "target_mode": "q",
+      "label_column": "y",
+      "artifact_mode": "offline",
+      "predictor_path": "predictor",
+      "predictor_name": "WeightedEnsemble_L2_FULL",
+      "refit_full_used": true,
+      "deployment_optimized": false,
+      "bundle_role": "deployment",
+      "full_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_full",
+      "deploy_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_deploy",
+      "split_boundaries": {
+        "train_start": "2024-10-31T00:00:00+00:00",
+        "train_end": "2026-02-04T11:04:36+00:00",
+        "valid_start": "2026-02-04T11:04:37+00:00",
+        "valid_end": "2026-03-06T11:04:36+00:00",
+        "test_start": "2026-03-06T11:04:37+00:00",
+        "test_end": "2026-04-05T11:04:37+00:00"
+      },
+      "calibration_mode": "global_isotonic",
+      "grouped_calibration_column": "horizon_hours",
+      "predictor_presets": "medium_quality",
+      "random_seed": 21,
+      "num_bag_folds": null,
+      "num_bag_sets": null,
+      "num_stack_levels": null,
+      "auto_stack": null,
+      "use_bag_holdout": true,
+      "dynamic_stacking": false,
+      "training_recipe": {
+        "predictor_presets": "medium_quality",
+        "time_limit": 300,
+        "random_seed": 21,
+        "label_column": "y",
+        "predictor_hyperparameters": {
+          "GBM": {},
+          "CAT": {}
+        },
+        "fit_rows": 152481,
+        "calibration_rows": 55104,
+        "calibration_mode": "global_isotonic",
+        "calibration_holdout_policy": "explicit_valid_split",
+        "calibration_overlap_allowed": false
+      },
+      "deployment_validation": {
+        "fit_duration_sec": 309.6658392000245,
+        "clone_for_deployment_ok": true,
+        "clone_for_deployment_duration_sec": 0.6515724000055343,
+        "clone_for_deployment_error": "",
+        "persist_attempted": false,
+        "persist_ok": false,
+        "persist_duration_sec": null,
+        "persist_error": ""
+      },
+      "fit_rows": 152481,
+      "calibration_rows": 55104
+    },
+    "calibrator_meta": {
+      "type": "global",
+      "mode": "global_isotonic",
+      "group_column": "horizon_hours",
+      "min_rows": 20,
+      "fit_rows": 152481,
+      "calibration_rows": 55104,
+      "grouped_fallback_to_global": false,
+      "group_calibrator_count": 0,
+      "method": "isotonic"
+    },
+    "deployment_summary_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_deploy\\metadata\\deployment_summary.json",
+    "full_training_summary_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_full\\metadata\\deployment_summary.json",
+    "training_wall_clock_sec": 583.822474500048
+  }
+}

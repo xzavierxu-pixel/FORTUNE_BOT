@@ -8,7 +8,9 @@ from typing import Any
 import joblib
 
 
-RUNTIME_BUNDLE_DIRNAME = "q_model_bundle"
+RUNTIME_BUNDLE_DIRNAME = "q_model_bundle_deploy"
+FULL_TRAINING_BUNDLE_DIRNAME = "q_model_bundle_full"
+LEGACY_RUNTIME_BUNDLE_DIRNAME = "q_model_bundle"
 RUNTIME_MANIFEST_NAME = "runtime_manifest.json"
 FEATURE_CONTRACT_NAME = "feature_contract.json"
 CALIBRATOR_NAME = "calibrator.pkl"
@@ -69,16 +71,23 @@ def build_runtime_bundle_paths(bundle_dir: Path) -> RuntimeBundlePaths:
 
 
 def is_runtime_bundle(path: Path) -> bool:
-    candidate = path if path.is_dir() else path.parent / RUNTIME_BUNDLE_DIRNAME
-    return candidate.is_dir() and (candidate / RUNTIME_MANIFEST_NAME).exists()
+    if path.is_dir() and (path / RUNTIME_MANIFEST_NAME).exists():
+        return True
+    if path.is_file():
+        for dirname in [RUNTIME_BUNDLE_DIRNAME, LEGACY_RUNTIME_BUNDLE_DIRNAME, FULL_TRAINING_BUNDLE_DIRNAME]:
+            candidate = path.parent / dirname
+            if candidate.is_dir() and (candidate / RUNTIME_MANIFEST_NAME).exists():
+                return True
+    return False
 
 
 def resolve_runtime_bundle_dir(path: Path) -> Path:
     if path.is_dir() and (path / RUNTIME_MANIFEST_NAME).exists():
         return path
-    candidate = path.parent / RUNTIME_BUNDLE_DIRNAME
-    if candidate.is_dir() and (candidate / RUNTIME_MANIFEST_NAME).exists():
-        return candidate
+    for dirname in [RUNTIME_BUNDLE_DIRNAME, LEGACY_RUNTIME_BUNDLE_DIRNAME, FULL_TRAINING_BUNDLE_DIRNAME]:
+        candidate = path.parent / dirname
+        if candidate.is_dir() and (candidate / RUNTIME_MANIFEST_NAME).exists():
+            return candidate
     raise FileNotFoundError(f"Runtime bundle not found for path: {path}")
 
 

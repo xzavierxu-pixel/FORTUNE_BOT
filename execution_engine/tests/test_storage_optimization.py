@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import unittest
 from datetime import date
@@ -18,6 +19,8 @@ from execution_engine.online.scoring.snapshot_builder import build_snapshot_inpu
 from execution_engine.online.streaming.io import RawEventBuffer
 from execution_engine.runtime.config import load_config
 from execution_engine.shared.time import to_iso, utc_now
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class StorageConfigTest(unittest.TestCase):
@@ -96,6 +99,7 @@ class SnapshotBuilderWithoutWsRawTest(unittest.TestCase):
                 rule_engine_min_price=0.2,
                 rule_engine_max_price=0.8,
                 shared_ws_raw_dir=root / "shared" / "ws_raw",
+                rule_engine_dir=REPO_ROOT / "polymarket_rule_engine",
             )
             universe = pd.DataFrame(
                 [
@@ -142,6 +146,104 @@ class SnapshotBuilderWithoutWsRawTest(unittest.TestCase):
             self.assertAlmostEqual(float(result.snapshots.iloc[0]["price"]), 0.5, places=6)
             self.assertEqual(result.raw_inputs[0]["latest_ws_price"]["source_event_type"], "book")
             self.assertEqual(result.processing_counts.get("snapshot_built"), 1)
+
+    def test_build_snapshot_inputs_uses_canonical_quote_window_and_source_host(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            token_state_path = root / "shared" / "token_state" / "current_token_state.csv"
+            token_state_path.parent.mkdir(parents=True, exist_ok=True)
+            now = utc_now()
+            token_state = pd.DataFrame(
+                [
+                    {
+                        "token_id": "token-1",
+                        "latest_event_at_utc": to_iso(now),
+                        "latest_event_timestamp_ms": int(pd.Timestamp(now).timestamp() * 1000),
+                        "latest_event_type": "book",
+                        "best_bid": 0.49,
+                        "best_ask": 0.51,
+                        "mid_price": 0.5,
+                        "last_trade_price": 0.5,
+                        "raw_event_count": 4,
+                        "tick_size": 0.001,
+                        "subscription_source": "universe_reference",
+                    }
+                ]
+            )
+            token_state.to_csv(token_state_path, index=False)
+
+            market_state_cache_path = root / "shared" / "positions" / "market_state.json"
+            market_state_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            market_state_cache_path.write_text(
+                '{"open_market_ids":[],"pending_market_ids":[]}',
+                encoding="utf-8",
+            )
+
+            cfg = SimpleNamespace(
+                run_id="run-1",
+                token_state_current_path=token_state_path,
+                market_state_cache_path=market_state_cache_path,
+                open_positions_path=root / "shared" / "positions" / "open_positions.jsonl",
+                runs_root_dir=root / "runs",
+                online_market_batch_size=20,
+                online_token_state_max_age_sec=3600,
+                rule_engine_min_price=0.2,
+                rule_engine_max_price=0.8,
+                shared_ws_raw_dir=root / "shared" / "ws_raw",
+                rule_engine_dir=REPO_ROOT / "polymarket_rule_engine",
+            )
+            universe = pd.DataFrame(
+                [
+                    {
+                        "market_id": "market-1",
+                        "selected_reference_token_id": "token-1",
+                        "selected_reference_outcome_label": "Yes",
+                        "selected_reference_side_index": 0,
+                        "remaining_hours": 4.0,
+                        "end_time_utc": "2026-04-05T00:00:00Z",
+                        "start_time_utc": "2026-04-04T00:00:00Z",
+                        "category": "SPORTS",
+                        "domain": "example.com",
+                        "market_type": "moneyline",
+                        "source_url": "https://news.example.com/story",
+                        "resolution_source": "https://resolve.example.com/fallback",
+                        "outcome_0_label": "Yes",
+                        "outcome_1_label": "No",
+                        "token_0_id": "token-1",
+                        "token_1_id": "token-2",
+                        "order_price_min_tick_size": 0.001,
+                        "best_bid": 0.48,
+                        "best_ask": 0.52,
+                        "last_trade_price": 0.5,
+                        "liquidity": 1000,
+                        "volume24hr": 500,
+                    }
+                ]
+            )
+
+            class StubHistoryClient:
+                def __init__(self, _cfg: object) -> None:
+                    pass
+
+                def fetch_history(self, token_id: str, *, start_ts: int, end_ts: int, fidelity_minutes: int = 1):
+                    return [
+                        PricePoint(ts=end_ts - 60, price=0.49, source="clob_prices_history"),
+                        PricePoint(ts=end_ts - 3600, price=0.45, source="clob_prices_history"),
+                    ]
+
+            with patch("execution_engine.online.scoring.snapshot_builder.ClobPriceHistoryClient", StubHistoryClient):
+                result = build_snapshot_inputs(cfg, universe, market_limit=None, market_offset=0)
+
+            row = result.snapshots.iloc[0]
+            self.assertEqual(row["source_host"], "news.example.com")
+            self.assertEqual(row["selected_quote_side"], "right")
+            self.assertAlmostEqual(float(row["selected_quote_offset_sec"]), 0.0, places=6)
+            self.assertAlmostEqual(float(row["selected_quote_points_in_window"]), 2.0, places=6)
+            self.assertAlmostEqual(float(row["selected_quote_left_gap_sec"]), 60.0, places=6)
+            self.assertAlmostEqual(float(row["selected_quote_right_gap_sec"]), 0.0, places=6)
+            self.assertAlmostEqual(float(row["selected_quote_local_gap_sec"]), 60.0, places=6)
+            self.assertFalse(bool(row["stale_quote_flag"]))
+            self.assertAlmostEqual(float(row["snapshot_quality_score"]), 1.0 + math.log1p(2.0), places=6)
 
 
 class MinimalArtifactPolicyTest(unittest.TestCase):

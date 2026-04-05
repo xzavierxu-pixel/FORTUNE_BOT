@@ -4,6 +4,7 @@ import argparse
 import os
 import sys
 import time
+from copy import deepcopy
 
 import joblib
 import numpy as np
@@ -17,9 +18,6 @@ from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
 from rule_baseline.models import (
-    DEFAULT_AUTOGUON_PRESETS,
-    AUTOGLOUON_DEFAULT_CALIBRATION_MODE,
-    AUTOGLOUON_DEFAULT_TIME_LIMIT,
     SUPPORTED_AUTOGLOUON_CALIBRATION_MODES,
     fit_autogluon_q_model,
     compute_trade_value_from_q as _compute_trade_value_from_q,
@@ -34,6 +32,11 @@ from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
 TRAIN_PRICE_MIN = 0.2
 TRAIN_PRICE_MAX = 0.8
+DEFAULT_SNAPSHOT_CALIBRATION_MODE = "none"
+DEFAULT_SNAPSHOT_PRESETS = "medium_quality"
+DEFAULT_SNAPSHOT_TIME_LIMIT = 300
+DEFAULT_SNAPSHOT_HYPERPARAMETER_PROFILE = "gbm_cat"
+DEFAULT_SNAPSHOT_REFIT_FULL = True
 
 DROP_COLS = {
     "y",
@@ -169,6 +172,84 @@ DROP_COLS = {
     "activity_x_catcount",
 }
 
+PREDICTOR_HYPERPARAMETER_PROFILES: dict[str, dict[str, object]] = {
+    "default": {
+        "GBM": {},
+        "CAT": {},
+        "XGB": {},
+    },
+    "plan_full": {
+        "GBM": {},
+        "CAT": {},
+        "XGB": {},
+        "LR": {},
+        "EBM": {},
+    },
+    "gbm_only": {
+        "GBM": {},
+    },
+    "cat_only": {
+        "CAT": {},
+    },
+    "gbm_cat": {
+        "GBM": {},
+        "CAT": {},
+    },
+    "gbm_cat_lr": {
+        "GBM": {},
+        "CAT": {},
+        "LR": {},
+    },
+    "gbm_compact": {
+        "GBM": {
+            "num_boost_round": 300,
+            "learning_rate": 0.03,
+            "num_leaves": 31,
+            "min_data_in_leaf": 100,
+            "feature_fraction": 0.8,
+            "bagging_fraction": 0.8,
+            "bagging_freq": 1,
+        },
+    },
+    "gbm_compact_lr": {
+        "GBM": {
+            "num_boost_round": 300,
+            "learning_rate": 0.03,
+            "num_leaves": 31,
+            "min_data_in_leaf": 100,
+            "feature_fraction": 0.8,
+            "bagging_fraction": 0.8,
+            "bagging_freq": 1,
+        },
+        "LR": {},
+    },
+    "gbm_compact_cat_lr": {
+        "GBM": {
+            "num_boost_round": 300,
+            "learning_rate": 0.03,
+            "num_leaves": 31,
+            "min_data_in_leaf": 100,
+            "feature_fraction": 0.8,
+            "bagging_fraction": 0.8,
+            "bagging_freq": 1,
+        },
+        "CAT": {
+            "depth": 6,
+            "learning_rate": 0.03,
+            "iterations": 400,
+            "l2_leaf_reg": 8.0,
+        },
+        "LR": {},
+    },
+}
+
+
+def normalize_predictor_presets(raw_value: str) -> str | list[str]:
+    value = raw_value.strip()
+    if "," not in value:
+        return value
+    return [item.strip() for item in value.split(",") if item.strip()]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the snapshot ensemble model with strict split isolation.")
@@ -176,7 +257,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--calibration-mode",
         choices=sorted(SUPPORTED_AUTOGLOUON_CALIBRATION_MODES),
-        default=AUTOGLOUON_DEFAULT_CALIBRATION_MODE,
+        default=DEFAULT_SNAPSHOT_CALIBRATION_MODE,
         help="Calibration strategy for probability outputs.",
     )
     parser.add_argument(
@@ -189,8 +270,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recent-days", type=int, default=None)
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--history-start", type=str, default=None)
-    parser.add_argument("--predictor-presets", type=str, default=DEFAULT_AUTOGUON_PRESETS)
-    parser.add_argument("--predictor-time-limit", type=int, default=AUTOGLOUON_DEFAULT_TIME_LIMIT)
+    parser.add_argument("--predictor-presets", type=str, default=DEFAULT_SNAPSHOT_PRESETS)
+    parser.add_argument("--predictor-time-limit", type=int, default=DEFAULT_SNAPSHOT_TIME_LIMIT)
+    parser.add_argument(
+        "--predictor-hyperparameters-profile",
+        choices=sorted(PREDICTOR_HYPERPARAMETER_PROFILES),
+        default=DEFAULT_SNAPSHOT_HYPERPARAMETER_PROFILE,
+        help="Named AutoGluon model-family profile to train.",
+    )
     parser.add_argument("--random-seed", type=int, default=21)
     parser.add_argument("--grouped-calibration-column", type=str, default="horizon_hours")
     parser.add_argument("--grouped-calibration-min-rows", type=int, default=20)
@@ -200,7 +287,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--auto-stack", dest="auto_stack", action="store_true")
     parser.add_argument("--no-auto-stack", dest="auto_stack", action="store_false")
     parser.set_defaults(auto_stack=None)
-    parser.add_argument("--refit-full", action="store_true")
+    parser.add_argument("--refit-full", dest="refit_full", action="store_true")
+    parser.add_argument("--no-refit-full", dest="refit_full", action="store_false")
+    parser.set_defaults(refit_full=DEFAULT_SNAPSHOT_REFIT_FULL)
     return parser.parse_args()
 
 
@@ -430,6 +519,7 @@ def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, ar
 
 def main() -> None:
     args = parse_args()
+    predictor_presets = normalize_predictor_presets(args.predictor_presets)
     artifact_paths = build_artifact_paths(args.artifact_mode)
     if args.artifact_mode == "online" and args.target_mode != "q":
         raise ValueError("Online production artifacts support only target_mode='q'.")
@@ -470,6 +560,9 @@ def main() -> None:
         raise RuntimeError("Empty training split.")
 
     if args.target_mode == "q":
+        predictor_hyperparameters = deepcopy(
+            PREDICTOR_HYPERPARAMETER_PROFILES[args.predictor_hyperparameters_profile]
+        )
         training_started = time.perf_counter()
         model_artifact = fit_autogluon_q_model(
             df_train=df_train,
@@ -479,11 +572,13 @@ def main() -> None:
             grouped_calibration_column=args.grouped_calibration_column,
             grouped_calibration_min_rows=args.grouped_calibration_min_rows,
             bundle_dir=artifact_paths.model_bundle_dir,
+            full_bundle_dir=artifact_paths.full_model_bundle_dir,
             artifact_mode=args.artifact_mode,
             split_boundaries=split.to_dict(),
-            predictor_presets=args.predictor_presets,
+            predictor_presets=predictor_presets,
             time_limit=args.predictor_time_limit,
             random_seed=args.random_seed,
+            predictor_hyperparameters=predictor_hyperparameters,
             num_bag_folds=args.num_bag_folds,
             num_bag_sets=args.num_bag_sets,
             num_stack_levels=args.num_stack_levels,
@@ -493,7 +588,8 @@ def main() -> None:
             calibration_holdout_policy="explicit_valid_split",
         )
         training_wall_clock_sec = time.perf_counter() - training_started
-        print(f"[INFO] Saved AutoGluon q bundle to {artifact_paths.model_bundle_dir}")
+        print(f"[INFO] Saved AutoGluon q deployment bundle to {artifact_paths.model_bundle_dir}")
+        print(f"[INFO] Saved AutoGluon q full training bundle to {artifact_paths.full_model_bundle_dir}")
     elif args.target_mode == "residual_q":
         if args.artifact_mode != "offline":
             raise ValueError("Research target_mode='residual_q' is only supported in offline mode.")
@@ -533,7 +629,10 @@ def main() -> None:
         training_summary["model_artifact"] = {
             "backend": "autogluon_q_bundle",
             "bundle_dir": str(artifact_paths.model_bundle_dir),
-            "predictor_presets": args.predictor_presets,
+            "deploy_bundle_dir": str(artifact_paths.model_bundle_dir),
+            "full_bundle_dir": str(artifact_paths.full_model_bundle_dir),
+            "predictor_presets": predictor_presets,
+            "predictor_hyperparameters_profile": args.predictor_hyperparameters_profile,
             "predictor_time_limit": args.predictor_time_limit,
             "random_seed": int(args.random_seed),
             "num_bag_folds": args.num_bag_folds,
@@ -546,6 +645,7 @@ def main() -> None:
             "runtime_manifest": model_artifact.runtime_manifest,
             "calibrator_meta": model_artifact.calibrator_meta,
             "deployment_summary_path": str(artifact_paths.model_bundle_dir / "metadata" / "deployment_summary.json"),
+            "full_training_summary_path": str(artifact_paths.full_model_bundle_dir / "metadata" / "deployment_summary.json"),
             "training_wall_clock_sec": float(training_wall_clock_sec),
         }
     else:
