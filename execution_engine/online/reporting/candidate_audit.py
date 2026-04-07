@@ -52,6 +52,10 @@ class CandidateAuditResult:
     candidate_event_count: int
 
 
+def _artifact_policy(cfg: PegConfig) -> str:
+    return str(getattr(cfg, "artifact_policy", "minimal") or "minimal").strip().lower()
+
+
 def _candidate_event_frame(cfg: PegConfig) -> pd.DataFrame:
     rows = [
         row
@@ -86,12 +90,71 @@ def _reason_counts(frame: pd.DataFrame) -> Dict[str, int]:
     return {str(key): int(value) for key, value in reasons.value_counts().sort_index().items()}
 
 
-def build_candidate_audit(cfg: PegConfig) -> CandidateAuditResult:
+def _funnel_summary_from_payload(funnel_payload: Dict[str, Any]) -> list[Dict[str, Any]]:
+    stage_rows = [
+        ("expanded_market", "stage0_expanded_market_count"),
+        ("structural_reject", "stage1_structural_reject_count"),
+        ("state_reject", "stage1_state_reject_count"),
+        ("direct_candidate", "stage1_direct_candidate_count"),
+        ("live_eligible", "stage2_live_eligible_count"),
+        ("live_price_miss", "stage2_live_price_miss_count"),
+        ("live_spread_too_wide", "stage2_live_spread_too_wide_count"),
+        ("live_state_missing", "stage2_live_state_missing_count"),
+        ("live_state_stale", "stage2_live_state_stale_count"),
+        ("invalid_price", "stage2_invalid_price_count"),
+        ("live_stage_unaccounted", "stage2_unaccounted_count"),
+        ("growth_filtered", "stage3_growth_filtered_count"),
+        ("selected", "stage3_selected_count"),
+        ("live_eligible_not_selected", "stage3_live_eligible_not_selected_count"),
+        ("submit_attempted", "stage4_submit_attempted_count"),
+        ("selected_not_attempted", "stage4_selected_not_attempted_count"),
+        ("submit_success", "stage4_submit_success_count"),
+        ("submit_rejection", "stage4_submit_rejection_count"),
+    ]
+    rows: list[Dict[str, Any]] = []
+    for stage, key in stage_rows:
+        value = int(funnel_payload.get(key, 0) or 0)
+        if value <= 0:
+            continue
+        row = {
+            "stage": stage,
+            "row_count": value,
+            "unique_markets": value,
+            "reason_counts": {},
+        }
+        if stage in {"submit_success", "submit_rejection"}:
+            row["reason_counts"] = {
+                str(reason): int(count)
+                for reason, count in sorted((funnel_payload.get("stage4_submit_status_counts") or {}).items())
+            }
+        rows.append(row)
+    return rows
+
+
+def _load_manifest_funnel_payload(cfg: PegConfig) -> Dict[str, Any] | None:
+    manifest_path = getattr(cfg, "run_submit_window_manifest_path", None)
+    if manifest_path is None:
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (AttributeError, OSError, json.JSONDecodeError):
+        return None
+    funnel_payload = payload.get("funnel")
+    return funnel_payload if isinstance(funnel_payload, dict) else None
+
+
+def build_candidate_audit(
+    cfg: PegConfig,
+    *,
+    funnel_payload: Dict[str, Any] | None = None,
+) -> CandidateAuditResult:
     events = _candidate_event_frame(cfg)
     market_audit_path = cfg.run_audit_market_path
     funnel_summary_path = cfg.run_audit_funnel_summary_path
     market_audit_path.parent.mkdir(parents=True, exist_ok=True)
     funnel_summary_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_funnel_payload = funnel_payload or _load_manifest_funnel_payload(cfg) or {}
+    use_manifest_funnel = _artifact_policy(cfg) == "minimal" and bool(resolved_funnel_payload)
 
     if events.empty:
         pd.DataFrame(
@@ -117,9 +180,10 @@ def build_candidate_audit(cfg: PegConfig) -> CandidateAuditResult:
                     "generated_at_bj": bj_now_iso(),
                     "run_id": cfg.run_id,
                     "run_mode": cfg.run_mode,
+                    "funnel_source": "submit_window_manifest" if use_manifest_funnel else "candidate_events",
                     "candidate_event_count": 0,
                     "market_count": 0,
-                    "market_funnel": [],
+                    "market_funnel": _funnel_summary_from_payload(resolved_funnel_payload) if use_manifest_funnel else [],
                     "final_state_counts": {},
                     "final_reason_counts": {},
                 },
@@ -194,6 +258,7 @@ def build_candidate_audit(cfg: PegConfig) -> CandidateAuditResult:
     final_reason_counts = _reason_counts(
         market_audit.rename(columns={"terminal_reason": "reason"})[["reason"]]
     )
+    market_funnel = _funnel_summary_from_payload(resolved_funnel_payload) if use_manifest_funnel else market_funnel
     funnel_summary_path.write_text(
         json.dumps(
             {
@@ -201,6 +266,7 @@ def build_candidate_audit(cfg: PegConfig) -> CandidateAuditResult:
                 "generated_at_bj": bj_now_iso(),
                 "run_id": cfg.run_id,
                 "run_mode": cfg.run_mode,
+                "funnel_source": "submit_window_manifest" if use_manifest_funnel else "candidate_events",
                 "candidate_event_count": int(len(events)),
                 "market_count": int(len(market_audit)),
                 "market_audit_path": str(market_audit_path),

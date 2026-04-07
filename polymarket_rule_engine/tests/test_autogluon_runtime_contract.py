@@ -3,12 +3,14 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import pandas as pd
 
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.datasets.artifacts import build_artifact_paths
+from rule_baseline.features.annotation_normalization import build_normalization_manifest
 from rule_baseline.models.autogluon_qmodel import fit_autogluon_q_model
 from rule_baseline.training.train_rules_naive_output_rule import evaluate_rule_candidate
 
@@ -107,7 +109,7 @@ class AutoGluonMetadataContractTest(unittest.TestCase):
                 return [0.2] * len(data)
 
         with TemporaryDirectory() as tmpdir:
-            with unittest.mock.patch(
+            with patch(
                 "rule_baseline.models.autogluon_qmodel._load_tabular_predictor_class",
                 return_value=FakePredictor,
             ):
@@ -115,6 +117,12 @@ class AutoGluonMetadataContractTest(unittest.TestCase):
                     df_train=df_train,
                     df_valid=df_valid,
                     feature_columns=["price", "domain", "horizon_hours"],
+                    required_critical_columns=["price"],
+                    required_noncritical_columns=["domain", "horizon_hours"],
+                    feature_semantics_version="decision_time_v1",
+                    normalization_manifest=build_normalization_manifest(
+                        pd.DataFrame([{"market_id": "m1", "domain": "a"}])
+                    ),
                     bundle_dir=Path(tmpdir) / "bundle",
                     artifact_mode="offline",
                     split_boundaries={},
@@ -136,6 +144,9 @@ class AutoGluonMetadataContractTest(unittest.TestCase):
         )
         self.assertEqual(result.deploy_bundle_dir.name, "bundle")
         self.assertEqual(result.full_bundle_dir.name, "q_model_bundle_full")
+        self.assertEqual(result.runtime_manifest["feature_semantics_version"], "decision_time_v1")
+        self.assertEqual(result.runtime_manifest["normalization_manifest"]["manifest_version"], 1)
+        self.assertEqual(result.feature_contract.required_critical_columns, ("price",))
 
 
 if __name__ == "__main__":

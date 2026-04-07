@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from rule_baseline.features.annotation_normalization import CACHE_CATEGORY_SOURCE, SNAPSHOT_CATEGORY_SOURCE
 from rule_baseline.features.market_feature_builders import build_market_feature_frame
 
 DEFAULT_FEATURE_VARIANT = "interaction_features"
@@ -134,6 +135,12 @@ def preprocess_features(
         raise ValueError("Input feature frame must include market_id.")
 
     out["market_id"] = out["market_id"].astype(str)
+    existing_category_source = (
+        out.get("category_source", pd.Series(SNAPSHOT_CATEGORY_SOURCE, index=out.index))
+        .astype("string")
+        .fillna(SNAPSHOT_CATEGORY_SOURCE)
+        .replace("", SNAPSHOT_CATEGORY_SOURCE)
+    )
     if "category" in out.columns:
         out = out.rename(columns={"category": "snapshot_category"})
 
@@ -143,11 +150,24 @@ def preprocess_features(
         out = out.merge(feature_cache, on="market_id", how="left", suffixes=("", "_market"))
 
     if "snapshot_category" in out.columns:
+        snapshot_category = out["snapshot_category"]
+        snapshot_available = snapshot_category.astype("string").fillna("").str.strip() != ""
         if "category" in out.columns:
-            out["category"] = out["category"].fillna(out["snapshot_category"])
+            cache_category = out["category"]
+            cache_available = (
+                cache_category.astype("string").fillna("").str.strip().replace("UNKNOWN", "") != ""
+            )
+            out["category"] = cache_category.where(cache_available, snapshot_category)
+            out["category_source"] = existing_category_source.where(~cache_available, CACHE_CATEGORY_SOURCE)
         else:
-            out["category"] = out["snapshot_category"]
+            out["category"] = snapshot_category
+            out["category_source"] = existing_category_source.where(snapshot_available, SNAPSHOT_CATEGORY_SOURCE)
         out = out.drop(columns=["snapshot_category"])
+    elif "category" in out.columns:
+        cache_available = out["category"].astype("string").fillna("").str.strip().replace("UNKNOWN", "") != ""
+        out["category_source"] = existing_category_source.where(~cache_available, CACHE_CATEGORY_SOURCE)
+    else:
+        out["category_source"] = existing_category_source
 
     if "price" in out.columns:
         out["price"] = pd.to_numeric(out["price"], errors="coerce").fillna(0.0)
@@ -245,6 +265,12 @@ def preprocess_features(
 
     if "category_override_flag" in out.columns:
         out["category_override_flag"] = out["category_override_flag"].fillna(False).astype(bool)
+    out["category_source"] = (
+        out.get("category_source", pd.Series(SNAPSHOT_CATEGORY_SOURCE, index=out.index))
+        .astype("string")
+        .fillna(SNAPSHOT_CATEGORY_SOURCE)
+        .replace("", SNAPSHOT_CATEGORY_SOURCE)
+    )
 
     if "y" in out.columns:
         out["y"] = pd.to_numeric(out["y"], errors="coerce").fillna(0).astype(int)

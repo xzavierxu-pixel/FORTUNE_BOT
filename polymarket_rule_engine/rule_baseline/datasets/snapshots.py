@@ -7,6 +7,13 @@ import pandas as pd
 
 from rule_baseline.datasets.splits import TemporalSplit, assign_dataset_split, compute_artifact_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
+from rule_baseline.features.annotation_normalization import (
+    SNAPSHOT_CATEGORY_SOURCE,
+    build_normalization_manifest,
+    merge_market_annotation_projection,
+    normalize_market_annotations,
+)
+from rule_baseline.features.snapshot_semantics import FEATURE_SEMANTICS_VERSION, build_decision_time_snapshot_row
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 
@@ -100,45 +107,21 @@ def _series_or_default(df: pd.DataFrame, column: str, default_value) -> pd.Serie
 
 def _apply_market_annotations(snapshots: pd.DataFrame, market_annotations: pd.DataFrame) -> pd.DataFrame:
     out = snapshots.copy()
+    out["category_source"] = (
+        out.get("category_source", pd.Series(SNAPSHOT_CATEGORY_SOURCE, index=out.index))
+        .astype("string")
+        .fillna(SNAPSHOT_CATEGORY_SOURCE)
+        .replace("", SNAPSHOT_CATEGORY_SOURCE)
+        .astype(str)
+    )
     if market_annotations.empty:
         for column in ["domain", "category", "market_type"]:
             if column not in out.columns:
                 out[column] = "UNKNOWN"
+            out[column] = out[column].fillna("UNKNOWN").astype(str)
         return out
 
-    annotation_columns = [
-        "market_id",
-        "domain",
-        "domain_parsed",
-        "sub_domain",
-        "source_url",
-        "category",
-        "category_raw",
-        "category_parsed",
-        "category_override_flag",
-        "market_type",
-        "outcome_pattern",
-    ]
-    available_columns = [column for column in annotation_columns if column in market_annotations.columns]
-    out = out.merge(
-        market_annotations[available_columns],
-        on="market_id",
-        how="left",
-        suffixes=("", "_annotation"),
-    )
-
-    for column in ["domain", "category", "market_type", "sub_domain", "source_url", "source_host", "outcome_pattern"]:
-        annotation_column = f"{column}_annotation"
-        if annotation_column in out.columns:
-            if column in out.columns:
-                out[column] = out[annotation_column].fillna(out[column])
-            else:
-                out[column] = out[annotation_column]
-            out = out.drop(columns=[annotation_column])
-
-    for column in ["domain", "category", "market_type"]:
-        out[column] = out.get(column, "UNKNOWN").fillna("UNKNOWN").astype(str)
-    return out
+    return merge_market_annotation_projection(out, market_annotations)
 
 
 def _apply_raw_market_context(snapshots: pd.DataFrame, raw_markets: pd.DataFrame) -> pd.DataFrame:
@@ -216,8 +199,11 @@ def add_term_structure_features(df: pd.DataFrame) -> pd.DataFrame:
     if {"p_1h", "p_2h", "p_12h", "p_24h"}.issubset(out.columns):
         short_leg = out["p_1h"] - out["p_2h"]
         long_leg = out["p_12h"] - out["p_24h"]
-        out["price_reversal_flag"] = (short_leg * long_leg < 0).astype(float)
-        out["price_acceleration"] = short_leg - long_leg
+        complete_path = short_leg.notna() & long_leg.notna()
+        out["price_reversal_flag"] = 0.0
+        out.loc[complete_path, "price_reversal_flag"] = (short_leg[complete_path] * long_leg[complete_path] < 0).astype(float)
+        out["price_acceleration"] = 0.0
+        out.loc[complete_path, "price_acceleration"] = short_leg[complete_path] - long_leg[complete_path]
     else:
         out["price_reversal_flag"] = 0.0
         out["price_acceleration"] = 0.0
@@ -333,6 +319,85 @@ def build_snapshot_base(
     return add_term_structure_features(out)
 
 
+def project_online_contract_snapshot_rows(
+    snapshots: pd.DataFrame,
+    *,
+    min_price: float = DEFAULT_PRICE_MIN,
+    max_price: float = DEFAULT_PRICE_MAX,
+) -> pd.DataFrame:
+    if snapshots.empty:
+        return snapshots.copy()
+
+    projected_rows: list[dict] = []
+    for row in snapshots.to_dict(orient="records"):
+        closed_time = pd.to_datetime(row.get("closedTime"), utc=True, errors="coerce")
+        if pd.isna(closed_time):
+            continue
+        horizon_hours = float(pd.to_numeric(pd.Series([row.get("horizon_hours")]), errors="coerce").fillna(0.0).iloc[0])
+        snapshot_time = closed_time - pd.to_timedelta(horizon_hours, unit="h")
+        scheduled_end = str(row.get("scheduled_end") or row.get("closedTime") or "")
+        start_time = pd.to_datetime(row.get("startDate"), utc=True, errors="coerce")
+        market_duration_hours = None
+        if not pd.isna(start_time):
+            market_duration_hours = (closed_time - start_time).total_seconds() / 3600.0
+        adapted_row = dict(row)
+        adapted_row["outcome_0_label"] = str(row.get("primary_outcome") or row.get("outcome_0_label") or "")
+        adapted_row["outcome_1_label"] = str(row.get("secondary_outcome") or row.get("outcome_1_label") or "")
+        adapted_row["token_0_id"] = str(row.get("primary_token_id") or row.get("token_0_id") or "")
+        adapted_row["token_1_id"] = str(row.get("secondary_token_id") or row.get("token_1_id") or "")
+        adapted_row["selected_reference_token_id"] = str(
+            row.get("selected_reference_token_id") or row.get("primary_token_id") or row.get("token_0_id") or ""
+        )
+        adapted_row["selected_reference_outcome_label"] = str(
+            row.get("selected_reference_outcome_label") or row.get("primary_outcome") or row.get("outcome_0_label") or ""
+        )
+        adapted_row["selected_reference_side_index"] = row.get("selected_reference_side_index", 0)
+
+        projected_rows.append(
+            build_decision_time_snapshot_row(
+                adapted_row,
+                snapshot_time=snapshot_time,
+                price=float(pd.to_numeric(pd.Series([row.get("price")]), errors="coerce").fillna(0.0).iloc[0]),
+                horizon_hours=horizon_hours,
+                scheduled_end=scheduled_end,
+                quote_window={
+                    "selected_quote_offset_sec": row.get("selected_quote_offset_sec"),
+                    "selected_quote_points_in_window": row.get("selected_quote_points_in_window"),
+                    "selected_quote_left_gap_sec": row.get("selected_quote_left_gap_sec"),
+                    "selected_quote_right_gap_sec": row.get("selected_quote_right_gap_sec"),
+                    "selected_quote_local_gap_sec": row.get("selected_quote_local_gap_sec"),
+                    "selected_quote_ts": row.get("selected_quote_ts"),
+                    "snapshot_target_ts": row.get("snapshot_target_ts"),
+                    "selected_quote_side": row.get("selected_quote_side"),
+                    "stale_quote_flag": row.get("stale_quote_flag"),
+                    "snapshot_quality_score": row.get("snapshot_quality_score"),
+                },
+                history_features={},
+                source_host=str(row.get("source_host") or "UNKNOWN"),
+                market_duration_hours=market_duration_hours,
+                in_price_range=min_price <= float(pd.to_numeric(pd.Series([row.get("price")]), errors="coerce").fillna(0.0).iloc[0]) <= max_price,
+                selected_quote_ts_fallback=int(pd.to_numeric(pd.Series([row.get("selected_quote_ts")]), errors="coerce").fillna(0).iloc[0]) or None,
+                extra_fields={
+                    "y": row.get("y"),
+                    "r_std": row.get("r_std"),
+                    "delta_hours": row.get("delta_hours"),
+                    "winning_outcome_index": row.get("winning_outcome_index"),
+                    "winning_outcome_label": row.get("winning_outcome_label"),
+                    "category_source": row.get("category_source") or SNAPSHOT_CATEGORY_SOURCE,
+                },
+            )
+        )
+
+    projected = pd.DataFrame(projected_rows)
+    if projected.empty:
+        return projected
+
+    for column in snapshots.columns:
+        if column not in projected.columns:
+            projected[column] = snapshots[column].values
+    return projected
+
+
 def load_research_snapshots(
     min_price: float = DEFAULT_PRICE_MIN,
     max_price: float = DEFAULT_PRICE_MAX,
@@ -341,7 +406,11 @@ def load_research_snapshots(
 ) -> pd.DataFrame:
     snapshots = load_snapshots(config.SNAPSHOTS_PATH)
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_annotations = normalize_market_annotations(
+        market_annotations_raw,
+        vocabulary_manifest=build_normalization_manifest(market_annotations_raw),
+    )
 
     if max_rows is not None:
         snapshots = snapshots.sort_values("closedTime").tail(max_rows).copy()
@@ -357,6 +426,45 @@ def load_research_snapshots(
         min_price=min_price,
         max_price=max_price,
     )
+
+
+def load_online_parity_snapshots(
+    min_price: float = DEFAULT_PRICE_MIN,
+    max_price: float = DEFAULT_PRICE_MAX,
+    max_rows: int | None = None,
+    recent_days: int | None = None,
+) -> pd.DataFrame:
+    snapshots = load_snapshots(config.SNAPSHOTS_PATH)
+    raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
+    market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    normalization_manifest = build_normalization_manifest(market_annotations_raw)
+    market_annotations = normalize_market_annotations(
+        market_annotations_raw,
+        vocabulary_manifest=normalization_manifest,
+    )
+
+    if max_rows is not None:
+        snapshots = snapshots.sort_values("closedTime").tail(max_rows).copy()
+
+    if recent_days is not None and recent_days > 0:
+        cutoff = snapshots["closedTime"].max() - pd.Timedelta(days=recent_days)
+        snapshots = snapshots[snapshots["closedTime"] >= cutoff].copy()
+
+    parity_projection = project_online_contract_snapshot_rows(
+        snapshots,
+        min_price=min_price,
+        max_price=max_price,
+    )
+    out = build_snapshot_base(
+        snapshots=parity_projection,
+        raw_markets=raw_markets,
+        market_annotations=market_annotations,
+        min_price=min_price,
+        max_price=max_price,
+    )
+    out.attrs["feature_semantics_version"] = FEATURE_SEMANTICS_VERSION
+    out.attrs["normalization_manifest"] = normalization_manifest
+    return out
 
 
 def build_rule_bins(
@@ -421,7 +529,11 @@ def prepare_rule_training_frame(
 ) -> tuple[pd.DataFrame, TemporalSplit, dict]:
     snapshots_raw = load_snapshots(config.SNAPSHOTS_PATH)
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_annotations = normalize_market_annotations(
+        market_annotations_raw,
+        vocabulary_manifest=build_normalization_manifest(market_annotations_raw),
+    )
     raw_quarantine = pd.DataFrame()
     if config.RAW_MARKET_QUARANTINE_PATH.exists():
         raw_quarantine = pd.read_csv(config.RAW_MARKET_QUARANTINE_PATH, low_memory=False)

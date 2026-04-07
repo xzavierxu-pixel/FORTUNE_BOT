@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 import json
+import sys
 
 import pandas as pd
 
@@ -14,6 +15,7 @@ from execution_engine.runtime.config import PegConfig
 from execution_engine.online.execution.positions import load_open_market_ids, load_pending_market_ids
 from execution_engine.online.scoring.price_history import (
     ClobPriceHistoryClient,
+    build_offline_aligned_history_window,
     build_quote_window_features,
     build_source_host,
     build_latest_live_prices_from_token_state,
@@ -111,6 +113,18 @@ def _batch_id(index: int, batch_size: int) -> str:
     return f"batch_{(index // max(batch_size, 1)) + 1:03d}"
 
 
+def _load_snapshot_semantics(cfg: PegConfig):
+    rule_engine_dir = str(cfg.rule_engine_dir)
+    if rule_engine_dir not in sys.path:
+        sys.path.insert(0, rule_engine_dir)
+    from rule_baseline.features.snapshot_semantics import (  # type: ignore
+        build_decision_time_snapshot_row,
+        build_market_context_projection,
+    )
+
+    return build_decision_time_snapshot_row, build_market_context_projection
+
+
 def refresh_live_universe_view(
     universe: pd.DataFrame,
     *,
@@ -142,9 +156,11 @@ def refresh_live_universe_view(
 
 
 def build_online_market_context(
+    cfg: PegConfig,
     active_markets: pd.DataFrame,
     token_state_by_token: Dict[str, Dict[str, Any]],
 ) -> pd.DataFrame:
+    _, build_market_context_projection = _load_snapshot_semantics(cfg)
     rows: List[Dict[str, Any]] = []
     for row in active_markets.to_dict(orient="records"):
         token_id = str(row.get("selected_reference_token_id") or "")
@@ -153,38 +169,15 @@ def build_online_market_context(
         best_ask = _to_float(token_state.get("best_ask"), default=_to_float(row.get("best_ask")))
         spread = max(best_ask - best_bid, 0.0) if best_bid > 0 and best_ask > 0 else 0.0
         last_trade = _to_float(token_state.get("last_trade_price"), default=_to_float(row.get("last_trade_price")))
-        rows.append(
+        projected = build_market_context_projection(row)
+        projected.update(
             {
                 "id": str(row.get("market_id") or ""),
-                "market_id": str(row.get("market_id") or ""),
-                "question": str(row.get("question") or ""),
-                "description": str(row.get("description") or ""),
-                "volume": _to_float(row.get("volume")),
-                "liquidity": _to_float(row.get("liquidity")),
-                "volume24hr": _to_float(row.get("volume24hr")),
-                "volume1wk": _to_float(row.get("volume1wk")),
-                "volume24hrClob": _to_float(row.get("volume24hr_clob")),
-                "volume1wkClob": _to_float(row.get("volume1wk_clob")),
-                "orderPriceMinTickSize": _to_float(row.get("order_price_min_tick_size"), default=0.001),
-                "negRisk": bool(str(row.get("neg_risk") or "").strip().lower() in {"1", "true", "yes", "y", "on"}),
-                "rewardsMinSize": _to_float(row.get("rewards_min_size")),
-                "rewardsMaxSpread": _to_float(row.get("rewards_max_spread")),
                 "bestBid": best_bid,
                 "bestAsk": best_ask,
                 "spread": _to_float(row.get("spread"), default=spread),
                 "lastTradePrice": last_trade,
-                "line": _to_float(row.get("line")),
-                "oneHourPriceChange": _to_float(row.get("one_hour_price_change")),
-                "oneDayPriceChange": _to_float(row.get("one_day_price_change")),
-                "oneWeekPriceChange": _to_float(row.get("one_week_price_change")),
-                "liquidityAmm": _to_float(row.get("liquidity_amm")),
-                "liquidityClob": _to_float(row.get("liquidity_clob")),
-                "groupItemTitle": str(row.get("group_item_title") or "UNKNOWN"),
-                "gameId": str(row.get("game_id") or "UNKNOWN"),
-                "marketMakerAddress": str(row.get("market_maker_address") or "UNKNOWN"),
-                "startDate": str(row.get("start_time_utc") or row.get("created_at_utc") or ""),
-                "endDate": str(row.get("end_time_utc") or ""),
-                "closedTime": str(row.get("end_time_utc") or ""),
+                "negRisk": bool(str(row.get("neg_risk") or "").strip().lower() in {"1", "true", "yes", "y", "on"}),
                 "resolutionSource": str(row.get("resolution_source") or ""),
                 "outcomes": json.dumps(
                     [
@@ -205,6 +198,7 @@ def build_online_market_context(
                 "market_type": str(row.get("market_type") or "UNKNOWN"),
             }
         )
+        rows.append(projected)
     return pd.DataFrame(rows)
 
 
@@ -224,6 +218,7 @@ def build_snapshot_inputs(
     market_limit: int | None,
     market_offset: int,
 ) -> SnapshotInputBuildResult:
+    build_decision_time_snapshot_row, _ = _load_snapshot_semantics(cfg)
     now = _utc_now()
     now_ts = int(pd.Timestamp(now).timestamp())
     token_state = load_market_frame(cfg.token_state_current_path)
@@ -324,24 +319,25 @@ def build_snapshot_inputs(
         latest_event_ts_ms = _to_int((token_state_row or {}).get("latest_event_timestamp_ms"))
         selected_quote_ts = int(latest_event_ts_ms / 1000) if latest_event_ts_ms else now_ts
         raw_event_count = _to_float((token_state_row or {}).get("raw_event_count"), default=1.0)
+        end_dt = _parse_utc(row.get("end_time_utc"))
+        end_ts = int(end_dt.timestamp()) if end_dt is not None else now_ts
+        history_start_ts, history_end_ts = build_offline_aligned_history_window(end_ts=end_ts)
         try:
             history_points = history_client.fetch_history(
                 token_id,
-                start_ts=now_ts - 24 * 3600,
-                end_ts=now_ts,
+                start_ts=history_start_ts,
+                end_ts=history_end_ts,
                 fidelity_minutes=1,
             )
         except Exception:
             history_points = []
         merged_history = merge_price_points(history_points, latest_ws_price, now_ts=now_ts)
         quote_window = build_quote_window_features(cfg, merged_points=merged_history, target_ts=now_ts)
-        end_dt = _parse_utc(row.get("end_time_utc"))
-        end_ts = int(end_dt.timestamp()) if end_dt is not None else now_ts
         history_features = build_historical_price_features(
             current_price=price,
             now_ts=now_ts,
             end_ts=end_ts,
-            merged_points=merged_history,
+            merged_points=history_points,
         )
         if history_features.get("p_1h") is None:
             counts["missing_history_1h"] = counts.get("missing_history_1h", 0) + 1
@@ -350,81 +346,40 @@ def build_snapshot_inputs(
         market_duration_hours = _market_duration_hours(row.get("start_time_utc"), row.get("end_time_utc"))
 
         snapshot_rows.append(
-            {
-                "run_id": cfg.run_id,
-                "batch_id": batch_id,
-                "market_id": market_id,
-                "price": price,
-                "horizon_hours": _to_float(row.get("remaining_hours")),
-                "snapshot_time": pd.Timestamp(now),
-                "snapshot_date": pd.Timestamp(now).date(),
-                "scheduled_end": str(row.get("end_time_utc") or ""),
-                "closedTime": str(row.get("end_time_utc") or ""),
-                "delta_hours": 0.0,
-                "delta_hours_bucket": 0.0,
-                "selected_quote_offset_sec": quote_window["selected_quote_offset_sec"],
-                "selected_quote_points_in_window": quote_window["selected_quote_points_in_window"],
-                "selected_quote_left_gap_sec": quote_window["selected_quote_left_gap_sec"],
-                "selected_quote_right_gap_sec": quote_window["selected_quote_right_gap_sec"],
-                "selected_quote_local_gap_sec": quote_window["selected_quote_local_gap_sec"],
-                "selected_quote_ts": quote_window["selected_quote_ts"] or selected_quote_ts,
-                "snapshot_target_ts": quote_window["snapshot_target_ts"],
-                "selected_quote_side": quote_window["selected_quote_side"],
-                "stale_quote_flag": quote_window["stale_quote_flag"],
-                "snapshot_quality_score": quote_window["snapshot_quality_score"],
-                "price_in_range_flag": bool(cfg.rule_engine_min_price < price < cfg.rule_engine_max_price),
-                "quality_pass": bool(cfg.rule_engine_min_price < price < cfg.rule_engine_max_price),
-                "category": str(row.get("category") or "UNKNOWN"),
-                "domain": str(row.get("domain") or "UNKNOWN"),
-                "market_type": str(row.get("market_type") or "UNKNOWN"),
-                "source_host": build_source_host(
+            build_decision_time_snapshot_row(
+                row,
+                snapshot_time=pd.Timestamp(now),
+                price=price,
+                horizon_hours=_to_float(row.get("remaining_hours")),
+                scheduled_end=str(row.get("end_time_utc") or ""),
+                quote_window=quote_window,
+                history_features=history_features,
+                source_host=build_source_host(
                     source_url=row.get("source_url"),
                     resolution_source=row.get("resolution_source"),
                     domain=row.get("domain"),
                 ),
-                "primary_outcome": str(row.get("outcome_0_label") or ""),
-                "secondary_outcome": str(row.get("outcome_1_label") or ""),
-                "market_duration_hours": market_duration_hours,
-                "duration_is_negative_flag": bool((market_duration_hours or 0.0) < 0.0) if market_duration_hours is not None else False,
-                "duration_below_min_horizon_flag": bool((market_duration_hours or 0.0) < 1.0) if market_duration_hours is not None else False,
-                "delta_hours_exceeded_flag": False,
-                "p_1h": history_features.get("p_1h"),
-                "p_2h": history_features.get("p_2h"),
-                "p_4h": history_features.get("p_4h"),
-                "p_6h": history_features.get("p_6h"),
-                "p_12h": history_features.get("p_12h"),
-                "p_24h": history_features.get("p_24h"),
-                "delta_p_1_2": history_features.get("delta_p_1_2"),
-                "delta_p_2_4": history_features.get("delta_p_2_4"),
-                "delta_p_4_12": history_features.get("delta_p_4_12"),
-                "delta_p_12_24": history_features.get("delta_p_12_24"),
-                "term_structure_slope": history_features.get("term_structure_slope"),
-                "path_price_mean": history_features.get("path_price_mean"),
-                "path_price_std": history_features.get("path_price_std"),
-                "path_price_min": history_features.get("path_price_min"),
-                "path_price_max": history_features.get("path_price_max"),
-                "path_price_range": history_features.get("path_price_range"),
-                "price_reversal_flag": history_features.get("price_reversal_flag"),
-                "price_acceleration": history_features.get("price_acceleration"),
-                "closing_drift": history_features.get("closing_drift"),
-                "outcome_0_label": str(row.get("outcome_0_label") or ""),
-                "outcome_1_label": str(row.get("outcome_1_label") or ""),
-                "token_0_id": str(row.get("token_0_id") or ""),
-                "token_1_id": str(row.get("token_1_id") or ""),
-                "selected_reference_token_id": token_id,
-                "selected_reference_outcome_label": str(row.get("selected_reference_outcome_label") or ""),
-                "selected_reference_side_index": _to_int(row.get("selected_reference_side_index"), default=0),
-                "best_bid": _to_float((token_state_row or {}).get("best_bid"), default=_to_float(row.get("best_bid"))),
-                "best_ask": _to_float((token_state_row or {}).get("best_ask"), default=_to_float(row.get("best_ask"))),
-                "mid_price": _to_float((token_state_row or {}).get("mid_price"), default=price),
-                "last_trade_price": _to_float((token_state_row or {}).get("last_trade_price"), default=_to_float(row.get("last_trade_price"))),
-                "tick_size": tick_size,
-                "liquidity": _to_float(row.get("liquidity")),
-                "volume24hr": _to_float(row.get("volume24hr")),
-                "token_state_age_sec": float(age_sec or 0.0),
-                "e_sample": None,
-                "r_std": None,
-            }
+                market_duration_hours=market_duration_hours,
+                in_price_range=bool(cfg.rule_engine_min_price < price < cfg.rule_engine_max_price),
+                selected_quote_ts_fallback=selected_quote_ts,
+                extra_fields={
+                    "run_id": cfg.run_id,
+                    "batch_id": batch_id,
+                    "selected_reference_token_id": token_id,
+                    "selected_reference_outcome_label": str(row.get("selected_reference_outcome_label") or ""),
+                    "selected_reference_side_index": _to_int(row.get("selected_reference_side_index"), default=0),
+                    "best_bid": _to_float((token_state_row or {}).get("best_bid"), default=_to_float(row.get("best_bid"))),
+                    "best_ask": _to_float((token_state_row or {}).get("best_ask"), default=_to_float(row.get("best_ask"))),
+                    "mid_price": _to_float((token_state_row or {}).get("mid_price"), default=price),
+                    "last_trade_price": _to_float((token_state_row or {}).get("last_trade_price"), default=_to_float(row.get("last_trade_price"))),
+                    "tick_size": tick_size,
+                    "liquidity": _to_float(row.get("liquidity")),
+                    "volume24hr": _to_float(row.get("volume24hr")),
+                    "token_state_age_sec": float(age_sec or 0.0),
+                    "e_sample": None,
+                    "r_std": None,
+                },
+            )
         )
         active_rows.append(row)
         raw_input_rows.append(

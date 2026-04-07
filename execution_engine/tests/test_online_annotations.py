@@ -1,14 +1,19 @@
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+import os
+import sys
 
 import pandas as pd
+
+sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from execution_engine.online.scoring.annotations import (
     _build_annotation_input_frame,
     _normalize_domains_against_offline_reference,
     apply_online_market_annotations,
 )
+from rule_baseline.features.annotation_normalization import build_normalization_manifest
 
 
 class OnlineAnnotationsTest(unittest.TestCase):
@@ -55,11 +60,11 @@ class OnlineAnnotationsTest(unittest.TestCase):
             ]
         )
         offline_annotations = pd.DataFrame([{"market_id": "m0", "domain": "example.com"}])
+        normalization_manifest = build_normalization_manifest(offline_annotations)
 
         normalized = _normalize_domains_against_offline_reference(
             annotations,
-            offline_annotations=offline_annotations,
-            rule_config=SimpleNamespace(),
+            normalization_manifest=normalization_manifest,
         )
 
         self.assertEqual(normalized.iloc[0]["domain"], "example.com")
@@ -116,6 +121,7 @@ class OnlineAnnotationsTest(unittest.TestCase):
         self.assertEqual(row["category_parsed"], "FINANCE")
         self.assertTrue(bool(row["category_override_flag"]))
         self.assertEqual(row["market_type"], "moneyline")
+        self.assertEqual(row["category_source"], "annotation")
 
 
 if __name__ == "__main__":

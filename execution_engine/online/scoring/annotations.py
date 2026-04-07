@@ -48,6 +48,31 @@ def _normalize_game_id(value: Any) -> str:
     return text
 
 
+def _load_normalization_manifest(cfg: PegConfig, offline_annotations: pd.DataFrame) -> dict[str, Any]:
+    _ensure_rule_engine_import_path(cfg)
+    from rule_baseline.features.annotation_normalization import build_normalization_manifest  # type: ignore
+
+    normalization_manifest_path = Path(cfg.rule_engine_model_path) / "normalization_manifest.json"
+    if normalization_manifest_path.exists():
+        try:
+            payload = json.loads(normalization_manifest_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    manifest_path = Path(cfg.rule_engine_model_path) / "runtime_manifest.json"
+    if manifest_path.exists():
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = payload.get("normalization_manifest")
+            if isinstance(manifest, dict):
+                return manifest
+        except (OSError, json.JSONDecodeError):
+            pass
+    return build_normalization_manifest(offline_annotations)
+
+
 def _build_annotation_input_frame(markets: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for row in markets.to_dict(orient="records"):
@@ -70,34 +95,20 @@ def _build_annotation_input_frame(markets: pd.DataFrame) -> pd.DataFrame:
 
 def _normalize_domains_against_offline_reference(
     annotations: pd.DataFrame,
-    offline_annotations: pd.DataFrame,
-    rule_config,
+    normalization_manifest: dict[str, Any],
 ) -> pd.DataFrame:
-    if offline_annotations.empty or "domain" not in offline_annotations.columns:
-        return annotations
+    from rule_baseline.features.annotation_normalization import normalize_market_annotations  # type: ignore
 
-    allowed_domains = {
-        str(domain)
-        for domain in offline_annotations["domain"].fillna("").astype(str)
-        if str(domain) not in {"", "UNKNOWN", "OTHER"}
-    }
-    if not allowed_domains:
-        return annotations
+    return normalize_market_annotations(
+        annotations,
+        vocabulary_manifest=normalization_manifest,
+    )
 
-    out = annotations.copy()
 
-    def normalize_domain(candidate: str) -> str:
-        if candidate in {"", "UNKNOWN"}:
-            return "UNKNOWN"
-        if candidate in allowed_domains:
-            return candidate
-        if candidate == "OTHER":
-            return "OTHER"
-        return "OTHER"
+def _merge_market_annotation_projection(markets: pd.DataFrame, annotations: pd.DataFrame) -> pd.DataFrame:
+    from rule_baseline.features.annotation_normalization import merge_market_annotation_projection  # type: ignore
 
-    domain_source = "domain" if "domain" in out.columns else "domain_candidate"
-    out["domain"] = out[domain_source].fillna("UNKNOWN").astype(str).apply(normalize_domain)
-    return out
+    return merge_market_annotation_projection(markets, annotations)
 
 
 def _load_cached_offline_annotations(load_market_annotations, rule_config) -> pd.DataFrame:
@@ -138,10 +149,10 @@ def build_online_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd.DataFr
 
     annotations["market_id"] = annotations["market_id"].astype(str)
     offline_annotations = _load_cached_offline_annotations(load_market_annotations, rule_config)
+    normalization_manifest = _load_normalization_manifest(cfg, offline_annotations)
     annotations = _normalize_domains_against_offline_reference(
         annotations,
-        offline_annotations=offline_annotations,
-        rule_config=rule_config,
+        normalization_manifest=normalization_manifest,
     )
     return annotations[_ANNOTATION_COLUMNS].drop_duplicates(subset=["market_id"]).reset_index(drop=True)
 
@@ -151,26 +162,7 @@ def apply_online_market_annotations(cfg: PegConfig, markets: pd.DataFrame) -> pd
         return markets
 
     annotations = build_online_annotations(cfg, markets)
-    if annotations.empty:
-        return markets
-
-    merge_columns = [column for column in _ANNOTATION_COLUMNS if column in annotations.columns]
-    out = markets.merge(
-        annotations[merge_columns],
-        on="market_id",
-        how="left",
-        suffixes=("", "_annotation"),
-    )
-
-    for column in merge_columns:
-        if column == "market_id":
-            continue
-        annotation_column = f"{column}_annotation"
-        if annotation_column not in out.columns:
-            continue
-        current = out[column] if column in out.columns else pd.Series(pd.NA, index=out.index)
-        out[column] = out[annotation_column].where(out[annotation_column].notna(), current)
-        out = out.drop(columns=[annotation_column])
+    out = _merge_market_annotation_projection(markets, annotations)
 
     for column in [
         "domain",

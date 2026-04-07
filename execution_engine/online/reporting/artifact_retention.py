@@ -25,6 +25,8 @@ FULL_RETENTION_REMOVABLE_FILES = {
     "submission_attempts.csv",
     "token_state.csv",
     "current_universe.csv",
+    "events.jsonl",
+    "market_audit.csv",
 }
 
 CORE_RETAINED_FILES = {

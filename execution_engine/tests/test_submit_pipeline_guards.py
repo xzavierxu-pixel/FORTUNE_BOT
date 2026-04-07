@@ -40,6 +40,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
     def test_build_submission_signal_rejects_boundary_top_of_book(self) -> None:
         cfg = SimpleNamespace(
             run_id="test-run",
+            online_limit_ticks_from_best_bid=1,
             online_limit_ticks_below_best_bid=1,
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
@@ -69,6 +70,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
     def test_build_submission_signal_accepts_non_boundary_quote(self) -> None:
         cfg = SimpleNamespace(
             run_id="test-run",
+            online_limit_ticks_from_best_bid=1,
             online_limit_ticks_below_best_bid=1,
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
@@ -109,7 +111,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
         self.assertEqual(reason, "OK")
         self.assertIsNotNone(signal)
         assert signal is not None
-        self.assertEqual(signal["price_limit"], 0.27)
+        self.assertEqual(signal["price_limit"], 0.3)
         self.assertEqual(signal["best_bid_at_submit"], 0.29)
         self.assertEqual(signal["best_ask_at_submit"], 0.51)
         self.assertEqual(signal["source_host"], "feed.example.com")
@@ -117,6 +119,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
     def test_build_submission_signal_allows_exact_half_point_spread(self) -> None:
         cfg = SimpleNamespace(
             run_id="test-run",
+            online_limit_ticks_from_best_bid=1,
             online_limit_ticks_below_best_bid=1,
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
@@ -149,6 +152,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
     def test_build_submission_signal_rejects_limit_price_below_rule_min(self) -> None:
         cfg = SimpleNamespace(
             run_id="test-run",
+            online_limit_ticks_from_best_bid=0,
             online_limit_ticks_below_best_bid=0,
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,
@@ -179,6 +183,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
     def test_build_submission_signal_rejects_limit_price_above_rule_max(self) -> None:
         cfg = SimpleNamespace(
             run_id="test-run",
+            online_limit_ticks_from_best_bid=0,
             online_limit_ticks_below_best_bid=0,
             online_price_cap_safety_buffer=0.01,
             max_trade_amount_usdc=5.0,

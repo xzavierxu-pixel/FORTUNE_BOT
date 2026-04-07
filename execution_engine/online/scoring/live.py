@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
+import sys
 from typing import Any, Dict
 
 import pandas as pd
@@ -14,6 +15,7 @@ from execution_engine.online.pipeline.prewarm import OnlineRuntimeContainer
 from execution_engine.online.scoring.price_history import (
     ClobPriceHistoryClient,
     PricePoint,
+    build_offline_aligned_history_window,
     build_quote_window_features,
     build_source_host,
     build_historical_price_features,
@@ -76,7 +78,26 @@ def _market_duration_hours(start_time_utc: Any, end_time_utc: Any) -> float:
     return round(max((end_dt - start_dt).total_seconds(), 0.0) / 3600.0, 6)
 
 
-def _build_market_feature_context(frame: pd.DataFrame) -> pd.DataFrame:
+def _load_snapshot_semantics(cfg: PegConfig):
+    rule_engine_dir = str(cfg.rule_engine_dir)
+    if rule_engine_dir not in sys.path:
+        sys.path.insert(0, rule_engine_dir)
+    from rule_baseline.features.snapshot_semantics import (  # type: ignore
+        build_decision_time_snapshot_row,
+        build_market_context_projection,
+        compute_contract_safe_defaults,
+    )
+
+    return build_decision_time_snapshot_row, build_market_context_projection, compute_contract_safe_defaults
+
+
+def _build_market_feature_context(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    if hasattr(cfg, "rule_engine_dir"):
+        _, build_market_context_projection, _ = _load_snapshot_semantics(cfg)
+        return pd.DataFrame([build_market_context_projection(row) for row in frame.to_dict(orient="records")])
+
     rows = []
     for row in frame.to_dict(orient="records"):
         rows.append(
@@ -138,6 +159,7 @@ def _build_market_annotations(frame: pd.DataFrame) -> pd.DataFrame:
 def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
+    build_decision_time_snapshot_row, _, _ = _load_snapshot_semantics(cfg)
     now = _utc_now()
     now_ts = int(pd.Timestamp(now).timestamp())
     history_client = ClobPriceHistoryClient(cfg)
@@ -147,11 +169,12 @@ def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFra
         token_state_age_sec = _to_float(row.get("token_state_age_sec"))
         end_dt = _parse_utc(row.get("end_time_utc"))
         end_ts = int(end_dt.timestamp()) if end_dt is not None else now_ts
+        history_start_ts, history_end_ts = build_offline_aligned_history_window(end_ts=end_ts)
         try:
             history_points = history_client.fetch_history(
                 str(row.get("selected_reference_token_id") or ""),
-                start_ts=now_ts - 24 * 3600,
-                end_ts=now_ts,
+                start_ts=history_start_ts,
+                end_ts=history_end_ts,
                 fidelity_minutes=1,
             )
         except Exception:
@@ -165,82 +188,77 @@ def _build_live_snapshot_rows(cfg: PegConfig, frame: pd.DataFrame) -> pd.DataFra
             current_price=price,
             now_ts=now_ts,
             end_ts=end_ts,
-            merged_points=merged_points,
+            merged_points=history_points,
         )
         rows.append(
-            {
-                "market_id": str(row.get("market_id") or ""),
-                "batch_id": str(row.get("batch_id") or ""),
-                "first_seen_at_utc": str(row.get("first_seen_at_utc") or ""),
-                "price": price,
-                "horizon_hours": _to_float(row.get("remaining_hours")),
-                "snapshot_time": pd.Timestamp(now),
-                "snapshot_date": pd.Timestamp(now).date(),
-                "scheduled_end": str(row.get("end_time_utc") or ""),
-                "closedTime": str(row.get("end_time_utc") or ""),
-                "delta_hours_bucket": 0.0,
-                "selected_quote_offset_sec": quote_window["selected_quote_offset_sec"],
-                "selected_quote_points_in_window": quote_window["selected_quote_points_in_window"],
-                "selected_quote_left_gap_sec": quote_window["selected_quote_left_gap_sec"],
-                "selected_quote_right_gap_sec": quote_window["selected_quote_right_gap_sec"],
-                "selected_quote_local_gap_sec": quote_window["selected_quote_local_gap_sec"],
-                "selected_quote_ts": quote_window["selected_quote_ts"],
-                "snapshot_target_ts": quote_window["snapshot_target_ts"],
-                "selected_quote_side": quote_window["selected_quote_side"],
-                "stale_quote_flag": quote_window["stale_quote_flag"],
-                "snapshot_quality_score": quote_window["snapshot_quality_score"],
-                "domain": str(row.get("domain") or "UNKNOWN"),
-                "category": str(row.get("category") or "UNKNOWN"),
-                "market_type": str(row.get("market_type") or "UNKNOWN"),
-                "source_host": build_source_host(
+            build_decision_time_snapshot_row(
+                row,
+                snapshot_time=pd.Timestamp(now),
+                price=price,
+                horizon_hours=_to_float(row.get("remaining_hours")),
+                scheduled_end=str(row.get("end_time_utc") or ""),
+                quote_window=quote_window,
+                history_features=history_features,
+                source_host=build_source_host(
                     source_url=row.get("source_url"),
                     resolution_source=row.get("resolution_source"),
                     domain=row.get("domain"),
                 ),
-                "primary_outcome": str(row.get("outcome_0_label") or ""),
-                "secondary_outcome": str(row.get("outcome_1_label") or ""),
-                "market_duration_hours": _market_duration_hours(row.get("start_time_utc"), row.get("end_time_utc")),
-                "outcome_0_label": str(row.get("outcome_0_label") or ""),
-                "outcome_1_label": str(row.get("outcome_1_label") or ""),
-                "token_0_id": str(row.get("token_0_id") or ""),
-                "token_1_id": str(row.get("token_1_id") or ""),
-                "selected_reference_token_id": str(row.get("selected_reference_token_id") or ""),
-                "selected_reference_outcome_label": str(row.get("selected_reference_outcome_label") or ""),
-                "selected_reference_side_index": _to_int(row.get("selected_reference_side_index"), default=0),
-                "best_bid": _to_float(row.get("best_bid")),
-                "best_ask": _to_float(row.get("best_ask")),
-                "mid_price": price,
-                "last_trade_price": _to_float(row.get("last_trade_price")),
-                "tick_size": _to_float(row.get("tick_size"), default=_to_float(row.get("order_price_min_tick_size"), default=0.001)),
-                "liquidity": _to_float(row.get("liquidity")),
-                "volume24hr": _to_float(row.get("volume24hr")),
-                "token_state_age_sec": token_state_age_sec,
-                "remaining_hours": _to_float(row.get("remaining_hours")),
-                **history_features,
-            }
+                market_duration_hours=_market_duration_hours(row.get("start_time_utc"), row.get("end_time_utc")),
+                extra_fields={
+                    "batch_id": str(row.get("batch_id") or ""),
+                    "first_seen_at_utc": str(row.get("first_seen_at_utc") or ""),
+                    "selected_reference_side_index": _to_int(row.get("selected_reference_side_index"), default=0),
+                    "best_bid": _to_float(row.get("best_bid")),
+                    "best_ask": _to_float(row.get("best_ask")),
+                    "mid_price": price,
+                    "last_trade_price": _to_float(row.get("last_trade_price")),
+                    "tick_size": _to_float(row.get("tick_size"), default=_to_float(row.get("order_price_min_tick_size"), default=0.001)),
+                    "liquidity": _to_float(row.get("liquidity")),
+                    "volume24hr": _to_float(row.get("volume24hr")),
+                    "token_state_age_sec": token_state_age_sec,
+                    "remaining_hours": _to_float(row.get("remaining_hours")),
+                },
+            )
         )
     return pd.DataFrame(rows)
 
 
 def _ensure_feature_contract(frame: pd.DataFrame, feature_contract: FeatureContract) -> pd.DataFrame:
-    out = frame.copy()
-    categorical = set(feature_contract.categorical_columns)
-    missing_columns: list[str] = []
-    for column in feature_contract.feature_columns:
-        if column in out.columns:
-            continue
-        missing_columns.append(column)
-        out[column] = "UNKNOWN" if column in categorical else 0.0
-    if missing_columns:
-        LOGGER.warning(
-            "Missing required feature_contract columns defaulted in live inference: %s",
-            ", ".join(sorted(missing_columns)),
+    from rule_baseline.features.snapshot_semantics import compute_contract_safe_defaults  # type: ignore
+
+    aligned = compute_contract_safe_defaults(
+        frame,
+        feature_columns=feature_contract.feature_columns,
+        categorical_columns=feature_contract.categorical_columns,
+        required_critical_columns=getattr(feature_contract, "required_critical_columns", ()),
+        required_noncritical_columns=getattr(feature_contract, "required_noncritical_columns", ()) or feature_contract.feature_columns,
+    )
+    summary = dict(aligned.attrs.get("feature_contract_summary", {}))
+    missing_critical = list(summary.get("missing_critical_columns", []))
+    defaulted_noncritical = list(summary.get("defaulted_noncritical_columns", []))
+    if missing_critical:
+        LOGGER.error(
+            "Missing critical feature_contract columns in live inference: %s",
+            ", ".join(sorted(missing_critical)),
         )
+        raise CriticalFeatureContractError(summary)
+    if defaulted_noncritical:
+        LOGGER.warning(
+            "Missing non-critical feature_contract columns defaulted in live inference: %s",
+            ", ".join(sorted(defaulted_noncritical)),
+        )
+    out = frame.copy()
+    for column in aligned.columns:
+        if column not in out.columns:
+            out[column] = aligned[column]
     keep_columns: list[str] = []
-    for column in [*_MODEL_INPUT_BRIDGE_COLUMNS, *feature_contract.feature_columns]:
+    for column in [*_MODEL_INPUT_BRIDGE_COLUMNS, *aligned.columns]:
         if column in out.columns and column not in keep_columns:
             keep_columns.append(column)
-    return out[keep_columns].copy()
+    aligned = out[keep_columns].copy()
+    aligned.attrs["feature_contract_summary"] = summary
+    return aligned
 
 
 def _predict_from_feature_inputs(
@@ -293,6 +311,14 @@ class LiveInferenceResult:
     live_filter: LiveFilterResult
     snapshots: pd.DataFrame
     rule_model: RuleModelResult
+    feature_contract_summary: dict[str, Any] = field(default_factory=dict)
+
+
+class CriticalFeatureContractError(RuntimeError):
+    def __init__(self, summary: dict[str, Any]):
+        self.summary = summary
+        missing = ", ".join(summary.get("missing_critical_columns", [])) or "unknown"
+        super().__init__(f"Missing critical feature columns: {missing}")
 
 
 def run_live_inference(
@@ -312,10 +338,11 @@ def run_live_inference(
                 model_outputs=empty,
                 viable_candidates=empty,
             ),
+            feature_contract_summary={},
         )
 
     snapshots = _build_live_snapshot_rows(runtime.cfg, live_filter.eligible)
-    market_context = _build_market_feature_context(live_filter.eligible)
+    market_context = _build_market_feature_context(runtime.cfg, live_filter.eligible)
     market_feature_cache = runtime.rule_runtime.build_market_feature_cache(
         market_context,
         _build_market_annotations(live_filter.eligible),
@@ -332,6 +359,7 @@ def run_live_inference(
                 model_outputs=empty,
                 viable_candidates=empty,
             ),
+            feature_contract_summary={},
         )
 
     rule_hits = add_rule_match_reasons(collapse_rule_hits(matched))
@@ -340,7 +368,22 @@ def run_live_inference(
         market_feature_cache,
         runtime.rule_runtime.preprocess_features,
     )
-    feature_inputs = _ensure_feature_contract(feature_inputs, runtime.feature_contract)
+    try:
+        feature_inputs = _ensure_feature_contract(feature_inputs, runtime.feature_contract)
+    except CriticalFeatureContractError as exc:
+        empty = pd.DataFrame()
+        return LiveInferenceResult(
+            live_filter=live_filter,
+            snapshots=snapshots,
+            rule_model=RuleModelResult(
+                rule_hits=rule_hits,
+                feature_inputs=empty,
+                model_outputs=empty,
+                viable_candidates=empty,
+            ),
+            feature_contract_summary=exc.summary,
+        )
+    feature_contract_summary = dict(feature_inputs.attrs.get("feature_contract_summary", {}))
     predicted = _predict_from_feature_inputs(runtime, rule_hits, feature_inputs)
     viable = runtime.rule_runtime.compute_growth_and_direction(predicted, runtime.rule_runtime.backtest_config)
     model_outputs = _merge_growth_columns(predicted, viable)
@@ -365,4 +408,5 @@ def run_live_inference(
             model_outputs=model_outputs,
             viable_candidates=viable,
         ),
+        feature_contract_summary=feature_contract_summary,
     )

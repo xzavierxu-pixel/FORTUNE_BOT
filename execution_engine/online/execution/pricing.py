@@ -45,6 +45,14 @@ def price_cap(row: Dict[str, Any], cfg: PegConfig, fee_rate: float) -> float:
     return max(q_pred - fee_rate - cfg.online_price_cap_safety_buffer, 0.0)
 
 
+def _ticks_from_best_bid(cfg: PegConfig) -> int:
+    configured = getattr(cfg, "online_limit_ticks_from_best_bid", None)
+    if configured is not None:
+        return int(configured)
+    legacy = int(getattr(cfg, "online_limit_ticks_below_best_bid", 1))
+    return -legacy
+
+
 def extend_iso(now_iso: str, seconds: int) -> str:
     return to_iso(parse_utc(now_iso) + timedelta(seconds=seconds))
 
@@ -75,7 +83,7 @@ def build_submission_signal(
         return None, "ABNORMAL_TOP_OF_BOOK"
 
     limit_price = round_down_to_tick(
-        best_bid - cfg.online_limit_ticks_below_best_bid * tick_size,
+        best_bid + (_ticks_from_best_bid(cfg) * tick_size),
         tick_size,
     )
     if limit_price <= 0:

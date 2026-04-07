@@ -19,6 +19,7 @@ polymarket_rule_engine/data/offline/metadata/*
 polymarket_rule_engine/data/domain/*
 !polymarket_rule_engine/data/domain/market_domain_features.csv
 execution_engine/data/
+execution_engine/doc
 server_data/
 server_data_analysis/
 

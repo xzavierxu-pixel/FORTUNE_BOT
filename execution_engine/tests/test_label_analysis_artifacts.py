@@ -184,10 +184,40 @@ class LabelAnalysisArtifactsTest(unittest.TestCase):
                 run_snapshot_selection_path=run_dir / "snapshot_score" / "selection_decisions.csv",
                 run_snapshot_score_manifest_path=run_dir / "snapshot_score" / "manifest.json",
             )
-            runtime = SimpleNamespace(cfg=cfg)
+            runtime = SimpleNamespace(
+                cfg=cfg,
+                feature_contract=SimpleNamespace(
+                    feature_columns=("price", "domain", "q_full"),
+                    numeric_columns=("price", "q_full"),
+                    categorical_columns=("domain",),
+                    required_critical_columns=("price", "q_full"),
+                    required_noncritical_columns=("domain",),
+                    optional_debug_columns=(),
+                ),
+                model_payload=SimpleNamespace(
+                    runtime_manifest={
+                        "feature_semantics_version": "decision_time_v1",
+                        "normalization_manifest": {
+                            "manifest_version": 1,
+                            "annotation_pipeline_version": "shared_v1",
+                            "domain_policy": {"allowed_domains": ["example.com", "sports.example.com"]},
+                        },
+                    }
+                ),
+            )
             batch = SimpleNamespace(
                 batch_id="batch-a",
-                frame=pd.DataFrame([{"market_id": "market-1", "selected_reference_token_id": "ref-1"}]),
+                frame=pd.DataFrame(
+                    [
+                        {
+                            "market_id": "market-1",
+                            "selected_reference_token_id": "ref-1",
+                            "domain": "OTHER",
+                            "domain_parsed": "newsite.com",
+                            "category_override_flag": True,
+                        }
+                    ]
+                ),
             )
             inference_result = SimpleNamespace(
                 live_filter=SimpleNamespace(
@@ -234,6 +264,13 @@ class LabelAnalysisArtifactsTest(unittest.TestCase):
                         ]
                     ),
                 ),
+                feature_contract_summary={
+                    "expected_feature_column_count": 3,
+                    "available_feature_column_count": 2,
+                    "missing_critical_columns": [],
+                    "defaulted_noncritical_columns": ["domain"],
+                    "defaulted_noncritical_count": 1,
+                },
             )
             selection = pd.DataFrame(
                 [
@@ -260,6 +297,9 @@ class LabelAnalysisArtifactsTest(unittest.TestCase):
             selections = pd.read_csv(cfg.run_snapshot_selection_path, dtype=str)
             raw_lines = cfg.run_snapshot_raw_inputs_path.read_text(encoding="utf-8").strip().splitlines()
             manifest = json.loads(cfg.run_snapshot_score_manifest_path.read_text(encoding="utf-8"))
+            default_summary = json.loads((cfg.run_snapshot_score_manifest_path.parent / "feature_default_summary.json").read_text(encoding="utf-8"))
+            normalization_summary = json.loads((cfg.run_snapshot_score_manifest_path.parent / "annotation_normalization_summary.json").read_text(encoding="utf-8"))
+            semantics_manifest = json.loads((cfg.run_snapshot_score_manifest_path.parent / "feature_semantics_manifest.json").read_text(encoding="utf-8"))
 
             self.assertEqual(len(processed), 1)
             self.assertEqual(len(normalized), 1)
@@ -271,6 +311,13 @@ class LabelAnalysisArtifactsTest(unittest.TestCase):
             self.assertEqual(outputs.iloc[0]["selected_token_id"], "token-0")
             self.assertEqual(manifest["model_output_count"], 1)
             self.assertEqual(manifest["selection_decision_count"], 1)
+            self.assertEqual(default_summary["total_defaulted_noncritical_count"], 1)
+            self.assertEqual(default_summary["per_column_default_counts"]["domain"], 1)
+            self.assertEqual(normalization_summary["other_domain_count"], 1)
+            self.assertEqual(normalization_summary["normalized_to_other_count"], 1)
+            self.assertEqual(normalization_summary["category_override_true_count"], 1)
+            self.assertEqual(semantics_manifest["feature_semantics_version"], "decision_time_v1")
+            self.assertEqual(semantics_manifest["normalization_manifest"]["manifest_version"], 1)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,9 @@ class FeatureContract:
     feature_columns: tuple[str, ...]
     numeric_columns: tuple[str, ...]
     categorical_columns: tuple[str, ...]
+    required_critical_columns: tuple[str, ...] = ()
+    required_noncritical_columns: tuple[str, ...] = ()
+    optional_debug_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,10 +77,16 @@ def get_feature_contract(payload) -> FeatureContract:
     feature_columns = tuple(str(value) for value in contract.feature_columns)
     numeric_columns = tuple(str(value) for value in contract.numeric_columns)
     categorical_columns = tuple(str(value) for value in contract.categorical_columns)
+    required_critical_columns = tuple(str(value) for value in getattr(contract, "required_critical_columns", ()))
+    required_noncritical_columns = tuple(str(value) for value in getattr(contract, "required_noncritical_columns", ()))
+    optional_debug_columns = tuple(str(value) for value in getattr(contract, "optional_debug_columns", ()))
     return FeatureContract(
         feature_columns=feature_columns,
         numeric_columns=numeric_columns,
         categorical_columns=categorical_columns,
+        required_critical_columns=required_critical_columns,
+        required_noncritical_columns=required_noncritical_columns or feature_columns,
+        optional_debug_columns=optional_debug_columns,
     )
 
 

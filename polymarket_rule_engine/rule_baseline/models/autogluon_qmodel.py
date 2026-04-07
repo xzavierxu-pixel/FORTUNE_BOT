@@ -17,6 +17,7 @@ from rule_baseline.models.runtime_bundle import (
     build_runtime_bundle_paths,
     save_calibrator,
     save_feature_contract,
+    save_normalization_manifest,
     write_bundle_json,
 )
 from rule_baseline.models.tree_ensembles import (
@@ -160,6 +161,10 @@ def _copy_runtime_bundle_metadata(
     bundle_paths.ensure_dirs()
     save_feature_contract(bundle_paths.feature_contract_path, feature_contract)
     write_bundle_json(bundle_paths.runtime_manifest_path, runtime_manifest)
+    save_normalization_manifest(
+        bundle_paths.normalization_manifest_path,
+        runtime_manifest.get("normalization_manifest", {}) or {},
+    )
     write_bundle_json(bundle_paths.calibrator_meta_path, calibrator_meta)
     write_bundle_json(
         bundle_paths.deployment_summary_path,
@@ -177,6 +182,10 @@ def fit_autogluon_q_model(
     df_train: pd.DataFrame,
     df_valid: pd.DataFrame,
     feature_columns: list[str],
+    required_critical_columns: list[str] | None = None,
+    required_noncritical_columns: list[str] | None = None,
+    feature_semantics_version: str | None = None,
+    normalization_manifest: dict[str, Any] | None = None,
     bundle_dir: Path,
     full_bundle_dir: Path | None = None,
     artifact_mode: str,
@@ -205,6 +214,8 @@ def fit_autogluon_q_model(
         feature_columns=tuple(feature_columns),
         numeric_columns=tuple(numeric_columns),
         categorical_columns=tuple(categorical_columns),
+        required_critical_columns=tuple(required_critical_columns or ()),
+        required_noncritical_columns=tuple(required_noncritical_columns or feature_columns),
     )
 
     train_features = _coerce_feature_frame(df_train, feature_columns, numeric_columns, categorical_columns)
@@ -434,6 +445,8 @@ def fit_autogluon_q_model(
             "calibration_holdout_policy": calibration_holdout_policy,
             "calibration_overlap_allowed": False,
         },
+        "feature_semantics_version": feature_semantics_version,
+        "normalization_manifest": normalization_manifest or {},
         "deployment_validation": {
             "fit_duration_sec": float(fit_duration_sec),
             "clone_for_deployment_ok": bool(clone_ok),

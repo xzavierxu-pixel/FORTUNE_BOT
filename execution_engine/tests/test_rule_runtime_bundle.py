@@ -37,6 +37,8 @@ class RuleRuntimeBundleLoadingTest(unittest.TestCase):
                         "feature_columns": ["price", "domain", "horizon_hours"],
                         "numeric_columns": ["price", "horizon_hours"],
                         "categorical_columns": ["domain"],
+                        "required_critical_columns": ["price"],
+                        "required_noncritical_columns": ["domain", "horizon_hours"],
                     }
                 ),
                 encoding="utf-8",
@@ -62,6 +64,8 @@ class RuleRuntimeBundleLoadingTest(unittest.TestCase):
             self.assertEqual(contract.feature_columns, ("price", "domain", "horizon_hours"))
             self.assertEqual(contract.numeric_columns, ("price", "horizon_hours"))
             self.assertEqual(contract.categorical_columns, ("domain",))
+            self.assertEqual(contract.required_critical_columns, ("price",))
+            self.assertEqual(contract.required_noncritical_columns, ("domain", "horizon_hours"))
 
     def test_load_model_payload_rejects_non_q_target_mode_for_live_runtime(self) -> None:
         with TemporaryDirectory() as tmpdir:

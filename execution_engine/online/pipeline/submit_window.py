@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 from time import perf_counter
-from typing import Dict, List
+from typing import Any, Dict, List
 import json
 
 import pandas as pd
@@ -47,6 +47,16 @@ from execution_engine.shared.time import bj_now_iso, to_bj_iso, to_iso, utc_now
 def _write_manifest(path, payload: Dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _load_json_payload(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _debug_artifacts_enabled(cfg: PegConfig) -> bool:
@@ -161,8 +171,14 @@ def _with_batch_metadata(frame: pd.DataFrame, cfg: PegConfig, batch_id: str) -> 
     return out
 
 
-def _write_snapshot_score_manifest(cfg: PegConfig) -> None:
+def _write_snapshot_score_manifest(
+    cfg: PegConfig,
+    *,
+    runtime: OnlineRuntimeContainer | None = None,
+    feature_contract_summary: dict[str, object] | None = None,
+) -> None:
     debug_enabled = _debug_artifacts_enabled(cfg)
+    runtime_manifest = getattr(getattr(runtime, "model_payload", None), "runtime_manifest", {}) or {}
     payload = {
         "generated_at_utc": to_iso(utc_now()),
         "generated_at_bj": bj_now_iso(),
@@ -170,6 +186,9 @@ def _write_snapshot_score_manifest(cfg: PegConfig) -> None:
         "run_mode": cfg.run_mode,
         "artifact_policy": str(getattr(cfg, "artifact_policy", "minimal") or "minimal"),
         "debug_artifacts_enabled": debug_enabled,
+        "feature_semantics_version": runtime_manifest.get("feature_semantics_version"),
+        "normalization_manifest_version": (runtime_manifest.get("normalization_manifest") or {}).get("manifest_version"),
+        "feature_contract_summary": feature_contract_summary or {},
         "selection_decisions_path": str(cfg.run_snapshot_selection_path),
         "selection_decision_count": int(len(_load_csv_frame(cfg.run_snapshot_selection_path))),
     }
@@ -190,6 +209,138 @@ def _write_snapshot_score_manifest(cfg: PegConfig) -> None:
             }
         )
     _write_manifest(cfg.run_snapshot_score_manifest_path, payload)
+
+
+def _snapshot_score_aux_path(cfg: PegConfig, filename: str) -> Path:
+    return cfg.run_snapshot_score_manifest_path.parent / filename
+
+
+def _write_feature_semantics_manifest(
+    cfg: PegConfig,
+    *,
+    runtime: OnlineRuntimeContainer | None = None,
+) -> None:
+    runtime_manifest = getattr(getattr(runtime, "model_payload", None), "runtime_manifest", {}) or {}
+    feature_contract_payload: dict[str, Any] = {}
+    feature_contract = getattr(runtime, "feature_contract", None)
+    if feature_contract is not None:
+        feature_contract_payload = {
+            "feature_columns": list(getattr(feature_contract, "feature_columns", ()) or ()),
+            "numeric_columns": list(getattr(feature_contract, "numeric_columns", ()) or ()),
+            "categorical_columns": list(getattr(feature_contract, "categorical_columns", ()) or ()),
+            "required_critical_columns": list(getattr(feature_contract, "required_critical_columns", ()) or ()),
+            "required_noncritical_columns": list(getattr(feature_contract, "required_noncritical_columns", ()) or ()),
+            "optional_debug_columns": list(getattr(feature_contract, "optional_debug_columns", ()) or ()),
+        }
+    payload = {
+        "generated_at_utc": to_iso(utc_now()),
+        "generated_at_bj": bj_now_iso(),
+        "run_id": cfg.run_id,
+        "run_mode": cfg.run_mode,
+        "feature_semantics_version": runtime_manifest.get("feature_semantics_version"),
+        "normalization_manifest": runtime_manifest.get("normalization_manifest") or {},
+        "feature_contract": feature_contract_payload,
+    }
+    _write_manifest(_snapshot_score_aux_path(cfg, "feature_semantics_manifest.json"), payload)
+
+
+def _update_feature_default_summary(
+    cfg: PegConfig,
+    *,
+    runtime: OnlineRuntimeContainer | None = None,
+    feature_contract_summary: dict[str, Any] | None = None,
+) -> None:
+    summary = feature_contract_summary or {}
+    path = _snapshot_score_aux_path(cfg, "feature_default_summary.json")
+    payload = _load_json_payload(path)
+    per_column_default_counts = {
+        str(key): int(value)
+        for key, value in (payload.get("per_column_default_counts") or {}).items()
+    }
+    for column in summary.get("defaulted_noncritical_columns", []) or []:
+        normalized = str(column)
+        per_column_default_counts[normalized] = per_column_default_counts.get(normalized, 0) + 1
+
+    runtime_manifest = getattr(getattr(runtime, "model_payload", None), "runtime_manifest", {}) or {}
+    payload.update(
+        {
+            "generated_at_utc": to_iso(utc_now()),
+            "generated_at_bj": bj_now_iso(),
+            "run_id": cfg.run_id,
+            "run_mode": cfg.run_mode,
+            "feature_semantics_version": runtime_manifest.get("feature_semantics_version"),
+            "batch_count": int(payload.get("batch_count", 0) or 0) + 1,
+            "batches_with_critical_missing": int(payload.get("batches_with_critical_missing", 0) or 0)
+            + (1 if summary.get("missing_critical_columns") else 0),
+            "total_defaulted_noncritical_count": int(payload.get("total_defaulted_noncritical_count", 0) or 0)
+            + int(summary.get("defaulted_noncritical_count", 0) or 0),
+            "per_column_default_counts": dict(sorted(per_column_default_counts.items())),
+            "latest_summary": summary,
+        }
+    )
+    if "expected_feature_column_count" in summary:
+        payload["expected_feature_column_count"] = int(summary.get("expected_feature_column_count", 0) or 0)
+    _write_manifest(path, payload)
+
+
+def _update_annotation_normalization_summary(
+    cfg: PegConfig,
+    *,
+    runtime: OnlineRuntimeContainer | None = None,
+    frame: pd.DataFrame,
+) -> None:
+    path = _snapshot_score_aux_path(cfg, "annotation_normalization_summary.json")
+    payload = _load_json_payload(path)
+    runtime_manifest = getattr(getattr(runtime, "model_payload", None), "runtime_manifest", {}) or {}
+    normalization_manifest = runtime_manifest.get("normalization_manifest") or {}
+
+    domain_counts = {
+        str(key): int(value)
+        for key, value in (payload.get("domain_counts") or {}).items()
+    }
+    frame_domain_counts: dict[str, int] = {}
+    if not frame.empty and "domain" in frame.columns:
+        frame_domain_counts = {
+            str(key): int(value)
+            for key, value in frame["domain"].fillna("UNKNOWN").astype(str).value_counts().to_dict().items()
+        }
+        for key, value in frame_domain_counts.items():
+            domain_counts[key] = domain_counts.get(key, 0) + int(value)
+
+    normalized_to_other_count = 0
+    if not frame.empty and {"domain", "domain_parsed"}.issubset(frame.columns):
+        raw_domain = frame["domain_parsed"].fillna("").astype(str).str.strip()
+        normalized_domain = frame["domain"].fillna("UNKNOWN").astype(str).str.strip()
+        normalized_to_other_count = int(((normalized_domain == "OTHER") & (~raw_domain.isin(["", "OTHER", "UNKNOWN"]))).sum())
+
+    category_override_true_count = 0
+    if not frame.empty and "category_override_flag" in frame.columns:
+        category_override_true_count = int(frame["category_override_flag"].fillna(False).astype(bool).sum())
+
+    payload.update(
+        {
+            "generated_at_utc": to_iso(utc_now()),
+            "generated_at_bj": bj_now_iso(),
+            "run_id": cfg.run_id,
+            "run_mode": cfg.run_mode,
+            "normalization_manifest_version": normalization_manifest.get("manifest_version"),
+            "annotation_pipeline_version": normalization_manifest.get("annotation_pipeline_version"),
+            "allowed_domain_count": int(
+                len(((normalization_manifest.get("domain_policy") or {}).get("allowed_domains") or []))
+            ),
+            "batch_count": int(payload.get("batch_count", 0) or 0) + 1,
+            "market_row_count": int(payload.get("market_row_count", 0) or 0) + int(len(frame)),
+            "unique_market_count": int(payload.get("unique_market_count", 0) or 0)
+            + int(frame.get("market_id", pd.Series(dtype=str)).astype(str).nunique() if not frame.empty and "market_id" in frame.columns else 0),
+            "unknown_domain_count": int(payload.get("unknown_domain_count", 0) or 0) + int(frame_domain_counts.get("UNKNOWN", 0)),
+            "other_domain_count": int(payload.get("other_domain_count", 0) or 0) + int(frame_domain_counts.get("OTHER", 0)),
+            "normalized_to_other_count": int(payload.get("normalized_to_other_count", 0) or 0) + normalized_to_other_count,
+            "category_override_true_count": int(payload.get("category_override_true_count", 0) or 0)
+            + category_override_true_count,
+            "domain_counts": dict(sorted(domain_counts.items())),
+        }
+    )
+    _write_manifest(path, payload)
 
 
 def _persist_batch_training_artifacts(
@@ -236,7 +387,22 @@ def _persist_batch_training_artifacts(
             dedupe_keys=["run_id", "batch_id", "market_id", "snapshot_time", "rule_group_key", "rule_leaf_id"],
         )
     _write_selection_snapshot(cfg.run_snapshot_selection_path, selection_snapshot)
-    _write_snapshot_score_manifest(cfg)
+    _write_snapshot_score_manifest(
+        cfg,
+        runtime=runtime,
+        feature_contract_summary=getattr(inference_result, "feature_contract_summary", {}),
+    )
+    _write_feature_semantics_manifest(cfg, runtime=runtime)
+    _update_feature_default_summary(
+        cfg,
+        runtime=runtime,
+        feature_contract_summary=getattr(inference_result, "feature_contract_summary", {}),
+    )
+    _update_annotation_normalization_summary(
+        cfg,
+        runtime=runtime,
+        frame=batch.frame,
+    )
 
 
 def _write_post_submit_output(
@@ -1186,7 +1352,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
     final_status = "completed"
     if str(monitor_summary["post_submit_monitor_status"]) == "failed":
         final_status = "completed_with_post_submit_failure"
-    audit_result = build_candidate_audit(cfg)
+    audit_result = build_candidate_audit(cfg, funnel_payload=funnel_payload)
     manifest = {
         "generated_at_utc": to_iso(utc_now()),
         "generated_at_bj": bj_now_iso(),

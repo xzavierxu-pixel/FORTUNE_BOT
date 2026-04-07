@@ -13,6 +13,7 @@ FULL_TRAINING_BUNDLE_DIRNAME = "q_model_bundle_full"
 LEGACY_RUNTIME_BUNDLE_DIRNAME = "q_model_bundle"
 RUNTIME_MANIFEST_NAME = "runtime_manifest.json"
 FEATURE_CONTRACT_NAME = "feature_contract.json"
+NORMALIZATION_MANIFEST_NAME = "normalization_manifest.json"
 CALIBRATOR_NAME = "calibrator.pkl"
 CALIBRATOR_META_NAME = "calibrator_meta.json"
 
@@ -22,20 +23,32 @@ class FeatureContract:
     feature_columns: tuple[str, ...]
     numeric_columns: tuple[str, ...]
     categorical_columns: tuple[str, ...]
+    required_critical_columns: tuple[str, ...] = ()
+    required_noncritical_columns: tuple[str, ...] = ()
+    optional_debug_columns: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, list[str]]:
         return {
             "feature_columns": list(self.feature_columns),
             "numeric_columns": list(self.numeric_columns),
             "categorical_columns": list(self.categorical_columns),
+            "required_critical_columns": list(self.required_critical_columns),
+            "required_noncritical_columns": list(self.required_noncritical_columns),
+            "optional_debug_columns": list(self.optional_debug_columns),
         }
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "FeatureContract":
+        feature_columns = tuple(str(value) for value in payload.get("feature_columns", []))
+        required_critical = tuple(str(value) for value in payload.get("required_critical_columns", []))
+        required_noncritical = tuple(str(value) for value in payload.get("required_noncritical_columns", []))
         return cls(
-            feature_columns=tuple(str(value) for value in payload.get("feature_columns", [])),
+            feature_columns=feature_columns,
             numeric_columns=tuple(str(value) for value in payload.get("numeric_columns", [])),
             categorical_columns=tuple(str(value) for value in payload.get("categorical_columns", [])),
+            required_critical_columns=required_critical,
+            required_noncritical_columns=required_noncritical or feature_columns,
+            optional_debug_columns=tuple(str(value) for value in payload.get("optional_debug_columns", [])),
         )
 
 
@@ -47,6 +60,7 @@ class RuntimeBundlePaths:
     metadata_dir: Path
     runtime_manifest_path: Path
     feature_contract_path: Path
+    normalization_manifest_path: Path
     calibrator_path: Path
     calibrator_meta_path: Path
     deployment_summary_path: Path
@@ -64,6 +78,7 @@ def build_runtime_bundle_paths(bundle_dir: Path) -> RuntimeBundlePaths:
         metadata_dir=bundle_dir / "metadata",
         runtime_manifest_path=bundle_dir / RUNTIME_MANIFEST_NAME,
         feature_contract_path=bundle_dir / FEATURE_CONTRACT_NAME,
+        normalization_manifest_path=bundle_dir / NORMALIZATION_MANIFEST_NAME,
         calibrator_path=bundle_dir / "calibration" / CALIBRATOR_NAME,
         calibrator_meta_path=bundle_dir / "calibration" / CALIBRATOR_META_NAME,
         deployment_summary_path=bundle_dir / "metadata" / "deployment_summary.json",
@@ -107,6 +122,10 @@ def read_bundle_json(path: Path) -> dict[str, Any]:
 
 def save_feature_contract(path: Path, feature_contract: FeatureContract) -> None:
     write_bundle_json(path, feature_contract.to_dict())
+
+
+def save_normalization_manifest(path: Path, payload: dict[str, Any]) -> None:
+    write_bundle_json(path, payload)
 
 
 def load_feature_contract(path: Path) -> FeatureContract:

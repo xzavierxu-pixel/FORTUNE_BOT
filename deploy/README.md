@@ -360,6 +360,70 @@ cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/restart_pipeline.sh
 ```
 
+## Updating a Running Server
+
+If the workflow is already running and you need to deploy the latest `version3` code, use this order.
+
+Stop timers first so new runs do not start while you update:
+
+```bash
+sudo systemctl stop fortune-bot-submit-window.timer
+sudo systemctl stop fortune-bot-label-analysis.timer
+sudo systemctl stop fortune-bot-healthcheck.timer
+```
+
+If a job is already in progress, stop the active services too:
+
+```bash
+sudo systemctl stop fortune-bot-submit-window.service
+sudo systemctl stop fortune-bot-label-analysis.service
+sudo systemctl stop fortune-bot-healthcheck.service
+```
+
+Confirm nothing is still running:
+
+```bash
+systemctl status fortune-bot-submit-window.service
+systemctl status fortune-bot-label-analysis.service
+systemctl status fortune-bot-healthcheck.service
+```
+
+Pull the latest code from `version3`:
+
+```bash
+cd /opt/fortune_bot
+git fetch origin
+git checkout version3
+git pull --ff-only origin version3
+```
+
+If dependency or startup scripts changed, rebuild the venv before restarting:
+
+```bash
+cd /opt/fortune_bot
+mkdir -p /opt/fortune_bot/.tmp
+export TMPDIR=/opt/fortune_bot/.tmp
+export FORTUNE_BOT_PYTHON_BIN=python3.13
+bash execution_engine/app/scripts/linux/bootstrap_venv.sh
+```
+
+Reload units and restart the workflow:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now fortune-bot-submit-window.timer
+sudo systemctl enable --now fortune-bot-label-analysis.timer
+sudo systemctl enable --now fortune-bot-healthcheck.timer
+```
+
+Verify the timers and watch the first submit run:
+
+```bash
+systemctl list-timers --all | grep fortune-bot
+systemctl status fortune-bot-submit-window.timer
+journalctl -u fortune-bot-submit-window.service -f
+```
+
 ## Logs and Health
 
 View service logs:

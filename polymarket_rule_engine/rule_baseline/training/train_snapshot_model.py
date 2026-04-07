@@ -13,7 +13,7 @@ from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
-from rule_baseline.datasets.snapshots import load_raw_markets, load_research_snapshots
+from rule_baseline.datasets.snapshots import load_online_parity_snapshots, load_raw_markets
 from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
@@ -29,6 +29,8 @@ from rule_baseline.models import (
 )
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
+from rule_baseline.features.annotation_normalization import build_normalization_manifest, normalize_market_annotations
+from rule_baseline.features.snapshot_semantics import FEATURE_SEMANTICS_VERSION, online_feature_columns, split_feature_contract_columns
 
 TRAIN_PRICE_MIN = 0.2
 TRAIN_PRICE_MAX = 0.8
@@ -60,6 +62,7 @@ DROP_COLS = {
     "r_std",
     "e_sample",
     "delta_hours",
+    "delta_hours_bucket",
     "domain_market",
     "market_type_market",
     "domain_domain",
@@ -108,6 +111,7 @@ DROP_COLS = {
     "category_raw_market",
     "category_parsed_market",
     "category_override_flag_market",
+    "category_source",
     "is_date_based",
     "vol_x_sentiment",
     "cat_entertainment_str",
@@ -525,7 +529,7 @@ def main() -> None:
         raise ValueError("Online production artifacts support only target_mode='q'.")
 
     rebuild_canonical_merged()
-    snapshots = load_research_snapshots(
+    snapshots = load_online_parity_snapshots(
         min_price=TRAIN_PRICE_MIN,
         max_price=TRAIN_PRICE_MAX,
         max_rows=args.max_rows,
@@ -543,7 +547,12 @@ def main() -> None:
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
+    normalization_manifest = build_normalization_manifest(market_annotations_raw)
+    market_annotations = normalize_market_annotations(
+        market_annotations_raw,
+        vocabulary_manifest=normalization_manifest,
+    )
     market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
     rules = load_rules(artifact_paths.rules_path)
 
@@ -552,7 +561,8 @@ def main() -> None:
         raise RuntimeError("No feature rows available after rule matching.")
     df_feat = add_training_targets(df_feat)
 
-    feature_columns = [column for column in df_feat.columns if column not in DROP_COLS]
+    feature_columns = online_feature_columns([column for column in df_feat.columns if column not in DROP_COLS])
+    required_critical_columns, required_noncritical_columns = split_feature_contract_columns(feature_columns)
     df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
     df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
 
@@ -568,6 +578,10 @@ def main() -> None:
             df_train=df_train,
             df_valid=df_valid,
             feature_columns=feature_columns,
+            required_critical_columns=required_critical_columns,
+            required_noncritical_columns=required_noncritical_columns,
+            feature_semantics_version=FEATURE_SEMANTICS_VERSION,
+            normalization_manifest=normalization_manifest,
             calibration_mode=args.calibration_mode,
             grouped_calibration_column=args.grouped_calibration_column,
             grouped_calibration_min_rows=args.grouped_calibration_min_rows,
@@ -643,6 +657,8 @@ def main() -> None:
             "grouped_calibration_column": args.grouped_calibration_column,
             "grouped_calibration_min_rows": int(args.grouped_calibration_min_rows),
             "runtime_manifest": model_artifact.runtime_manifest,
+            "feature_semantics_version": model_artifact.runtime_manifest.get("feature_semantics_version"),
+            "normalization_manifest": model_artifact.runtime_manifest.get("normalization_manifest"),
             "calibrator_meta": model_artifact.calibrator_meta,
             "deployment_summary_path": str(artifact_paths.model_bundle_dir / "metadata" / "deployment_summary.json"),
             "full_training_summary_path": str(artifact_paths.full_model_bundle_dir / "metadata" / "deployment_summary.json"),

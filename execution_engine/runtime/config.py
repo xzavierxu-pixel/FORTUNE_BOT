@@ -258,6 +258,7 @@ class PegConfig:
     online_require_two_token_markets: bool
     online_require_rule_coverage: bool
     online_coarse_horizon_slack_hours: float
+    online_limit_ticks_from_best_bid: int
     online_limit_ticks_below_best_bid: int
     online_stream_duration_sec: int
     online_market_ws_url: str
@@ -553,6 +554,7 @@ def load_config() -> PegConfig:
         online_require_two_token_markets=_get_bool("PEG_ONLINE_REQUIRE_TWO_TOKEN_MARKETS", True),
         online_require_rule_coverage=_get_bool("PEG_ONLINE_REQUIRE_RULE_COVERAGE", True),
         online_coarse_horizon_slack_hours=_get_float("PEG_ONLINE_COARSE_HORIZON_SLACK_HOURS", 0.1),
+        online_limit_ticks_from_best_bid=_get_int("PEG_ONLINE_LIMIT_TICKS_FROM_BEST_BID", 1),
         online_limit_ticks_below_best_bid=_get_int("PEG_ONLINE_LIMIT_TICKS_BELOW_BEST_BID", 1),
         online_stream_duration_sec=_get_int("PEG_ONLINE_STREAM_DURATION_SEC", 5),
         online_market_ws_url=_get_env(

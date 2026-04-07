@@ -15,6 +15,8 @@ import sys
 
 from execution_engine.runtime.config import PegConfig
 
+OFFLINE_ALIGNED_HISTORY_LOOKBACK_HOURS = 24.1
+
 
 def _to_float(value: Any) -> float | None:
     try:
@@ -195,6 +197,16 @@ class ClobPriceHistoryClient:
         points.sort(key=lambda point: point.ts)
         self._cache[key] = list(points)
         return points
+
+
+def build_offline_aligned_history_window(
+    *,
+    end_ts: int,
+    lookback_hours: float = OFFLINE_ALIGNED_HISTORY_LOOKBACK_HOURS,
+) -> tuple[int, int]:
+    resolved_end_ts = int(end_ts)
+    resolved_start_ts = int(resolved_end_ts - (float(lookback_hours) * 3600.0))
+    return resolved_start_ts, resolved_end_ts
 
 
 def load_latest_ws_prices(

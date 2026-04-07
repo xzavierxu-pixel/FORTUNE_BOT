@@ -10,6 +10,15 @@ from execution_engine.runtime.config import PegConfig
 from execution_engine.shared.io import append_jsonl
 from execution_engine.shared.time import bj_now_iso, to_iso, utc_now
 
+SUBMISSION_BOUNDARY_STATES = frozenset({"SUBMISSION_REJECTED", "SUBMITTED"})
+
+
+def _retain_candidate_state(cfg: PegConfig, state: str) -> bool:
+    artifact_policy = str(getattr(cfg, "artifact_policy", "minimal") or "minimal").strip().lower()
+    if artifact_policy != "minimal":
+        return True
+    return str(state or "") in SUBMISSION_BOUNDARY_STATES
+
 
 def record_candidate_state(
     cfg: PegConfig,
@@ -22,6 +31,8 @@ def record_candidate_state(
     page_offset: int | None = None,
     extra: Dict[str, Any] | None = None,
 ) -> None:
+    if not _retain_candidate_state(cfg, state):
+        return
     payload = {
         "event_time_utc": to_iso(utc_now()),
         "event_time_bj": bj_now_iso(),
