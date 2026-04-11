@@ -360,7 +360,7 @@ def monitor_order_lifecycle(
     for row in latest_orders.values():
         status = str(row.get("status", "") or "UNKNOWN").upper()
         order_status_counts[status] = order_status_counts.get(status, 0) + 1
-        if status in {"NEW", "SENT", "ACKED", "CANCEL_REQUESTED", "DRY_RUN_SUBMITTED", "PARTIALLY_FILLED"}:
+        if status in {"NEW", "SENT", "ACKED", "DELAYED", "CANCEL_REQUESTED", "DRY_RUN_SUBMITTED", "PARTIALLY_FILLED"}:
             open_order_count += 1
 
     manifest = {

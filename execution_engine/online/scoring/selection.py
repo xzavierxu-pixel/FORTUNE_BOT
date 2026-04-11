@@ -90,6 +90,7 @@ def allocate_candidates(
             else available_capacity
         )
     selected_rows: List[Dict[str, Any]] = []
+    seen_event_ids: set[str] = set()
     ranked = filtered_candidates.copy()
     if "snapshot_time" not in ranked.columns:
         ranked["snapshot_time"] = pd.NaT
@@ -102,6 +103,11 @@ def allocate_candidates(
     for _, row in ranked.iterrows():
         if remaining_cash <= 0:
             break
+        event_id = str(row.get("event_id") or "")
+        if event_id and state.seen_held_event(event_id):
+            continue
+        if event_id and event_id in seen_event_ids:
+            continue
 
         settlement_ts = pd.to_datetime(row.get("closedTime"), utc=True, errors="coerce")
         settlement_key = settlement_ts.date().isoformat() if pd.notna(settlement_ts) else "UNKNOWN"
@@ -121,6 +127,8 @@ def allocate_candidates(
         selected["settlement_key"] = settlement_key
         selected["cluster_key"] = cluster_key
         selected_rows.append(selected)
+        if event_id:
+            seen_event_ids.add(event_id)
         remaining_cash -= stake
 
     return pd.DataFrame(selected_rows)
@@ -132,6 +140,7 @@ def build_selection_decisions(
     cfg: PegConfig,
     *,
     min_growth_score: float = 0.2,
+    held_event_ids: set[str] | None = None,
 ) -> pd.DataFrame:
     if model_outputs.empty:
         return pd.DataFrame()
@@ -147,6 +156,12 @@ def build_selection_decisions(
         ): row
         for row in selected_execution.to_dict(orient="records")
     }
+    held_event_ids = held_event_ids or set()
+    selected_event_ids = {
+        str(row.get("event_id") or "")
+        for row in selected_execution.to_dict(orient="records")
+        if str(row.get("event_id") or "")
+    }
 
     records: List[Dict[str, Any]] = []
     for row in selected_outputs.to_dict(orient="records"):
@@ -159,9 +174,14 @@ def build_selection_decisions(
         picked = selected_lookup.get(key)
         execution_row = picked or row
         growth_score = _to_float(execution_row.get("growth_score"), default=0.0)
+        event_id = str(execution_row.get("event_id") or row.get("event_id") or "")
         selected_for_submission = picked is not None
         if selected_for_submission:
             selection_reason = "allocated"
+        elif event_id and event_id in held_event_ids:
+            selection_reason = "event_position_exists"
+        elif event_id and event_id in selected_event_ids:
+            selection_reason = "event_already_selected"
         elif growth_score <= min_growth_score:
             selection_reason = "growth_below_threshold"
         elif growth_score <= 0:
@@ -174,6 +194,7 @@ def build_selection_decisions(
                 "run_id": cfg.run_id,
                 "batch_id": str(row.get("batch_id") or ""),
                 "market_id": str(row.get("market_id") or ""),
+                "event_id": event_id,
                 "selected_token_id": str(execution_row.get("selected_token_id") or ""),
                 "selected_outcome_label": str(execution_row.get("selected_outcome_label") or ""),
                 "selected_for_submission": selected_for_submission,

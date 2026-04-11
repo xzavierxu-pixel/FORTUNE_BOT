@@ -15,7 +15,7 @@ import json
 import pandas as pd
 
 from execution_engine.online.execution.monitor import OrderMonitorResult, monitor_order_lifecycle
-from execution_engine.online.execution.positions import load_open_market_ids, load_pending_market_ids
+from execution_engine.online.execution.positions import load_held_event_ids, load_open_market_ids, load_pending_market_ids
 from execution_engine.online.execution.submission import SubmitSelectionResult, _empty_result_noop, submit_selected_orders
 from execution_engine.online.pipeline.candidate_queue import CandidateBatch, DirectCandidateQueue
 from execution_engine.online.pipeline.eligibility import apply_structural_coarse_filter
@@ -169,6 +169,18 @@ def _with_batch_metadata(frame: pd.DataFrame, cfg: PegConfig, batch_id: str) -> 
         out["batch_id"] = out["batch_id"].fillna("").astype(str)
         out.loc[out["batch_id"] == "", "batch_id"] = batch_id
     return out
+
+
+def _filter_held_event_candidates(frame: pd.DataFrame, held_event_ids: set[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if frame.empty or not held_event_ids or "event_id" not in frame.columns:
+        return frame.copy(), pd.DataFrame(columns=frame.columns)
+    event_ids = frame["event_id"].fillna("").astype(str)
+    rejected = frame.loc[event_ids.isin(held_event_ids)].copy()
+    eligible = frame.loc[~event_ids.isin(held_event_ids)].copy()
+    if not rejected.empty:
+        rejected["coarse_filter_state"] = "STATE_REJECT"
+        rejected["coarse_filter_reason"] = "EVENT_POSITION_EXISTS"
+    return eligible, rejected
 
 
 def _write_snapshot_score_manifest(
@@ -908,6 +920,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             submit_result=_empty_result_noop(runtime.cfg, status="empty_viable_candidates"),
         )
     state = StateStore(runtime.cfg)
+    held_event_ids = set(state.held_event_ids)
     growth_filtered_candidates = filter_candidates_by_growth_score(
         viable_candidates,
         min_growth_score=float(runtime.cfg.online_min_growth_score),
@@ -928,6 +941,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
         selected,
         runtime.cfg,
         min_growth_score=float(runtime.cfg.online_min_growth_score),
+        held_event_ids=held_event_ids,
     )
     if selection.empty:
         live_state_counts = inference_result.live_filter.state_counts
@@ -983,7 +997,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             attempt_frame = pd.DataFrame()
     if not attempt_frame.empty:
         latest_batch_attempts = attempt_frame[attempt_frame["market_id"].astype(str).isin(batch.frame["market_id"].astype(str))].copy()
-        submitted_mask = latest_batch_attempts["status"].astype(str).str.upper().isin({"DRY_RUN_SUBMITTED", "NEW", "ACKED", "FILLED"})
+        submitted_mask = latest_batch_attempts["status"].astype(str).str.upper().isin({"DRY_RUN_SUBMITTED", "NEW", "ACKED", "DELAYED", "FILLED"})
         record_candidate_frame(
             runtime.cfg,
             latest_batch_attempts[submitted_mask],
@@ -1043,16 +1057,23 @@ def _process_page(
     fetch_latency_ms: float,
 ) -> SubmitWindowPageResult:
     record_candidate_frame(runtime.cfg, page.markets, state="NEW_PAGE_MARKET", page_offset=page.page_offset)
+    held_event_ids = load_held_event_ids(runtime.cfg)
+    event_eligible, event_rejected = _filter_held_event_candidates(page.markets, held_event_ids)
     excluded_market_ids = load_open_market_ids(runtime.cfg) | load_pending_market_ids(runtime.cfg)
     structural = apply_structural_coarse_filter(
         runtime.cfg,
-        page.markets,
+        event_eligible,
         runtime.rules_frame,
         excluded_market_ids=excluded_market_ids,
     )
-    if not structural.rejected.empty:
+    if not structural.rejected.empty or not event_rejected.empty:
+        combined_rejected = (
+            pd.concat([event_rejected, structural.rejected], ignore_index=True)
+            if not event_rejected.empty
+            else structural.rejected
+        )
         structural_rejected = structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STRUCTURAL_REJECT"].copy()
-        state_rejected = structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STATE_REJECT"].copy()
+        state_rejected = combined_rejected[combined_rejected["coarse_filter_state"].astype(str) == "STATE_REJECT"].copy()
         record_candidate_frame(
             runtime.cfg,
             structural_rejected,
@@ -1085,7 +1106,8 @@ def _process_page(
                 len(structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STRUCTURAL_REJECT"])
             ),
             state_reject_count=int(
-                len(structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STATE_REJECT"])
+                len(event_rejected)
+                + len(structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STATE_REJECT"])
             ),
             direct_candidate_count=0,
             submitted_count=0,
@@ -1105,7 +1127,8 @@ def _process_page(
             len(structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STRUCTURAL_REJECT"])
         ),
         state_reject_count=int(
-            len(structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STATE_REJECT"])
+            len(event_rejected)
+            + len(structural.rejected[structural.rejected["coarse_filter_state"].astype(str) == "STATE_REJECT"])
         ),
         direct_candidate_count=int(len(structural.direct_candidates)),
         submitted_count=sum(batch.submit_result.submitted_count for batch in batch_results),

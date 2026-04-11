@@ -40,6 +40,7 @@ class SignalPayload(TypedDict, total=False):
     domain: str
     market_type: str
     source_host: str
+    event_id: str
     position_side: str
     rule_group_key: str
     rule_leaf_id: int
@@ -76,6 +77,7 @@ class DecisionRecord(TypedDict, total=False):
     domain: str
     market_type: str
     source_host: str
+    event_id: str
     position_side: str
     rule_group_key: str
     rule_leaf_id: int
@@ -116,6 +118,7 @@ class OrderRecord(TypedDict, total=False):
     domain: str
     market_type: str
     source_host: str
+    event_id: str
     position_side: str
     rule_group_key: str
     rule_leaf_id: int
@@ -149,6 +152,7 @@ class FillRecord(TypedDict, total=False):
     filled_at_utc: str
     category: str
     domain: str
+    event_id: str
     position_side: str
     token_id: str
     outcome_label: str

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from typing import Dict, List, Literal, Set
+from typing import Any, Dict, List, Literal, Set
+from urllib.parse import urlparse
 
 import pandas as pd
 
+from execution_engine.integrations.providers.gamma_provider import GammaMarketProvider
 from execution_engine.runtime.config import PegConfig
 from execution_engine.online.analysis.label_io import derive_run_meta, load_csv, write_frame
 from execution_engine.shared.io import list_artifact_paths_recursive, read_jsonl_many
@@ -32,6 +35,112 @@ RESOLVED_LABEL_COLUMNS = [
     "resolved_closed_time_utc",
     "label_source_updated_at_utc",
 ]
+
+_MARKET_FETCH_CHUNK_SIZE = 50
+
+
+def _parse_string_list(value: Any) -> List[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if value is None:
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def _parse_float_list(value: Any) -> List[float]:
+    if isinstance(value, list):
+        raw_values = value
+    elif value is None:
+        raw_values = []
+    else:
+        text = str(value).strip()
+        if not text:
+            raw_values = []
+        else:
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = []
+            raw_values = parsed if isinstance(parsed, list) else []
+    parsed_values: List[float] = []
+    for item in raw_values:
+        try:
+            parsed_values.append(float(item))
+        except (TypeError, ValueError):
+            parsed_values.append(float("nan"))
+    return parsed_values
+
+
+def _infer_label_domain(row: Dict[str, Any]) -> str:
+    value = str(row.get("domain") or "").strip()
+    if value:
+        return value
+    resolution_source = str(row.get("resolutionSource") or "").strip()
+    if not resolution_source:
+        return ""
+    parsed = urlparse(resolution_source)
+    return parsed.netloc or parsed.path or ""
+
+
+def _resolve_market_payload(row: Dict[str, Any]) -> Dict[str, str] | None:
+    market_id = str(row.get("market_id") or row.get("id") or "").strip()
+    if not market_id:
+        return None
+
+    outcomes = _parse_string_list(row.get("outcomes"))
+    outcome_prices = _parse_float_list(row.get("outcomePrices"))
+    if not outcomes or len(outcomes) != len(outcome_prices):
+        return None
+
+    best_index = -1
+    best_price = float("-inf")
+    for index, price in enumerate(outcome_prices):
+        if pd.isna(price):
+            continue
+        if price > best_price:
+            best_index = index
+            best_price = price
+    if best_index < 0 or best_price <= 0.6:
+        return None
+
+    return {
+        "market_id": market_id,
+        "resolved_outcome_label": str(outcomes[best_index]),
+        "resolved_outcome_index": str(best_index),
+        "label_category": str(row.get("category") or ""),
+        "label_domain": _infer_label_domain(row),
+        "resolved_closed_time_utc": str(row.get("closedTime") or row.get("updatedAt") or ""),
+        "label_source_updated_at_utc": str(row.get("updatedAt") or ""),
+    }
+
+
+def _fetch_market_payloads(cfg: PegConfig, market_ids: Set[str]) -> List[Dict[str, Any]]:
+    provider = GammaMarketProvider(cfg.gamma_base_url, timeout_sec=cfg.clob_request_timeout_sec)
+    normalized_ids = sorted(str(market_id).strip() for market_id in market_ids if str(market_id).strip())
+    rows: List[Dict[str, Any]] = []
+
+    for start in range(0, len(normalized_ids), _MARKET_FETCH_CHUNK_SIZE):
+        chunk = normalized_ids[start : start + _MARKET_FETCH_CHUNK_SIZE]
+        batch = provider.fetch_markets_by_ids(chunk)
+        batch_by_id = {
+            str(row.get("market_id") or row.get("id") or "").strip(): row
+            for row in batch
+            if isinstance(row, dict) and str(row.get("market_id") or row.get("id") or "").strip()
+        }
+        rows.extend(batch_by_id.values())
+        missing_ids = [market_id for market_id in chunk if market_id not in batch_by_id]
+        for market_id in missing_ids:
+            fallback = provider.fetch_market_by_id(market_id)
+            if isinstance(fallback, dict):
+                rows.append(fallback)
+    return rows
 
 
 def load_orders_submitted(cfg: PegConfig, scope: LabelAnalysisScope = "run") -> pd.DataFrame:
@@ -112,13 +221,6 @@ def load_scanned_market_ids(cfg: PegConfig, scope: LabelAnalysisScope = "run") -
 
 
 def load_resolved_labels(cfg: PegConfig, scope: LabelAnalysisScope = "run") -> pd.DataFrame:
-    source_path = cfg.rule_engine_raw_markets_path
-    if not source_path.exists():
-        empty = pd.DataFrame(columns=RESOLVED_LABEL_COLUMNS)
-        write_frame(cfg.resolved_labels_path, empty)
-        write_frame(cfg.run_label_resolved_labels_path, empty)
-        return empty
-
     scanned_market_ids = load_scanned_market_ids(cfg, scope=scope)
     if not scanned_market_ids:
         empty = pd.DataFrame(columns=RESOLVED_LABEL_COLUMNS)
@@ -126,51 +228,21 @@ def load_resolved_labels(cfg: PegConfig, scope: LabelAnalysisScope = "run") -> p
         write_frame(cfg.run_label_resolved_labels_path, empty)
         return empty
 
-    expected_cols = {
-        "market_id",
-        "winning_outcome_label",
-        "winning_outcome_index",
-        "category",
-        "domain",
-        "closedTime",
-        "batch_fetched_at",
-    }
-    frame = pd.read_csv(source_path, dtype=str, usecols=lambda col: col in expected_cols)
+    payload_rows = _fetch_market_payloads(cfg, scanned_market_ids)
+    resolved_rows = [row for row in (_resolve_market_payload(payload) for payload in payload_rows) if row is not None]
+    frame = pd.DataFrame(resolved_rows, columns=RESOLVED_LABEL_COLUMNS)
     if frame.empty:
+        frame = pd.DataFrame(columns=RESOLVED_LABEL_COLUMNS)
         write_frame(cfg.resolved_labels_path, frame)
         write_frame(cfg.run_label_resolved_labels_path, frame)
         return frame
 
     frame["market_id"] = frame["market_id"].fillna("").astype(str)
-    frame = frame[frame["market_id"].isin(scanned_market_ids)].copy()
-    if frame.empty:
-        frame = pd.DataFrame(columns=RESOLVED_LABEL_COLUMNS)
-        write_frame(cfg.resolved_labels_path, frame)
-        write_frame(cfg.run_label_resolved_labels_path, frame)
-        return frame
-
-    frame = frame.rename(
-        columns={
-            "winning_outcome_label": "resolved_outcome_label",
-            "winning_outcome_index": "resolved_outcome_index",
-            "category": "label_category",
-            "domain": "label_domain",
-            "closedTime": "resolved_closed_time_utc",
-            "batch_fetched_at": "label_source_updated_at_utc",
-        }
-    )
     frame["resolved_outcome_label"] = frame["resolved_outcome_label"].fillna("").astype(str)
     frame = frame[frame["resolved_outcome_label"].str.strip() != ""].copy()
-    if frame.empty:
-        frame = pd.DataFrame(columns=RESOLVED_LABEL_COLUMNS)
-        write_frame(cfg.resolved_labels_path, frame)
-        write_frame(cfg.run_label_resolved_labels_path, frame)
-        return frame
-
-    sort_columns = ["market_id"]
-    if "label_source_updated_at_utc" in frame.columns:
-        sort_columns.append("label_source_updated_at_utc")
-    frame = frame.sort_values(by=sort_columns).drop_duplicates(subset=["market_id"], keep="last").reset_index(drop=True)
+    frame = frame.sort_values(by=["market_id", "label_source_updated_at_utc"]).drop_duplicates(
+        subset=["market_id"], keep="last"
+    ).reset_index(drop=True)
     write_frame(cfg.resolved_labels_path, frame)
     write_frame(cfg.run_label_resolved_labels_path, frame)
     return frame

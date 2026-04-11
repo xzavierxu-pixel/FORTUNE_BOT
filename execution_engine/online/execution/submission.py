@@ -44,7 +44,7 @@ CAPACITY_WAIT_REASONS = {
     "BALANCE_INSUFFICIENT",
 }
 
-SUBMITTED_ORDER_STATUSES = {"DRY_RUN_SUBMITTED", "NEW", "ACKED", "FILLED"}
+SUBMITTED_ORDER_STATUSES = {"DRY_RUN_SUBMITTED", "NEW", "ACKED", "DELAYED", "FILLED"}
 EARLY_SPREAD_MAX = 0.50
 
 
@@ -156,6 +156,7 @@ def _submitted_order_record(
         "run_id": cfg.run_id,
         "batch_id": str(row.get("batch_id") or ""),
         "market_id": str(row.get("market_id") or ""),
+        "event_id": str(row.get("event_id") or order.get("event_id") or ""),
         "token_id": str(row.get("selected_token_id") or ""),
         "outcome_label": str(row.get("selected_outcome_label") or ""),
         "order_attempt_id": str(order.get("order_attempt_id") or ""),

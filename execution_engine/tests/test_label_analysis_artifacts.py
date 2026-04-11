@@ -4,10 +4,11 @@ import unittest
 import warnings
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 
-from execution_engine.online.analysis.label_history import load_scanned_market_ids, load_selection_history
+from execution_engine.online.analysis.label_history import load_resolved_labels, load_scanned_market_ids, load_selection_history
 from execution_engine.online.pipeline.submit_window import (
     _concat_row_frames,
     _persist_batch_training_artifacts,
@@ -16,6 +17,118 @@ from execution_engine.online.pipeline.submit_window import (
 
 
 class LabelAnalysisArtifactsTest(unittest.TestCase):
+    def test_load_resolved_labels_fetches_gamma_markets_by_id_and_uses_price_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            cfg = SimpleNamespace(
+                data_dir=run_dir,
+                runs_root_dir=run_dir.parent,
+                run_id="run-1",
+                run_date="2026-04-11",
+                gamma_base_url="https://gamma-api.polymarket.com",
+                clob_request_timeout_sec=5,
+                resolved_labels_path=run_dir / "shared" / "labels" / "resolved_labels.csv",
+                run_label_resolved_labels_path=run_dir / "label_analysis" / "resolved_labels.csv",
+            )
+
+            snapshot_dir = run_dir / "snapshot_score"
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(
+                [
+                    {"market_id": "1001"},
+                    {"market_id": "1002"},
+                    {"market_id": "1003"},
+                ]
+            ).to_csv(snapshot_dir / "selection_decisions.csv", index=False)
+
+            payload = {
+                "1001": {
+                    "id": "1001",
+                    "outcomes": ["Yes", "No"],
+                    "outcomePrices": [0.91, 0.09],
+                    "category": "SPORTS",
+                    "resolutionSource": "https://nba.com/game",
+                    "closedTime": "2026-04-10T20:00:00Z",
+                    "updatedAt": "2026-04-10T20:05:00Z",
+                },
+                "1002": {
+                    "id": "1002",
+                    "outcomes": "[\"Up\", \"Down\"]",
+                    "outcomePrices": "[0.35, 0.65]",
+                    "category": "CRYPTO",
+                    "resolutionSource": "https://binance.com/en/trade/BTC_USDT",
+                    "closedTime": "2026-04-10T21:00:00Z",
+                    "updatedAt": "2026-04-10T21:05:00Z",
+                },
+                "1003": {
+                    "id": "1003",
+                    "outcomes": ["A", "B"],
+                    "outcomePrices": [0.51, 0.49],
+                    "category": "SPORTS",
+                    "resolutionSource": "https://example.com/market",
+                    "closedTime": "2026-04-10T22:00:00Z",
+                    "updatedAt": "2026-04-10T22:05:00Z",
+                },
+            }
+
+            class StubGammaProvider:
+                def __init__(self, base_url: str, timeout_sec: int = 10) -> None:
+                    self.base_url = base_url
+                    self.timeout_sec = timeout_sec
+
+                def fetch_markets_by_ids(self, market_ids):
+                    return [payload[str(market_id)] for market_id in market_ids if str(market_id) in payload]
+
+                def fetch_market_by_id(self, market_id: str):
+                    return payload.get(str(market_id))
+
+            with patch("execution_engine.online.analysis.label_history.GammaMarketProvider", StubGammaProvider):
+                labels = load_resolved_labels(cfg, scope="run")
+
+            self.assertEqual(set(labels["market_id"].tolist()), {"1001", "1002"})
+            market_1001 = labels[labels["market_id"] == "1001"].iloc[0]
+            market_1002 = labels[labels["market_id"] == "1002"].iloc[0]
+            self.assertEqual(market_1001["resolved_outcome_label"], "Yes")
+            self.assertEqual(market_1001["resolved_outcome_index"], "0")
+            self.assertEqual(market_1001["label_domain"], "nba.com")
+            self.assertEqual(market_1002["resolved_outcome_label"], "Down")
+            self.assertEqual(market_1002["resolved_outcome_index"], "1")
+            self.assertEqual(market_1002["label_domain"], "binance.com")
+            persisted = pd.read_csv(cfg.resolved_labels_path, dtype=str)
+            self.assertEqual(set(persisted["market_id"].tolist()), {"1001", "1002"})
+
+    def test_load_resolved_labels_writes_empty_frame_when_no_scanned_markets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_dir = Path(tmpdir)
+            cfg = SimpleNamespace(
+                data_dir=run_dir,
+                runs_root_dir=run_dir.parent,
+                run_id="run-1",
+                run_date="2026-04-11",
+                gamma_base_url="https://gamma-api.polymarket.com",
+                clob_request_timeout_sec=5,
+                resolved_labels_path=run_dir / "shared" / "labels" / "resolved_labels.csv",
+                run_label_resolved_labels_path=run_dir / "label_analysis" / "resolved_labels.csv",
+            )
+
+            labels = load_resolved_labels(cfg, scope="run")
+
+            self.assertTrue(labels.empty)
+            self.assertTrue(cfg.resolved_labels_path.exists())
+            persisted = pd.read_csv(cfg.resolved_labels_path, dtype=str)
+            self.assertEqual(
+                persisted.columns.tolist(),
+                [
+                    "market_id",
+                    "resolved_outcome_label",
+                    "resolved_outcome_index",
+                    "label_category",
+                    "label_domain",
+                    "resolved_closed_time_utc",
+                    "label_source_updated_at_utc",
+                ],
+            )
+
     def test_concat_row_frames_avoids_future_warning_for_all_na_columns(self) -> None:
         existing = pd.DataFrame([{"market_id": "market-1", "feature_a": "1.0"}])
         incoming = pd.DataFrame([{"market_id": "market-2", "feature_b": None}])

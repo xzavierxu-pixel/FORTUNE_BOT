@@ -554,7 +554,7 @@ def load_config() -> PegConfig:
         online_require_two_token_markets=_get_bool("PEG_ONLINE_REQUIRE_TWO_TOKEN_MARKETS", True),
         online_require_rule_coverage=_get_bool("PEG_ONLINE_REQUIRE_RULE_COVERAGE", True),
         online_coarse_horizon_slack_hours=_get_float("PEG_ONLINE_COARSE_HORIZON_SLACK_HOURS", 0.1),
-        online_limit_ticks_from_best_bid=_get_int("PEG_ONLINE_LIMIT_TICKS_FROM_BEST_BID", 1),
+        online_limit_ticks_from_best_bid=_get_int("PEG_ONLINE_LIMIT_TICKS_FROM_BEST_BID", 2),
         online_limit_ticks_below_best_bid=_get_int("PEG_ONLINE_LIMIT_TICKS_BELOW_BEST_BID", 1),
         online_stream_duration_sec=_get_int("PEG_ONLINE_STREAM_DURATION_SEC", 5),
         online_market_ws_url=_get_env(
@@ -573,7 +573,7 @@ def load_config() -> PegConfig:
         online_token_state_max_age_sec=_get_int("PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC", 7200),
         online_capacity_wait_poll_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_POLL_SEC", 30),
         online_price_cap_safety_buffer=_get_float("PEG_ONLINE_PRICE_CAP_SAFETY_BUFFER", 0.01),
-        online_min_growth_score=_get_float("PEG_MIN_GROWTH_SCORE", 0.2),
+        online_min_growth_score=_get_float("PEG_MIN_GROWTH_SCORE", 0.0),
         online_deferred_artifacts_enabled=_get_bool("PEG_ONLINE_DEFERRED_ARTIFACTS_ENABLED", False),
         submit_window_run_monitor_after=_get_bool("PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER", True),
         submit_window_monitor_sleep_sec=_get_int("PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC", 0),

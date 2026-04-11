@@ -355,10 +355,14 @@ cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/start_pipeline.sh
 ```
 
+Use this when you want to bring the live pipeline online on a server that already has the repo, env file, and venv in place. The script loads `/etc/fortune-bot/fortune_bot.env`, ensures `.venv-execution` exists unless you pass `--skip-bootstrap`, stops any currently running pipeline services, reloads `systemd`, and starts the three timers.
+
 ```bash
 cd /opt/fortune_bot
 bash execution_engine/app/scripts/linux/restart_pipeline.sh
 ```
+
+Use this when you want to refresh a running deployment after a code or environment change. The script first stops the active pipeline, optionally pulls the latest git changes unless you pass `--no-pull`, reloads the env file, rebuilds the venv unless you pass `--skip-bootstrap`, then restarts the three timers. This is the safer choice after updating the repo or runtime dependencies.
 
 ## Updating a Running Server
 

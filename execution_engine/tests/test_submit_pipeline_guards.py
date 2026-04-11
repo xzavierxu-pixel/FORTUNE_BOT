@@ -9,8 +9,9 @@ import pandas as pd
 from execution_engine.online.execution.live_quote import quote_from_clob
 from execution_engine.online.execution.pricing import build_submission_signal
 from execution_engine.online.scoring.live import run_live_inference
-from execution_engine.online.scoring.selection import allocate_candidates
+from execution_engine.online.scoring.selection import allocate_candidates, build_selection_decisions
 from execution_engine.online.pipeline.eligibility import apply_live_price_filter, apply_structural_coarse_filter
+from execution_engine.integrations.trading.state_machine import can_transition
 from execution_engine.runtime.validation import check_basic_risk
 from execution_engine.shared.io import read_jsonl, write_jsonl
 from execution_engine.shared.time import to_iso, utc_now
@@ -115,6 +116,39 @@ class SubmitPricingGuardsTest(unittest.TestCase):
         self.assertEqual(signal["best_bid_at_submit"], 0.29)
         self.assertEqual(signal["best_ask_at_submit"], 0.51)
         self.assertEqual(signal["source_host"], "feed.example.com")
+
+    def test_build_submission_signal_uses_two_ticks_from_best_bid(self) -> None:
+        cfg = SimpleNamespace(
+            run_id="test-run",
+            online_limit_ticks_from_best_bid=2,
+            online_limit_ticks_below_best_bid=1,
+            online_price_cap_safety_buffer=0.01,
+            max_trade_amount_usdc=5.0,
+            order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
+        )
+        row = {
+            "selected_token_id": "token-1",
+            "market_id": "market-1",
+            "stake_usdc": 2.0,
+            "q_pred": 0.95,
+            "price": 0.4,
+        }
+        quote = {
+            "best_bid": 0.29,
+            "best_ask": 0.51,
+            "tick_size": 0.01,
+            "min_order_size": 5.0,
+            "mid": 0.4,
+        }
+
+        signal, reason = build_submission_signal(row, quote, cfg, fee_rate=0.001)
+
+        self.assertEqual(reason, "OK")
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal["price_limit"], 0.31)
 
     def test_build_submission_signal_allows_exact_half_point_spread(self) -> None:
         cfg = SimpleNamespace(
@@ -666,7 +700,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             max_trade_amount_usdc=50.0,
             online_min_growth_score=0.2,
         )
-        state = SimpleNamespace(net_exposure_usdc=0.0)
+        state = SimpleNamespace(net_exposure_usdc=0.0, seen_held_event=lambda event_id: False)
         bt_cfg = SimpleNamespace(max_position_f=1.0)
 
         class StubBalanceProvider:
@@ -711,7 +745,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             max_trade_amount_usdc=50.0,
             online_min_growth_score=0.2,
         )
-        state = SimpleNamespace(net_exposure_usdc=0.0)
+        state = SimpleNamespace(net_exposure_usdc=0.0, seen_held_event=lambda event_id: False)
         bt_cfg = SimpleNamespace(max_position_f=1.0)
 
         class StubBalanceProvider:
@@ -722,6 +756,169 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             result = allocate_candidates(candidates, cfg, state, bt_cfg)
 
         self.assertEqual(list(result["market_id"]), ["market-2"])
+
+    def test_allocate_candidates_allows_positive_growth_when_threshold_is_zero(self) -> None:
+        candidates = pd.DataFrame(
+            [
+                {
+                    "market_id": "market-1",
+                    "snapshot_time": "2026-03-31T00:00:00Z",
+                    "edge_final": 0.8,
+                    "f_exec": 0.5,
+                    "growth_score": 0.0,
+                    "source_host": "example.com",
+                    "category": "SPORTS",
+                    "closedTime": "2026-04-01T00:00:00Z",
+                },
+                {
+                    "market_id": "market-2",
+                    "snapshot_time": "2026-03-31T00:01:00Z",
+                    "edge_final": 0.7,
+                    "f_exec": 0.5,
+                    "growth_score": 0.01,
+                    "source_host": "example.com",
+                    "category": "SPORTS",
+                    "closedTime": "2026-04-01T00:00:00Z",
+                },
+            ]
+        )
+        cfg = SimpleNamespace(
+            dry_run=False,
+            clob_enabled=True,
+            initial_bankroll_usdc=10.0,
+            max_trade_amount_usdc=50.0,
+            online_min_growth_score=0.0,
+        )
+        state = SimpleNamespace(net_exposure_usdc=0.0, seen_held_event=lambda event_id: False)
+        bt_cfg = SimpleNamespace(max_position_f=1.0)
+
+        class StubBalanceProvider:
+            def get_available_usdc(self) -> float:
+                return 40.0
+
+        with patch("execution_engine.online.scoring.selection.build_balance_provider", return_value=StubBalanceProvider()):
+            result = allocate_candidates(candidates, cfg, state, bt_cfg)
+
+        self.assertEqual(list(result["market_id"]), ["market-2"])
+
+    def test_allocate_candidates_skips_held_and_duplicate_event_ids(self) -> None:
+        candidates = pd.DataFrame(
+            [
+                {
+                    "market_id": "market-held",
+                    "event_id": "event-held",
+                    "snapshot_time": "2026-03-31T00:00:00Z",
+                    "edge_final": 0.9,
+                    "f_exec": 0.4,
+                    "growth_score": 0.5,
+                    "source_host": "example.com",
+                    "category": "SPORTS",
+                    "closedTime": "2026-04-01T00:00:00Z",
+                },
+                {
+                    "market_id": "market-1",
+                    "event_id": "event-1",
+                    "snapshot_time": "2026-03-31T00:01:00Z",
+                    "edge_final": 0.8,
+                    "f_exec": 0.4,
+                    "growth_score": 0.5,
+                    "source_host": "example.com",
+                    "category": "SPORTS",
+                    "closedTime": "2026-04-01T00:00:00Z",
+                },
+                {
+                    "market_id": "market-2",
+                    "event_id": "event-1",
+                    "snapshot_time": "2026-03-31T00:02:00Z",
+                    "edge_final": 0.7,
+                    "f_exec": 0.4,
+                    "growth_score": 0.5,
+                    "source_host": "example.com",
+                    "category": "SPORTS",
+                    "closedTime": "2026-04-01T00:00:00Z",
+                },
+            ]
+        )
+        cfg = SimpleNamespace(
+            dry_run=False,
+            clob_enabled=True,
+            initial_bankroll_usdc=10.0,
+            max_trade_amount_usdc=50.0,
+            online_min_growth_score=0.0,
+        )
+        state = SimpleNamespace(
+            net_exposure_usdc=0.0,
+            seen_held_event=lambda event_id: event_id == "event-held",
+        )
+        bt_cfg = SimpleNamespace(max_position_f=1.0)
+
+        class StubBalanceProvider:
+            def get_available_usdc(self) -> float:
+                return 40.0
+
+        with patch("execution_engine.online.scoring.selection.build_balance_provider", return_value=StubBalanceProvider()):
+            result = allocate_candidates(candidates, cfg, state, bt_cfg)
+
+        self.assertEqual(list(result["market_id"]), ["market-1"])
+
+    def test_build_selection_decisions_marks_event_position_and_duplicate_reasons(self) -> None:
+        model_outputs = pd.DataFrame(
+            [
+                {
+                    "market_id": "market-held",
+                    "event_id": "event-held",
+                    "snapshot_time": "2026-03-31T00:00:00Z",
+                    "rule_group_key": "group",
+                    "rule_leaf_id": 1,
+                    "growth_score": 0.4,
+                },
+                {
+                    "market_id": "market-picked",
+                    "event_id": "event-picked",
+                    "snapshot_time": "2026-03-31T00:01:00Z",
+                    "rule_group_key": "group",
+                    "rule_leaf_id": 2,
+                    "growth_score": 0.4,
+                },
+                {
+                    "market_id": "market-dup",
+                    "event_id": "event-picked",
+                    "snapshot_time": "2026-03-31T00:02:00Z",
+                    "rule_group_key": "group",
+                    "rule_leaf_id": 3,
+                    "growth_score": 0.4,
+                },
+            ]
+        )
+        selected = pd.DataFrame(
+            [
+                {
+                    "market_id": "market-picked",
+                    "event_id": "event-picked",
+                    "snapshot_time": "2026-03-31T00:01:00Z",
+                    "rule_group_key": "group",
+                    "rule_leaf_id": 2,
+                    "selected_token_id": "token-picked",
+                    "selected_outcome_label": "Yes",
+                    "stake_usdc": 1.0,
+                    "growth_score": 0.4,
+                }
+            ]
+        )
+        cfg = SimpleNamespace(run_id="test-run")
+
+        decisions = build_selection_decisions(
+            model_outputs,
+            selected,
+            cfg,
+            min_growth_score=0.0,
+            held_event_ids={"event-held"},
+        )
+
+        reasons = dict(zip(decisions["market_id"], decisions["selection_reason"]))
+        self.assertEqual(reasons["market-held"], "event_position_exists")
+        self.assertEqual(reasons["market-picked"], "allocated")
+        self.assertEqual(reasons["market-dup"], "event_already_selected")
 
 
 class LiveInferenceGrowthColumnsTest(unittest.TestCase):
@@ -927,6 +1124,11 @@ class RiskGuardBehaviorTest(unittest.TestCase):
 
         self.assertTrue(ok)
         self.assertEqual(reason, "OK")
+
+
+class OrderStateMachineTest(unittest.TestCase):
+    def test_delayed_can_transition_to_cancel_requested(self) -> None:
+        self.assertTrue(can_transition("DELAYED", "CANCEL_REQUESTED"))
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ PENDING_ORDER_STATUSES = {
     "NEW",
     "SENT",
     "ACKED",
+    "DELAYED",
     "PARTIALLY_FILLED",
     "CANCEL_REQUESTED",
     "DRY_RUN_SUBMITTED",
@@ -90,6 +91,7 @@ def _build_open_positions_from_fills(fills: List[Dict[str, Any]]) -> List[Dict[s
                 "outcome_label": str(fill.get("outcome_label", "") or ""),
                 "category": str(fill.get("category", "") or ""),
                 "domain": str(fill.get("domain", "") or ""),
+                "event_id": str(fill.get("event_id", "") or ""),
                 "entry_run_id": str(fill.get("run_id", "") or ""),
                 "entry_order_attempt_id": str(fill.get("order_attempt_id", "") or ""),
                 "opened_at_utc": str(fill.get("filled_at_utc", "") or ""),
@@ -133,6 +135,7 @@ def _build_open_positions_from_fills(fills: List[Dict[str, Any]]) -> List[Dict[s
                 "outcome_label": str(position.get("outcome_label") or ""),
                 "category": str(position.get("category") or ""),
                 "domain": str(position.get("domain") or ""),
+                "event_id": str(position.get("event_id") or ""),
                 "entry_run_id": str(position.get("entry_run_id") or ""),
                 "entry_order_attempt_id": str(position.get("entry_order_attempt_id") or ""),
                 "entry_price": float(position.get("entry_price", 0.0) or 0.0),
@@ -173,6 +176,13 @@ def refresh_market_state_cache(cfg: PegConfig) -> Dict[str, Any]:
             if str(fill.get("market_id", "") or "")
         }
     )
+    held_event_ids = sorted(
+        {
+            str(row.get("event_id", "") or "")
+            for row in positions
+            if str(row.get("event_id", "") or "")
+        }
+    )
     order_status_counts: Dict[str, int] = {}
     for row in latest_orders.values():
         status = str(row.get("status", "") or "UNKNOWN").upper()
@@ -189,6 +199,7 @@ def refresh_market_state_cache(cfg: PegConfig) -> Dict[str, Any]:
         "open_market_count": int(len(open_market_ids)),
         "pending_market_ids": pending_market_ids,
         "open_market_ids": open_market_ids,
+        "held_event_ids": held_event_ids,
         "order_status_counts": dict(sorted(order_status_counts.items())),
     }
     _write_market_state_cache(cfg, payload)
@@ -220,6 +231,12 @@ def load_open_market_ids(cfg: PegConfig) -> Set[str]:
 def load_pending_market_ids(cfg: PegConfig) -> Set[str]:
     payload = _load_or_refresh_market_state(cfg)
     values = payload.get("pending_market_ids", [])
+    return {str(value) for value in values if str(value)}
+
+
+def load_held_event_ids(cfg: PegConfig) -> Set[str]:
+    payload = _load_or_refresh_market_state(cfg)
+    values = payload.get("held_event_ids", [])
     return {str(value) for value in values if str(value)}
 
 

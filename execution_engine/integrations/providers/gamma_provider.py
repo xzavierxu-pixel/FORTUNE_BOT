@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 import json
 import urllib.parse
 import urllib.request
@@ -25,6 +25,38 @@ class GammaMarketProvider:
         if isinstance(data, dict) and "data" in data:
             return data["data"] or []
         return []
+
+    def fetch_markets_by_ids(self, market_ids: Iterable[str]) -> List[Dict[str, Any]]:
+        ids = [str(value).strip() for value in market_ids if str(value).strip()]
+        if not ids:
+            return []
+        params = urllib.parse.urlencode({"id": ids}, doseq=True)
+        url = f"{self.base_url}/markets?{params}"
+        request = urllib.request.Request(url, headers={"User-Agent": "PEG/0.3"})
+        with urllib.request.urlopen(request, timeout=self.timeout_sec) as resp:
+            payload = resp.read().decode("utf-8")
+        data = json.loads(payload)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "data" in data:
+            return data["data"] or []
+        return []
+
+    def fetch_market_by_id(self, market_id: str) -> Dict[str, Any] | None:
+        normalized = str(market_id).strip()
+        if not normalized:
+            return None
+        url = f"{self.base_url}/markets/{normalized}"
+        request = urllib.request.Request(url, headers={"User-Agent": "PEG/0.3"})
+        with urllib.request.urlopen(request, timeout=self.timeout_sec) as resp:
+            payload = resp.read().decode("utf-8")
+        data = json.loads(payload)
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, list) and data:
+            first = data[0]
+            return first if isinstance(first, dict) else None
+        return None
 
     def _fetch_paginated(self, endpoint: str, query: Dict[str, str], max_records: int) -> List[Dict[str, Any]]:
         records: List[Dict[str, Any]] = []

@@ -85,7 +85,7 @@ def order_status_family(status: str) -> str:
         return "canceled"
     if normalized in {"REJECTED", "ERROR"}:
         return "failed"
-    if normalized in {"NEW", "SENT", "ACKED", "CANCEL_REQUESTED", "DRY_RUN_SUBMITTED"}:
+    if normalized in {"NEW", "SENT", "ACKED", "DELAYED", "CANCEL_REQUESTED", "DRY_RUN_SUBMITTED"}:
         return "open"
     return "other"
 

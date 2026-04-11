@@ -57,6 +57,7 @@ def build_decision_from_signal(
         "domain": signal.get("domain"),
         "market_type": signal.get("market_type"),
         "source_host": signal.get("source_host"),
+        "event_id": signal.get("event_id"),
         "position_side": signal.get("position_side"),
         "rule_group_key": signal.get("rule_group_key"),
         "rule_leaf_id": signal.get("rule_leaf_id"),

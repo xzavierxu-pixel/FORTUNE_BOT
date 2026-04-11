@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from execution_engine.runtime.config import PegConfig
 from .clob_client import ClobClient, NullClobClient
@@ -14,6 +14,8 @@ from execution_engine.runtime.models import DecisionRecord, FillRecord, OrderRec
 from execution_engine.shared.logger import log_structured
 from execution_engine.shared.metrics import increment_metric
 from execution_engine.shared.time import parse_utc, to_iso, utc_now
+
+
 def compute_effective_expiration_seconds(signal: Dict[str, object], cfg: PegConfig) -> Tuple[int, Optional[str]]:
     now = utc_now()
     valid_until = signal.get("valid_until_utc")
@@ -165,6 +167,79 @@ def _extract_field(row: Dict[str, object], names: List[str]) -> Optional[object]
     return None
 
 
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_result_payload(result: Dict[str, object]) -> Dict[str, object]:
+    raw = result.get("raw")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _build_immediate_fill_record(order: OrderRecord, result: Dict[str, object], fallback_size: float) -> FillRecord | None:
+    status = str(order.get("status", "") or "").upper()
+    if status not in {"FILLED", "MATCHED"}:
+        return None
+
+    raw = _coerce_result_payload(result)
+    price = _to_float(
+        _extract_field(raw, ["price", "filled_price", "avgPrice", "avg_price"]),
+        _to_float(order.get("price_limit")),
+    )
+    shares = _to_float(
+        _extract_field(raw, ["size", "filled_size", "filledSize", "matched_size", "quantity", "qty"]),
+        fallback_size,
+    )
+    amount_usdc = _to_float(
+        _extract_field(raw, ["amount_usdc", "filled_amount", "filledAmount"]),
+        price * shares if price > 0 and shares > 0 else _to_float(order.get("amount_usdc")),
+    )
+    if shares <= 0 and price > 0 and amount_usdc > 0:
+        shares = amount_usdc / price
+    if amount_usdc <= 0 and price > 0 and shares > 0:
+        amount_usdc = price * shares
+    if amount_usdc <= 0 or shares <= 0:
+        return None
+
+    trade_id = _extract_field(raw, ["trade_id", "tradeId", "match_id", "matchId", "id"])
+    filled_at = _extract_field(raw, ["timestamp", "time", "created_at", "updated_at"])
+    clob_order_id = str(order.get("clob_order_id") or result.get("order_id") or "")
+    return {
+        "fill_id": str(trade_id) if trade_id else f"immediate:{str(order.get('order_attempt_id') or clob_order_id or to_iso(utc_now()))}",
+        "order_attempt_id": order.get("order_attempt_id"),
+        "clob_order_id": clob_order_id,
+        "decision_id": order.get("decision_id"),
+        "run_id": order.get("run_id"),
+        "market_id": order.get("market_id"),
+        "outcome_index": int(order.get("outcome_index", 0) or 0),
+        "action": order.get("action"),
+        "amount_usdc": amount_usdc,
+        "price": price,
+        "shares": shares,
+        "pnl_usdc": 0.0,
+        "filled_at_utc": str(filled_at or order.get("updated_at_utc") or to_iso(utc_now())),
+        "category": order.get("category"),
+        "domain": order.get("domain"),
+        "event_id": order.get("event_id"),
+        "position_side": order.get("position_side"),
+        "token_id": order.get("token_id"),
+        "outcome_label": order.get("outcome_label"),
+        "execution_phase": order.get("execution_phase", "ENTRY"),
+        "parent_order_attempt_id": order.get("parent_order_attempt_id"),
+    }
+
+
+def _record_fill(cfg: PegConfig, fill_record: FillRecord) -> None:
+    append_jsonl(cfg.fills_path, fill_record)
+    log_structured(cfg.logs_path, {"type": "fill", **fill_record})
+    increment_metric(cfg.metrics_path, "trades_filled", 1)
+
+
 def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
     from execution_engine.online.execution.positions import load_open_position_rows, rebuild_open_positions_ledger
 
@@ -187,10 +262,14 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
 
     fills = client.get_fills()
     seen_fill_ids = set()
+    existing_filled_by_order: Dict[str, float] = {}
     for fill in read_jsonl_many(list_run_artifact_paths(cfg.runs_root_dir, "fills.jsonl")):
         fill_id = fill.get("fill_id")
         if fill_id:
             seen_fill_ids.add(str(fill_id))
+        attempt_id = str(fill.get("order_attempt_id", "") or "")
+        if attempt_id:
+            existing_filled_by_order[attempt_id] = existing_filled_by_order.get(attempt_id, 0.0) + _to_float(fill.get("amount_usdc"))
 
     fills_by_order: Dict[str, float] = {}
     order_by_clob_id: Dict[str, OrderRecord] = {}
@@ -219,6 +298,9 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
             continue
 
         order = order_by_clob_id[str(clob_order_id)]
+        attempt_id = str(order.get("order_attempt_id", "") or "")
+        if attempt_id and existing_filled_by_order.get(attempt_id, 0.0) >= _to_float(order.get("amount_usdc")) - 1e-9:
+            continue
         price_val = _extract_field(trade, ["price", "p", "rate"])
         size_val = _extract_field(trade, ["size", "amount", "qty", "quantity"])
         try:
@@ -260,18 +342,16 @@ def reconcile(cfg: PegConfig, clob_client: Optional[ClobClient] = None) -> None:
             "filled_at_utc": str(_extract_field(trade, ["timestamp", "time", "created_at"]) or to_iso(utc_now())),
             "category": order.get("category"),
             "domain": order.get("domain"),
+            "event_id": order.get("event_id"),
             "position_side": order.get("position_side"),
             "token_id": order.get("token_id"),
             "outcome_label": order.get("outcome_label"),
             "execution_phase": order.get("execution_phase", "ENTRY"),
             "parent_order_attempt_id": order.get("parent_order_attempt_id"),
         }
-        append_jsonl(cfg.fills_path, fill_record)
-        log_structured(cfg.logs_path, {"type": "fill", **fill_record})
-        increment_metric(cfg.metrics_path, "trades_filled", 1)
-        fills_by_order[str(order.get("order_attempt_id"))] = fills_by_order.get(
-            str(order.get("order_attempt_id")), 0.0
-        ) + amount_usdc
+        _record_fill(cfg, fill_record)
+        existing_filled_by_order[attempt_id] = existing_filled_by_order.get(attempt_id, 0.0) + amount_usdc
+        fills_by_order[attempt_id] = fills_by_order.get(attempt_id, 0.0) + amount_usdc
 
     for order in latest_orders.values():
         status = str(order.get("status", "")).upper()
@@ -334,6 +414,7 @@ def submit_order(
         "domain": decision.get("domain"),
         "market_type": decision.get("market_type"),
         "source_host": decision.get("source_host"),
+        "event_id": decision.get("event_id"),
         "position_side": decision.get("position_side"),
         "rule_group_key": decision.get("rule_group_key"),
         "rule_leaf_id": decision.get("rule_leaf_id"),
@@ -386,4 +467,7 @@ def submit_order(
     order["updated_at_utc"] = to_iso(utc_now())
     if result.get("order_id"):
         order["clob_order_id"] = result.get("order_id")
+    immediate_fill = _build_immediate_fill_record(order, result, size)
+    if immediate_fill is not None:
+        _record_fill(cfg, immediate_fill)
     return order

@@ -38,6 +38,7 @@ def _empty_state_payload(cfg: PegConfig) -> Dict[str, Any]:
         "orders_root_dir": str(cfg.runs_root_dir),
         "decision_last_seen": {},
         "market_action_filled": [],
+        "held_event_ids": [],
         "daily_order_count": 0,
         "open_orders_count": 0,
         "net_exposure_usdc": 0.0,
@@ -85,6 +86,7 @@ def build_state_snapshot(cfg: PegConfig) -> Dict[str, Any]:
 
     decision_last_seen: Dict[str, str] = {}
     market_action_filled: Set[str] = set()
+    held_event_ids: Set[str] = set()
     daily_order_count = 0
     open_orders_count = 0
     net_exposure_usdc = 0.0
@@ -129,10 +131,13 @@ def build_state_snapshot(cfg: PegConfig) -> Dict[str, Any]:
         outcome_index = int(position.get("outcome_index", 0) or 0)
         amount_usdc = float(position.get("filled_amount_usdc", 0.0) or 0.0)
         category = str(position.get("category", "")).strip()
+        event_id = str(position.get("event_id", "") or "")
         if market_id:
             key = _market_action_key(market_id, outcome_index, "BUY")
             market_action_filled.add(key)
             market_exposure_usdc[key] = market_exposure_usdc.get(key, 0.0) + amount_usdc
+        if event_id:
+            held_event_ids.add(event_id)
         if category:
             category_exposure_usdc[category] = category_exposure_usdc.get(category, 0.0) + amount_usdc
         net_exposure_usdc += amount_usdc
@@ -159,6 +164,7 @@ def build_state_snapshot(cfg: PegConfig) -> Dict[str, Any]:
     payload = {
         "decision_last_seen": dict(sorted(decision_last_seen.items())),
         "market_action_filled": sorted(market_action_filled),
+        "held_event_ids": sorted(held_event_ids),
         "daily_order_count": int(daily_order_count),
         "open_orders_count": int(open_orders_count),
         "net_exposure_usdc": float(net_exposure_usdc),
@@ -181,6 +187,7 @@ class StateStore:
         self.decision_ids: Set[str] = set()
         self.decision_last_seen: Dict[str, object] = {}
         self.market_action_filled: Set[str] = set()
+        self.held_event_ids: Set[str] = set()
         self.daily_order_count = 0
         self.open_orders_count = 0
         self.net_exposure_usdc = 0.0
@@ -208,6 +215,11 @@ class StateStore:
             for value in (payload.get("market_action_filled", []) or [])
             if str(value)
         }
+        self.held_event_ids = {
+            str(value)
+            for value in (payload.get("held_event_ids", []) or [])
+            if str(value)
+        }
         self.daily_order_count = int(payload.get("daily_order_count", 0) or 0)
         self.open_orders_count = int(payload.get("open_orders_count", 0) or 0)
         self.net_exposure_usdc = float(payload.get("net_exposure_usdc", 0.0) or 0.0)
@@ -228,6 +240,7 @@ class StateStore:
                 for key, value in sorted(self.decision_last_seen.items())
             },
             "market_action_filled": sorted(self.market_action_filled),
+            "held_event_ids": sorted(self.held_event_ids),
             "daily_order_count": int(self.daily_order_count),
             "open_orders_count": int(self.open_orders_count),
             "net_exposure_usdc": float(self.net_exposure_usdc),
@@ -289,6 +302,9 @@ class StateStore:
     def seen_market_action(self, market_id: str, outcome_index: int, action: str) -> bool:
         key = _market_action_key(market_id, outcome_index, action)
         return key in self.market_action_filled
+
+    def seen_held_event(self, event_id: str) -> bool:
+        return bool(event_id) and event_id in self.held_event_ids
 
     def record_decision(self, record: Dict[str, object]) -> None:
         append_jsonl(self.cfg.decisions_path, record)
