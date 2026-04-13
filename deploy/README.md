@@ -101,8 +101,9 @@ Fresh clone:
 
 ```bash
 cd /opt
-sudo git clone --branch version3 --single-branch https://github.com/xzavierxu-pixel/FORTUNE_BOT.git fortune_bot
+sudo mkdir -p /opt/fortune_bot
 sudo chown -R "$USER":"$USER" /opt/fortune_bot
+git clone --branch version3 --single-branch git@github.com:xzavierxu-pixel/FORTUNE_BOT.git /opt/fortune_bot
 cd /opt/fortune_bot
 ```
 
