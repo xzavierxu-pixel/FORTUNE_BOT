@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from rule_baseline.training.history_features import HISTORY_ARTIFACT_FILENAMES
 from rule_baseline.models.runtime_bundle import (
     FULL_TRAINING_BUNDLE_DIRNAME,
     RUNTIME_BUNDLE_DIRNAME,
@@ -29,6 +30,10 @@ class ArtifactPaths:
     rules_path: Path
     rule_report_path: Path
     rule_json_path: Path
+    history_feature_paths: dict[str, Path]
+    group_serving_features_path: Path
+    fine_serving_features_path: Path
+    serving_feature_defaults_path: Path
     model_path: Path
     model_bundle_dir: Path
     full_model_bundle_dir: Path
@@ -39,6 +44,8 @@ class ArtifactPaths:
     rule_training_summary_path: Path
     model_training_summary_path: Path
     rule_funnel_summary_path: Path
+    snapshot_training_audit_json_path: Path
+    snapshot_training_audit_markdown_path: Path
 
     def ensure_dirs(self) -> None:
         bundle_paths = build_runtime_bundle_paths(self.model_bundle_dir)
@@ -79,6 +86,13 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         rules_path=root / "edge" / "trading_rules.csv",
         rule_report_path=root / "naive_rules" / "naive_all_leaves_report.csv",
         rule_json_path=root / "naive_rules" / "naive_trading_rules.json",
+        history_feature_paths={
+            level_name: root / "edge" / filename
+            for level_name, filename in HISTORY_ARTIFACT_FILENAMES.items()
+        },
+        group_serving_features_path=root / "edge" / "group_serving_features.parquet",
+        fine_serving_features_path=root / "edge" / "fine_serving_features.parquet",
+        serving_feature_defaults_path=root / "edge" / "serving_feature_defaults.json",
         model_path=root / "models" / RUNTIME_BUNDLE_DIRNAME,
         model_bundle_dir=root / "models" / RUNTIME_BUNDLE_DIRNAME,
         full_model_bundle_dir=root / "models" / FULL_TRAINING_BUNDLE_DIRNAME,
@@ -89,6 +103,8 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         rule_training_summary_path=root / "metadata" / "rule_training_summary.json",
         model_training_summary_path=root / "metadata" / "model_training_summary.json",
         rule_funnel_summary_path=root / "audit" / "rule_funnel_summary.json",
+        snapshot_training_audit_json_path=root / "audit" / "snapshot_training_funnel.json",
+        snapshot_training_audit_markdown_path=root / "audit" / "snapshot_training_funnel.md",
     )
     paths.ensure_dirs()
     return paths

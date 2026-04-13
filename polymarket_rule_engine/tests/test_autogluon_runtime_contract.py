@@ -16,26 +16,31 @@ from rule_baseline.training.train_rules_naive_output_rule import evaluate_rule_c
 
 
 class UnifiedRuleLogicTest(unittest.TestCase):
-    def test_online_rule_selection_uses_same_full_history_semantics_as_offline(self) -> None:
+    def test_rule_candidate_uses_group_level_keep_status_and_exact_horizon_hour(self) -> None:
         row = pd.Series(
             {
                 "domain": "example.com",
                 "category": "SPORTS",
                 "market_type": "moneyline",
+                "group_key": "example.com|SPORTS|moneyline",
                 "price_bin": "0.40-0.50",
-                "horizon_bin": "1-2h",
-                "n_all": 30,
-                "wins_all": 24,
-                "p_mean_all": 0.45,
-                "edge_std_mean_all": 0.2,
-                "n_train": 5,
-                "wins_train": 4,
-                "p_mean_train": 0.45,
-                "edge_std_mean_train": 0.2,
-                "n_valid": 4,
-                "wins_valid": 3,
-                "p_mean_valid": 0.45,
-                "edge_std_mean_valid": 0.2,
+                "horizon_hours": 2,
+                "n_full": 30,
+                "wins_full": 24,
+                "p_full": 0.45,
+                "edge_std_full_raw": 0.2,
+                "group_unique_markets": 30,
+                "group_snapshot_rows": 30,
+                "global_total_unique_markets": 300,
+                "global_total_snapshot_rows": 1800,
+                "group_market_share_global": 0.1,
+                "group_snapshot_share_global": 0.0166666667,
+                "group_median_logloss": 0.62,
+                "group_median_brier": 0.21,
+                "global_group_logloss_q25": 0.31,
+                "global_group_brier_q25": 0.09,
+                "group_direction": 1,
+                "selection_status": "keep",
             }
         )
 
@@ -53,6 +58,8 @@ class UnifiedRuleLogicTest(unittest.TestCase):
             float(online_rule["edge_lower_bound_full"]),
             places=6,
         )
+        self.assertEqual(int(offline_rule["horizon_hours"]), 2)
+        self.assertEqual((offline_rule["h_min"], offline_rule["h_max"]), (1.5, 3.0))
 
 
 class ArtifactBundlePathTest(unittest.TestCase):
@@ -62,6 +69,10 @@ class ArtifactBundlePathTest(unittest.TestCase):
         self.assertEqual(paths.model_bundle_dir, paths.model_path)
         self.assertEqual(paths.full_model_bundle_dir.name, "q_model_bundle_full")
         self.assertEqual(paths.legacy_model_path.name, "ensemble_snapshot_q.pkl")
+        self.assertIn("global", paths.history_feature_paths)
+        self.assertIn("full_group", paths.history_feature_paths)
+        self.assertEqual(paths.history_feature_paths["global"].name, "history_features_global.parquet")
+        self.assertEqual(paths.history_feature_paths["full_group"].name, "history_features_full_group.parquet")
 
 
 class AutoGluonMetadataContractTest(unittest.TestCase):

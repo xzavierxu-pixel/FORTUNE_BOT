@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -17,6 +18,12 @@ from rule_baseline.datasets.snapshots import load_online_parity_snapshots, load_
 from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
+from rule_baseline.features.serving import (
+    ServingFeatureBundle,
+    attach_serving_features,
+    build_price_bin,
+    round_horizon_hours,
+)
 from rule_baseline.models import (
     SUPPORTED_AUTOGLOUON_CALIBRATION_MODES,
     fit_autogluon_q_model,
@@ -31,6 +38,10 @@ from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 from rule_baseline.features.annotation_normalization import build_normalization_manifest, normalize_market_annotations
 from rule_baseline.features.snapshot_semantics import FEATURE_SEMANTICS_VERSION, online_feature_columns, split_feature_contract_columns
+from rule_baseline.training.snapshot_training_audit import (
+    build_snapshot_training_audit_payload,
+    write_snapshot_training_audit,
+)
 
 TRAIN_PRICE_MIN = 0.2
 TRAIN_PRICE_MAX = 0.8
@@ -204,6 +215,9 @@ PREDICTOR_HYPERPARAMETER_PROFILES: dict[str, dict[str, object]] = {
         "CAT": {},
         "LR": {},
     },
+    "lr_only": {
+        "LR": {},
+    },
     "gbm_compact": {
         "GBM": {
             "num_boost_round": 300,
@@ -272,6 +286,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--recent-days", type=int, default=None)
+    parser.add_argument("--random-sample-rows", type=int, default=None)
+    parser.add_argument("--random-sample-seed", type=int, default=21)
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--history-start", type=str, default=None)
     parser.add_argument("--predictor-presets", type=str, default=DEFAULT_SNAPSHOT_PRESETS)
@@ -325,6 +341,47 @@ def load_rules(path) -> pd.DataFrame:
     return rules
 
 
+def _build_rule_lookup_frame(rules: pd.DataFrame) -> pd.DataFrame:
+    lookup = rules.copy()
+    lookup["price_bin"] = (
+        pd.to_numeric(lookup["price_min"], errors="coerce").map(lambda value: f"{float(value):.2f}")
+        + "-"
+        + pd.to_numeric(lookup["price_max"], errors="coerce").map(lambda value: f"{float(value):.2f}")
+    )
+    lookup["rounded_horizon_hours"] = round_horizon_hours(lookup["horizon_hours"])
+    return lookup[
+        [
+            "domain",
+            "category",
+            "market_type",
+            "price_bin",
+            "rounded_horizon_hours",
+            "leaf_id",
+            "price_min",
+            "price_max",
+            "h_min",
+            "h_max",
+            "horizon_hours",
+            "q_full",
+            "p_full",
+            "edge_full",
+            "edge_std_full",
+            "edge_lower_bound_full",
+            "rule_score",
+            "direction",
+            "group_key",
+            "n_full",
+            "group_unique_markets",
+            "group_snapshot_rows",
+            "group_median_logloss",
+            "group_median_brier",
+            "global_group_logloss_q25",
+            "global_group_brier_q25",
+            "group_decision",
+        ]
+    ].copy()
+
+
 def match_snapshots_to_rules(
     snapshots: pd.DataFrame,
     market_annotations: pd.DataFrame,
@@ -351,42 +408,22 @@ def match_snapshots_to_rules(
     context["domain"] = context.get("domain", "UNKNOWN").fillna("UNKNOWN").astype(str)
     context["category"] = context.get("category", "UNKNOWN").fillna("UNKNOWN").astype(str)
     context["market_type"] = context.get("market_type", "UNKNOWN").fillna("UNKNOWN").astype(str)
+    context["price_bin"] = build_price_bin(context["price"])
+    context["rounded_horizon_hours"] = round_horizon_hours(context["horizon_hours"])
+    rule_lookup = _build_rule_lookup_frame(rules)
 
-    merged = context.merge(
-        rules[
-            [
-                "domain",
-                "category",
-                "market_type",
-                "leaf_id",
-                "price_min",
-                "price_max",
-                "h_min",
-                "h_max",
-                "q_full",
-                "rule_score",
-                "direction",
-                "group_key",
-            ]
-        ],
-        on=["domain", "category", "market_type"],
+    matched = context.merge(
+        rule_lookup,
+        on=["domain", "category", "market_type", "price_bin", "rounded_horizon_hours"],
         how="inner",
+        suffixes=("", "_rule"),
     )
-    if merged.empty:
-        return pd.DataFrame()
-
-    mask = (
-        (merged["price"] >= merged["price_min"] - 1e-9)
-        & (merged["price"] <= merged["price_max"] + 1e-9)
-        & (merged["horizon_hours"] >= merged["h_min"])
-        & (merged["horizon_hours"] <= merged["h_max"])
-    )
-    matched = merged[mask].copy()
     if matched.empty:
         return pd.DataFrame()
 
     matched = matched.sort_values(["market_id", "snapshot_time", "rule_score"], ascending=[True, True, False])
-    return matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
+    matched = matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
+    return matched.drop(columns=["rounded_horizon_hours"], errors="ignore")
 
 
 def build_feature_table(
@@ -394,11 +431,35 @@ def build_feature_table(
     market_feature_cache: pd.DataFrame,
     market_annotations: pd.DataFrame,
     rules: pd.DataFrame,
+    serving_feature_bundle: ServingFeatureBundle | None = None,
 ) -> pd.DataFrame:
     matched = match_snapshots_to_rules(snapshots, market_annotations, rules)
     if matched.empty:
         return pd.DataFrame()
+    if serving_feature_bundle is not None:
+        matched = attach_serving_features(
+            matched,
+            serving_feature_bundle,
+            price_column="price",
+            horizon_column="horizon_hours",
+        )
     return preprocess_features(matched, market_feature_cache)
+
+
+def load_serving_feature_bundle(artifact_paths) -> ServingFeatureBundle | None:
+    if not artifact_paths.group_serving_features_path.exists():
+        return None
+    if not artifact_paths.fine_serving_features_path.exists():
+        return None
+    if not artifact_paths.serving_feature_defaults_path.exists():
+        return None
+    with artifact_paths.serving_feature_defaults_path.open("r", encoding="utf-8") as file:
+        defaults_manifest = json.load(file)
+    return ServingFeatureBundle(
+        fine_features=pd.read_parquet(artifact_paths.fine_serving_features_path),
+        group_features=pd.read_parquet(artifact_paths.group_serving_features_path),
+        defaults_manifest=defaults_manifest,
+    )
 
 
 def probability_metrics(df: pd.DataFrame) -> dict[str, float | int | None]:
@@ -529,20 +590,22 @@ def main() -> None:
         raise ValueError("Online production artifacts support only target_mode='q'.")
 
     rebuild_canonical_merged()
-    snapshots = load_online_parity_snapshots(
+    snapshots_loaded = load_online_parity_snapshots(
         min_price=TRAIN_PRICE_MIN,
         max_price=TRAIN_PRICE_MAX,
         max_rows=args.max_rows,
         recent_days=args.recent_days,
     )
-    snapshots = snapshots[snapshots["quality_pass"]].copy()
+    snapshots_quality = snapshots_loaded[snapshots_loaded["quality_pass"]].copy()
+    if args.random_sample_rows is not None and args.random_sample_rows > 0 and len(snapshots_quality) > args.random_sample_rows:
+        snapshots_quality = snapshots_quality.sample(args.random_sample_rows, random_state=args.random_sample_seed).copy()
     split = compute_artifact_split(
-        snapshots,
+        snapshots_quality,
         artifact_mode=args.artifact_mode,
         reference_end=args.split_reference_end,
         history_start_override=args.history_start,
     )
-    snapshots = assign_dataset_split(snapshots, split)
+    snapshots = assign_dataset_split(snapshots_quality, split)
     allowed_splits = ["train", "valid", "test"] if args.artifact_mode == "offline" else ["train", "valid"]
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
 
@@ -555,8 +618,15 @@ def main() -> None:
     )
     market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
     rules = load_rules(artifact_paths.rules_path)
+    serving_feature_bundle = load_serving_feature_bundle(artifact_paths)
 
-    df_feat = build_feature_table(snapshots, market_feature_cache, market_annotations, rules)
+    df_feat = build_feature_table(
+        snapshots,
+        market_feature_cache,
+        market_annotations,
+        rules,
+        serving_feature_bundle=serving_feature_bundle,
+    )
     if df_feat.empty:
         raise RuntimeError("No feature rows available after rule matching.")
     df_feat = add_training_targets(df_feat)
@@ -565,6 +635,27 @@ def main() -> None:
     required_critical_columns, required_noncritical_columns = split_feature_contract_columns(feature_columns)
     df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
     df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
+
+    audit_payload = build_snapshot_training_audit_payload(
+        artifact_paths=artifact_paths,
+        snapshots_loaded=snapshots_loaded,
+        snapshots_quality=snapshots_quality,
+        snapshots_assigned=snapshots,
+        df_feat=df_feat,
+        feature_columns=feature_columns,
+        rules_df=rules,
+        sample_config={
+            "max_rows": args.max_rows,
+            "recent_days": args.recent_days,
+            "random_sample_rows": args.random_sample_rows,
+            "random_sample_seed": args.random_sample_seed,
+            "split_reference_end": args.split_reference_end,
+            "history_start": args.history_start,
+            "target_mode": args.target_mode,
+            "predictor_hyperparameters_profile": args.predictor_hyperparameters_profile,
+        },
+    )
+    write_snapshot_training_audit(artifact_paths=artifact_paths, payload=audit_payload)
 
     if df_train.empty:
         raise RuntimeError("Empty training split.")
@@ -673,6 +764,17 @@ def main() -> None:
         artifact_paths.model_training_summary_path,
         training_summary,
     )
+    audit_payload = build_snapshot_training_audit_payload(
+        artifact_paths=artifact_paths,
+        snapshots_loaded=snapshots_loaded,
+        snapshots_quality=snapshots_quality,
+        snapshots_assigned=snapshots,
+        df_feat=df_feat,
+        feature_columns=feature_columns,
+        rules_df=rules,
+        sample_config=audit_payload["sample_config"],
+    )
+    write_snapshot_training_audit(artifact_paths=artifact_paths, payload=audit_payload)
 
     print(f"[INFO] Saved published predictions to {artifact_paths.predictions_path}")
     print(f"[INFO] Saved full diagnostic predictions to {artifact_paths.predictions_full_path}")

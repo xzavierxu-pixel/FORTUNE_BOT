@@ -61,6 +61,27 @@ REQUIRED_RULE_COLUMNS = {
 }
 
 
+def _build_horizon_match_mask(
+    merged: pd.DataFrame,
+    *,
+    candidate_horizon_column: str,
+) -> pd.Series:
+    candidate_horizon = pd.to_numeric(merged[candidate_horizon_column], errors="coerce")
+    rule_horizon_column = None
+    if "horizon_hours_rule" in merged.columns:
+        rule_horizon_column = "horizon_hours_rule"
+    elif "rule_horizon_hours" in merged.columns:
+        rule_horizon_column = "rule_horizon_hours"
+    if rule_horizon_column is not None and candidate_horizon_column == "horizon_hours":
+        rule_horizon = pd.to_numeric(merged[rule_horizon_column], errors="coerce")
+        exact_mask = candidate_horizon.eq(rule_horizon)
+        if exact_mask.any():
+            return exact_mask.fillna(False)
+    h_min = pd.to_numeric(merged["h_min"], errors="coerce")
+    h_max = pd.to_numeric(merged["h_max"], errors="coerce")
+    return ((candidate_horizon >= h_min) & (candidate_horizon <= h_max)).fillna(False)
+
+
 @dataclass
 class BacktestConfig:
     initial_bankroll: float = INITIAL_BANKROLL
@@ -113,6 +134,7 @@ def load_rules(path) -> pd.DataFrame:
         "price_max",
         "h_min",
         "h_max",
+        "horizon_hours",
         "q_full",
         "p_full",
         "edge_lower_bound_full",
@@ -186,28 +208,39 @@ def select_top_rules(rules: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
 
 
 def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
+    rule_columns = [
+        "group_key",
+        "domain",
+        "category",
+        "market_type",
+        "leaf_id",
+        "price_min",
+        "price_max",
+        "h_min",
+        "h_max",
+        "horizon_hours",
+        "rule_score",
+        "direction",
+        "q_full",
+        "p_full",
+        "edge_full",
+        "edge_std_full",
+        "edge_lower_bound_full",
+        "n_full",
+        "group_unique_markets",
+        "group_snapshot_rows",
+        "group_median_logloss",
+        "group_median_brier",
+        "global_group_logloss_q25",
+        "global_group_brier_q25",
+        "group_decision",
+    ]
+    available_rule_columns = [column for column in rule_columns if column in rules.columns]
     merged = snapshots.merge(
-        rules[
-            [
-                "group_key",
-                "domain",
-                "category",
-                "market_type",
-                "leaf_id",
-                "price_min",
-                "price_max",
-                "h_min",
-                "h_max",
-                "rule_score",
-                "direction",
-                "q_full",
-                "edge_full",
-                "edge_std_full",
-                "edge_lower_bound_full",
-            ]
-        ],
+        rules[available_rule_columns],
         on=["domain", "category", "market_type"],
         how="inner",
+        suffixes=("", "_rule"),
     )
     if merged.empty:
         return pd.DataFrame()
@@ -215,9 +248,8 @@ def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
     mask = (
         (merged["price"] >= merged["price_min"] - 1e-9)
         & (merged["price"] <= merged["price_max"] + 1e-9)
-        & (merged["horizon_hours"] >= merged["h_min"])
-        & (merged["horizon_hours"] <= merged["h_max"])
     )
+    mask &= _build_horizon_match_mask(merged, candidate_horizon_column="horizon_hours")
     matched = merged[mask].copy()
     if matched.empty:
         return pd.DataFrame()

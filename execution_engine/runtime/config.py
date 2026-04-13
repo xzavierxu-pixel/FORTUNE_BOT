@@ -100,6 +100,25 @@ def _resolve_rule_engine_defaults() -> tuple[Path, Path]:
     return default_rules_path, default_model_path
 
 
+def _resolve_rule_engine_serving_defaults() -> tuple[Path, Path, Path]:
+    default_group_serving_path = _first_existing_path(
+        [
+            RULE_ENGINE_OFFLINE_DIR / "edge" / "group_serving_features.parquet",
+        ]
+    )
+    default_fine_serving_path = _first_existing_path(
+        [
+            RULE_ENGINE_OFFLINE_DIR / "edge" / "fine_serving_features.parquet",
+        ]
+    )
+    default_serving_defaults_path = _first_existing_path(
+        [
+            RULE_ENGINE_OFFLINE_DIR / "edge" / "serving_feature_defaults.json",
+        ]
+    )
+    return default_group_serving_path, default_fine_serving_path, default_serving_defaults_path
+
+
 @dataclass(frozen=True)
 class PegConfig:
     # Runtime
@@ -243,6 +262,9 @@ class PegConfig:
     rule_engine_dir: Path
     rule_engine_rules_path: Path
     rule_engine_model_path: Path
+    rule_engine_group_serving_features_path: Path
+    rule_engine_fine_serving_features_path: Path
+    rule_engine_serving_defaults_path: Path
     rule_engine_raw_markets_path: Path
     rule_engine_max_markets: int
     rule_engine_page_size: int
@@ -324,6 +346,11 @@ def load_config() -> PegConfig:
     shared_labels_dir = directories["shared_labels_dir"]
 
     default_rules_path, default_model_path = _resolve_rule_engine_defaults()
+    (
+        default_group_serving_path,
+        default_fine_serving_path,
+        default_serving_defaults_path,
+    ) = _resolve_rule_engine_serving_defaults()
 
     cfg = PegConfig(
         dry_run=dry_run,
@@ -535,6 +562,15 @@ def load_config() -> PegConfig:
         ),
         rule_engine_model_path=Path(
             _get_env("PEG_RULE_ENGINE_MODEL_PATH", str(default_model_path))
+        ),
+        rule_engine_group_serving_features_path=Path(
+            _get_env("PEG_RULE_ENGINE_GROUP_SERVING_FEATURES_PATH", str(default_group_serving_path))
+        ),
+        rule_engine_fine_serving_features_path=Path(
+            _get_env("PEG_RULE_ENGINE_FINE_SERVING_FEATURES_PATH", str(default_fine_serving_path))
+        ),
+        rule_engine_serving_defaults_path=Path(
+            _get_env("PEG_RULE_ENGINE_SERVING_DEFAULTS_PATH", str(default_serving_defaults_path))
         ),
         rule_engine_raw_markets_path=Path(
             _get_env(

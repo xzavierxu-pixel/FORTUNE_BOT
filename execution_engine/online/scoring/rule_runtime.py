@@ -164,6 +164,7 @@ def prepare_feature_inputs(
     matched: pd.DataFrame,
     market_feature_cache: pd.DataFrame,
     preprocess_features: Any,
+    serving_feature_bundle: Any | None = None,
 ) -> pd.DataFrame:
     if matched.empty:
         return pd.DataFrame()
@@ -171,6 +172,15 @@ def prepare_feature_inputs(
     model_input["leaf_id"] = model_input["rule_leaf_id"]
     model_input["direction"] = model_input["rule_direction"]
     model_input["group_key"] = model_input["rule_group_key"]
+    if serving_feature_bundle is not None:
+        from rule_baseline.features.serving import attach_serving_features  # type: ignore
+
+        model_input = attach_serving_features(
+            model_input,
+            serving_feature_bundle,
+            price_column="price",
+            horizon_column="horizon_hours",
+        )
     return preprocess_features(model_input, market_feature_cache)
 
 
@@ -198,6 +208,7 @@ def evaluate_matched_snapshots(
         rule_hits,
         market_feature_cache,
         runtime.preprocess_features,
+        None,
     )
 
     resolved_payload = payload if payload is not None else load_model_payload(cfg)

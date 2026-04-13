@@ -367,6 +367,7 @@ def run_live_inference(
         rule_hits,
         market_feature_cache,
         runtime.rule_runtime.preprocess_features,
+        runtime.serving_feature_bundle,
     )
     try:
         feature_inputs = _ensure_feature_contract(feature_inputs, runtime.feature_contract)

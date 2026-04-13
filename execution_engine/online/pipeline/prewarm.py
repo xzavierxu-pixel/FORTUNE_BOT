@@ -15,7 +15,13 @@ from execution_engine.online.scoring.rule_runtime import (
     load_model_payload,
     load_rule_runtime,
 )
-from execution_engine.online.scoring.rules import RuleHorizonProfile, load_rule_horizon_profile, load_rules_frame
+from execution_engine.online.scoring.rules import (
+    RuleHorizonProfile,
+    load_rule_horizon_profile,
+    load_rules_frame,
+    load_serving_feature_bundle,
+)
+from rule_baseline.features.serving import ServingFeatureBundle
 from execution_engine.runtime.config import PegConfig
 
 
@@ -24,6 +30,7 @@ class OnlineRuntimeContainer:
     cfg: PegConfig
     rule_runtime: RuleRuntime
     rules_frame: pd.DataFrame
+    serving_feature_bundle: ServingFeatureBundle
     horizon_profile: RuleHorizonProfile
     model_payload: Any
     feature_contract: FeatureContract
@@ -40,6 +47,7 @@ def build_runtime_container(cfg: PegConfig) -> OnlineRuntimeContainer:
         cfg=cfg,
         rule_runtime=load_rule_runtime(cfg),
         rules_frame=rules_frame,
+        serving_feature_bundle=load_serving_feature_bundle(cfg),
         horizon_profile=load_rule_horizon_profile(cfg),
         model_payload=model_payload,
         feature_contract=get_feature_contract(model_payload),

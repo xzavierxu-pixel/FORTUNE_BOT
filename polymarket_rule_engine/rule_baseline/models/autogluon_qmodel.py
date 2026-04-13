@@ -73,10 +73,17 @@ def _coerce_feature_frame(
 ) -> pd.DataFrame:
     out = df.loc[:, feature_columns].copy()
     for column in numeric_columns:
-        out[column] = pd.to_numeric(out[column], errors="coerce").fillna(0.0)
+        out[column] = (
+            pd.to_numeric(out[column], errors="coerce")
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+            .astype(np.float32)
+        )
     for column in categorical_columns:
         out[column] = out[column].astype("string").fillna("UNKNOWN").astype(object)
-    return out
+    # Rebuild the frame once after column-wise coercion to avoid highly fragmented
+    # pandas internals causing large temporary allocations inside AutoGluon.
+    return pd.DataFrame(out, copy=True)
 
 
 def _extract_group_values(df: pd.DataFrame, group_column: str) -> pd.Series:
@@ -108,11 +115,12 @@ class AutoGluonQTrainingResult:
         for column in self.feature_contract.feature_columns:
             if column not in aligned.columns:
                 aligned[column] = "UNKNOWN" if column in categorical else 0.0
-        aligned = aligned.loc[:, list(self.feature_contract.feature_columns)].copy()
-        for column in self.feature_contract.numeric_columns:
-            aligned[column] = pd.to_numeric(aligned[column], errors="coerce").fillna(0.0)
-        for column in self.feature_contract.categorical_columns:
-            aligned[column] = aligned[column].astype("string").fillna("UNKNOWN").astype(object)
+        aligned = _coerce_feature_frame(
+            aligned,
+            list(self.feature_contract.feature_columns),
+            list(self.feature_contract.numeric_columns),
+            list(self.feature_contract.categorical_columns),
+        )
 
         raw_prob = np.asarray(
             self.predictor.predict_proba(aligned, as_pandas=False, as_multiclass=False),
