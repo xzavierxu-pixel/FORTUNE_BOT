@@ -145,6 +145,49 @@ def load_top_rules_frame(cfg: PegConfig) -> pd.DataFrame:
     return load_rules_frame(cfg)
 
 
+def score_frame_group_rule_coverage(frame: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
+    out = frame.copy().reset_index(drop=True)
+    if out.empty:
+        out["group_rule_coverage_match_count"] = pd.Series(dtype="int64")
+        out["group_rule_coverage_exact_match"] = pd.Series(dtype=bool)
+        out["group_rule_key"] = pd.Series(dtype="object")
+        return out
+
+    out["group_rule_coverage_match_count"] = 0
+    out["group_rule_coverage_exact_match"] = False
+    out["group_rule_key"] = (
+        out["domain"].astype(str) + "|" + out["category"].astype(str) + "|" + out["market_type"].astype(str)
+    )
+    if rules.empty:
+        return out
+
+    required_rule_cols = ["domain", "category", "market_type"]
+    if any(column not in rules.columns for column in required_rule_cols):
+        return out
+
+    family_keys = (
+        rules[required_rule_cols]
+        .dropna()
+        .assign(
+            group_rule_key=lambda df: (
+                df["domain"].astype(str) + "|" + df["category"].astype(str) + "|" + df["market_type"].astype(str)
+            )
+        )
+        ["group_rule_key"]
+        .value_counts()
+    )
+    out["group_rule_coverage_match_count"] = out["group_rule_key"].map(family_keys).fillna(0).astype(int)
+    out["group_rule_coverage_exact_match"] = out["group_rule_coverage_match_count"] > 0
+    return out
+
+
+def filter_frame_by_group_rule_coverage(frame: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
+    scored = score_frame_group_rule_coverage(frame, rules)
+    if scored.empty or "group_rule_coverage_exact_match" not in scored.columns:
+        return scored
+    return scored[scored["group_rule_coverage_exact_match"]].copy().reset_index(drop=True)
+
+
 def load_rule_horizon_profile(cfg: PegConfig) -> RuleHorizonProfile:
     cache_key = str(cfg.rule_engine_rules_path.resolve())
     cached = _HORIZON_PROFILE_CACHE.get(cache_key)
@@ -263,3 +306,67 @@ def filter_frame_by_rule_coverage(
     if scored.empty or "rule_coverage_exact_match" not in scored.columns:
         return scored
     return scored[scored["rule_coverage_exact_match"]].copy().reset_index(drop=True)
+
+
+def build_group_default_rule_hits(
+    frame: pd.DataFrame,
+    bundle: ServingFeatureBundle,
+) -> pd.DataFrame:
+    out = frame.copy().reset_index(drop=True)
+    if out.empty:
+        return out
+    group_features = bundle.group_features.copy()
+    if group_features.empty or "group_key" not in group_features.columns:
+        return pd.DataFrame(columns=list(out.columns))
+
+    out["rule_group_key"] = out["domain"].astype(str) + "|" + out["category"].astype(str) + "|" + out["market_type"].astype(str)
+    merge_columns = [
+        "group_key",
+        "group_decision",
+        "group_default_leaf_id",
+        "group_default_direction",
+        "group_default_q_full",
+        "group_default_p_full",
+        "group_default_edge_full",
+        "group_default_edge_std_full",
+        "group_default_edge_lower_bound_full",
+        "group_default_rule_score",
+        "group_default_n_full",
+        "group_unique_markets",
+        "group_snapshot_rows",
+        "group_median_logloss",
+        "group_median_brier",
+        "global_group_logloss_q25",
+        "global_group_brier_q25",
+    ]
+    available_columns = [column for column in merge_columns if column in group_features.columns]
+    merged = out.merge(
+        group_features[available_columns],
+        left_on="rule_group_key",
+        right_on="group_key",
+        how="left",
+    )
+    if "group_decision" in merged.columns:
+        merged = merged[merged["group_decision"].astype(str).eq("keep")].copy()
+    merged = merged[merged["group_default_direction"].notna()].copy() if "group_default_direction" in merged.columns else merged.iloc[0:0].copy()
+    if merged.empty:
+        return merged
+
+    def numeric_series(column: str) -> pd.Series:
+        if column in merged.columns:
+            return pd.to_numeric(merged[column], errors="coerce")
+        return pd.Series(pd.NA, index=merged.index, dtype="float64")
+
+    merged["rule_leaf_id"] = -1
+    merged["rule_leaf_key"] = merged.get("group_default_leaf_id", pd.Series("", index=merged.index)).astype(str)
+    merged["rule_direction"] = numeric_series("group_default_direction").fillna(0).astype(int)
+    merged["q_full"] = numeric_series("group_default_q_full")
+    merged["p_full"] = numeric_series("group_default_p_full")
+    merged["edge_full"] = numeric_series("group_default_edge_full")
+    merged["edge_std_full"] = numeric_series("group_default_edge_std_full")
+    merged["edge_lower_bound_full"] = numeric_series("group_default_edge_lower_bound_full")
+    merged["rule_score"] = numeric_series("group_default_rule_score")
+    merged["n_full"] = numeric_series("group_default_n_full")
+    merged["rule_match_priority"] = 0
+    merged["rule_match_reason"] = "group_default_fallback"
+    return merged.reset_index(drop=True)

@@ -28,6 +28,10 @@ def _read_json(path: Path) -> dict:
         return json.load(file)
 
 
+def _docs_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / "docs"
+
+
 def _resolve_feature_contract_path(artifact_paths) -> Path:
     candidates = [
         artifact_paths.model_bundle_dir / "feature_contract.json",
@@ -48,6 +52,18 @@ def _render_rows(title: str, rows: list[dict], keys: list[str]) -> list[str]:
     for row in rows:
         rendered = ", ".join(f"{key}={row.get(key)}" for key in keys)
         lines.append(f"- {rendered}")
+    lines.append("")
+    return lines
+
+
+def _render_column_group(title: str, columns: list[str]) -> list[str]:
+    lines = [f"### {title}", ""]
+    if not columns:
+        lines.append("- none")
+        lines.append("")
+        return lines
+    for column in columns:
+        lines.append(f"- {column}")
     lines.append("")
     return lines
 
@@ -164,6 +180,124 @@ def build_consistency_report_markdown(
     lines.extend(_render_rows("Missing Contract Columns In Assets", [{"column": value} for value in missing_in_assets], ["column"]))
     lines.extend(_render_rows("Unused Asset Columns Not In Contract", [{"column": value} for value in unused_asset_columns], ["column"]))
     lines.extend(_render_rows("Fine Columns Missing Fallback Defaults", [{"column": value} for value in missing_fallback_entries], ["column"]))
+    return "\n".join(lines).strip() + "\n"
+
+
+RULE_PRIOR_COLUMNS = {
+    "leaf_id",
+    "direction",
+    "q_full",
+    "p_full",
+    "edge_full",
+    "edge_std_full",
+    "edge_lower_bound_full",
+    "rule_score",
+    "n_full",
+    "rule_price_center",
+    "rule_price_width",
+    "rule_horizon_center",
+    "rule_horizon_width",
+    "rule_edge_buffer",
+    "rule_confidence_ratio",
+    "rule_support_log1p",
+    "rule_snapshot_support_log1p",
+}
+KEY_COLUMNS = {"group_key", "domain", "category", "market_type", "price_bin", "horizon_hours"}
+
+
+def _categorize_serving_columns(columns: list[str], asset_name: str) -> dict[str, list[str]]:
+    categories: dict[str, list[str]] = {
+        "keys": [],
+        "rule_prior": [],
+        "group_safe_serving": [],
+        "fine_only": [],
+        "fallback_defaults": [],
+        "fallback_indicators": [],
+        "generated_interactions": [],
+        "other": [],
+    }
+    for column in columns:
+        if column in KEY_COLUMNS:
+            categories["keys"].append(column)
+        elif column.startswith("group_default_"):
+            categories["fallback_defaults"].append(column)
+        elif column.endswith("_match_found") or "fallback" in column:
+            categories["fallback_indicators"].append(column)
+        elif column.startswith(("hist_price_x_", "price_x_", "rule_edge_minus_", "rule_score_minus_")):
+            categories["generated_interactions"].append(column)
+        elif column in RULE_PRIOR_COLUMNS:
+            categories["rule_prior"].append(column)
+        elif asset_name == "fine_serving_features.parquet":
+            categories["fine_only"].append(column)
+        elif asset_name == "group_serving_features.parquet":
+            categories["group_safe_serving"].append(column)
+        elif asset_name == "trading_rules.csv":
+            categories["rule_prior"].append(column)
+        else:
+            categories["other"].append(column)
+    return {name: values for name, values in categories.items() if values}
+
+
+def build_schema_reference_markdown(
+    *,
+    rules_df: pd.DataFrame,
+    group_features: pd.DataFrame,
+    fine_features: pd.DataFrame,
+    defaults_manifest: dict,
+) -> str:
+    assets = [
+        ("trading_rules.csv", rules_df),
+        ("group_serving_features.parquet", group_features),
+        ("fine_serving_features.parquet", fine_features),
+    ]
+    lines = [
+        "# GroupKey Serving Schema Reference",
+        "",
+        "## Assets",
+        "",
+        "- trading_rules.csv: static rule-prior asset used for coarse rule attachment and serving prior values",
+        "- group_serving_features.parquet: group-level serving-safe table keyed by `group_key`",
+        "- fine_serving_features.parquet: fine lookup table keyed by `group_key + price_bin + horizon_hours`",
+        "- serving_feature_defaults.json: fallback/default manifest for fine serving columns",
+        "",
+    ]
+    for asset_name, frame in assets:
+        lines.extend(
+            [
+                f"## {asset_name}",
+                "",
+                f"- rows={len(frame)}",
+                f"- columns={len(frame.columns)}",
+                "",
+            ]
+        )
+        categorized = _categorize_serving_columns(list(frame.columns), asset_name)
+        for category_name in [
+            "keys",
+            "rule_prior",
+            "group_safe_serving",
+            "fine_only",
+            "fallback_defaults",
+            "fallback_indicators",
+            "generated_interactions",
+            "other",
+        ]:
+            lines.extend(_render_column_group(category_name, categorized.get(category_name, [])))
+
+    fine_defaults = defaults_manifest.get("fine_feature_defaults", {})
+    indicator_defaults = defaults_manifest.get("indicator_defaults", {})
+    lines.extend(
+        [
+            "## serving_feature_defaults.json",
+            "",
+            f"- fallback_policy={defaults_manifest.get('fallback_policy')}",
+            f"- fine_feature_defaults_count={len(fine_defaults)}",
+            f"- indicator_defaults_count={len(indicator_defaults)}",
+            "",
+        ]
+    )
+    lines.extend(_render_column_group("fine_feature_defaults keys", sorted(list(fine_defaults.keys()))))
+    lines.extend(_render_column_group("indicator_defaults keys", sorted(list(indicator_defaults.keys()))))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -347,7 +481,7 @@ def build_runtime_report_markdown(payload: dict) -> str:
 
 def write_groupkey_reports(artifact_mode: str = "offline") -> dict[str, Path]:
     artifact_paths = build_artifact_paths(artifact_mode)
-    docs_dir = Path("polymarket_rule_engine/docs")
+    docs_dir = _docs_dir()
     docs_dir.mkdir(parents=True, exist_ok=True)
 
     rule_funnel_summary = _read_json(artifact_paths.rule_funnel_summary_path)
@@ -360,6 +494,7 @@ def write_groupkey_reports(artifact_mode: str = "offline") -> dict[str, Path]:
 
     migration_path = docs_dir / "groupkey_migration_validation.md"
     consistency_path = docs_dir / "groupkey_consistency_report.md"
+    schema_reference_path = docs_dir / "groupkey_serving_schema_reference.md"
 
     migration_path.write_text(
         build_migration_validation_markdown(
@@ -378,7 +513,17 @@ def write_groupkey_reports(artifact_mode: str = "offline") -> dict[str, Path]:
         ),
         encoding="utf-8",
     )
+    schema_reference_path.write_text(
+        build_schema_reference_markdown(
+            rules_df=rules_df,
+            group_features=group_features,
+            fine_features=fine_features,
+            defaults_manifest=defaults_manifest,
+        ),
+        encoding="utf-8",
+    )
     return {
         "migration": migration_path,
         "consistency": consistency_path,
+        "schema_reference": schema_reference_path,
     }

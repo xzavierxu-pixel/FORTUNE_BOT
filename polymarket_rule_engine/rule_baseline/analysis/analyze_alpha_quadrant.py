@@ -100,20 +100,52 @@ def slice_alpha(df: pd.DataFrame, column: str, min_count: int = 100) -> pd.DataF
     return result.sort_values("weighted_score", ascending=False) if not result.empty else result
 
 
+def load_analysis_predictions(artifact_paths, artifact_mode: str) -> tuple[pd.DataFrame, str]:
+    if artifact_paths.predictions_path.exists():
+        published = pd.read_csv(artifact_paths.predictions_path)
+        if not published.empty:
+            return published, "published"
+
+    if not artifact_paths.predictions_full_path.exists():
+        raise FileNotFoundError(
+            f"Predictions files not found: {artifact_paths.predictions_path} / {artifact_paths.predictions_full_path}"
+        )
+
+    full = pd.read_csv(artifact_paths.predictions_full_path)
+    if artifact_mode != "offline" or "dataset_split" not in full.columns:
+        return full, "full"
+
+    for split_name in ("test", "valid", "train"):
+        subset = full[full["dataset_split"] == split_name].copy()
+        if not subset.empty:
+            return subset, split_name
+    return full.iloc[0:0].copy(), "empty"
+
+
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
-    predictions_path = artifact_paths.predictions_path
-    if not predictions_path.exists():
-        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
-
-    df = pd.read_csv(predictions_path)
+    df, evaluation_scope = load_analysis_predictions(artifact_paths, args.artifact_mode)
     df["price"] = df["price"].astype(float)
     df["q_pred"] = df["q_pred"].astype(float)
     df["y"] = df["y"].astype(int)
     df = df[(df["price"] >= PRICE_MIN) & (df["price"] <= PRICE_MAX)].copy()
     if df.empty:
-        raise RuntimeError("No predictions available for alpha analysis.")
+        artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(columns=["quadrant", "n", "pct", "mean_edge", "std_edge", "mean_p", "mean_q", "mean_y", "brier_market", "brier_model", "mean_deviation", "mean_signal"]).to_csv(
+            artifact_paths.analysis_dir / "alpha_quadrant_metrics.csv",
+            index=False,
+        )
+        pd.DataFrame([{"evaluation_scope": evaluation_scope, "alpha_ratio": np.nan, "market_accuracy": np.nan, "net_alpha": np.nan, "weighted_score": np.nan, "contrarian_pct": np.nan}]).to_csv(
+            artifact_paths.analysis_dir / "alpha_summary.csv",
+            index=False,
+        )
+        pd.DataFrame().to_csv(artifact_paths.analysis_dir / "alpha_by_category.csv", index=False)
+        pd.DataFrame().to_csv(artifact_paths.analysis_dir / "alpha_by_domain.csv", index=False)
+        pd.DataFrame().to_csv(artifact_paths.analysis_dir / "alpha_by_horizon.csv", index=False)
+        df.to_csv(artifact_paths.analysis_dir / "predictions_with_quadrant.csv", index=False)
+        print("[INFO] No predictions available for alpha analysis. Wrote empty artifacts.")
+        return
 
     for column in ["category", "domain", "market_type"]:
         if column not in df.columns:
@@ -122,6 +154,7 @@ def main() -> None:
     df["quadrant"] = classify_quadrant(df["price"].values, df["q_pred"].values, df["y"].values)
     quadrant_metrics = compute_quadrant_metrics(df)
     overall_alpha = pd.DataFrame([compute_alpha_score(df)])
+    overall_alpha["evaluation_scope"] = evaluation_scope
     by_category = slice_alpha(df, "category")
     by_domain = slice_alpha(df, "domain")
     by_horizon = slice_alpha(df, "horizon_hours")

@@ -124,10 +124,15 @@ def load_rule_runtime(cfg: PegConfig) -> RuleRuntime:
 def collapse_rule_hits(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
+    scored = frame.copy()
+    if "rule_match_priority" not in scored.columns:
+        scored["rule_match_priority"] = 1
+    else:
+        scored["rule_match_priority"] = pd.to_numeric(scored["rule_match_priority"], errors="coerce").fillna(1).astype(int)
     return (
-        frame.sort_values(
-            by=["market_id", "snapshot_time", "rule_score"],
-            ascending=[True, True, False],
+        scored.sort_values(
+            by=["market_id", "snapshot_time", "rule_match_priority", "rule_score"],
+            ascending=[True, True, False, False],
         )
         .drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")
         .reset_index(drop=True)
@@ -139,6 +144,10 @@ def add_rule_match_reasons(frame: pd.DataFrame) -> pd.DataFrame:
         return frame.copy()
 
     out = frame.copy()
+    if "rule_match_reason" in out.columns:
+        existing_reason = out["rule_match_reason"].fillna("").astype(str).str.strip()
+    else:
+        existing_reason = pd.Series("", index=out.index, dtype="object")
 
     def build_reason(row: pd.Series) -> str:
         domain = str(row.get("domain") or "UNKNOWN")
@@ -156,7 +165,7 @@ def add_rule_match_reasons(frame: pd.DataFrame) -> pd.DataFrame:
             f"price={price:.6f} in [{price_min:.6f}, {price_max:.6f}]"
         )
 
-    out["rule_match_reason"] = out.apply(build_reason, axis=1)
+    out["rule_match_reason"] = existing_reason.where(existing_reason.ne(""), out.apply(build_reason, axis=1))
     return out
 
 

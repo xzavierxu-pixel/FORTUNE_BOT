@@ -308,7 +308,12 @@ def build_snapshot_base(
     out["delta_hours_exceeded_flag"] = out["delta_hours"] > config.MAX_ALLOWED_RESOLVE_DELTA_HOURS
     out["delta_hours_bucket"] = out["delta_hours"].fillna(999.0).round(2).clip(lower=0.0, upper=999.0)
     out["price_in_range_flag"] = out["price"].between(min_price, max_price, inclusive="both")
-    out["quality_pass"] = out["price_in_range_flag"].fillna(False)
+    out["quality_pass"] = (
+        out["price_in_range_flag"].fillna(False)
+        & out["closedTime"].notna()
+        & out["horizon_hours"].notna()
+        & out["y"].notna()
+    )
     out["snapshot_quality_score"] = (
         1.0
         - out["selected_quote_offset_sec"].clip(lower=0.0, upper=float(config.SNAP_WINDOW_SEC)) / max(float(config.SNAP_WINDOW_SEC), 1.0)

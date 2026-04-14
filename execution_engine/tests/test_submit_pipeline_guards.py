@@ -341,7 +341,7 @@ class LiveFilterCoverageTest(unittest.TestCase):
             ]
         )
 
-    def test_live_filter_compares_reference_token_live_mid_to_rule_band(self) -> None:
+    def test_live_filter_does_not_reject_when_group_family_matches_but_live_mid_is_outside_fine_band(self) -> None:
         candidates = pd.DataFrame(
             [
                 {
@@ -375,9 +375,9 @@ class LiveFilterCoverageTest(unittest.TestCase):
 
         result = apply_live_price_filter(self.cfg, candidates, self.rules, token_state)
 
-        self.assertTrue(result.eligible.empty)
-        self.assertEqual(int(result.state_counts.get("LIVE_PRICE_MISS", 0)), 1)
-        self.assertEqual(result.rejected.iloc[0]["live_filter_reason"], "live_price_outside_rule_band")
+        self.assertEqual(len(result.eligible), 1)
+        self.assertEqual(int(result.state_counts.get("LIVE_ELIGIBLE", 0)), 1)
+        self.assertEqual(result.eligible.iloc[0]["live_filter_reason"], "live_state_ok")
 
     def test_live_filter_accepts_when_reference_token_live_mid_is_in_band(self) -> None:
         candidates = pd.DataFrame(
@@ -416,7 +416,7 @@ class LiveFilterCoverageTest(unittest.TestCase):
         self.assertEqual(len(result.eligible), 1)
         self.assertEqual(int(result.state_counts.get("LIVE_ELIGIBLE", 0)), 1)
 
-    def test_live_filter_rejects_when_live_mid_is_outside_exact_rule_band(self) -> None:
+    def test_live_filter_keeps_candidate_when_live_mid_is_outside_exact_rule_band(self) -> None:
         candidates = pd.DataFrame(
             [
                 {
@@ -450,9 +450,9 @@ class LiveFilterCoverageTest(unittest.TestCase):
 
         result = apply_live_price_filter(self.cfg, candidates, self.rules, token_state)
 
-        self.assertTrue(result.eligible.empty)
-        self.assertEqual(int(result.state_counts.get("LIVE_PRICE_MISS", 0)), 1)
-        self.assertEqual(result.rejected.iloc[0]["live_filter_reason"], "live_price_outside_rule_band")
+        self.assertEqual(len(result.eligible), 1)
+        self.assertEqual(int(result.state_counts.get("LIVE_ELIGIBLE", 0)), 1)
+        self.assertEqual(result.eligible.iloc[0]["live_filter_reason"], "live_state_ok")
 
     def test_live_filter_rejects_wide_websocket_spread_before_rule_match(self) -> None:
         candidates = pd.DataFrame(

@@ -75,6 +75,21 @@ def add_data_args(command: list[str], args: argparse.Namespace) -> list[str]:
     return command
 
 
+def add_mode_only_args(command: list[str], args: argparse.Namespace) -> list[str]:
+    if args.artifact_mode:
+        command.extend(["--artifact-mode", args.artifact_mode])
+    return command
+
+
+def add_analysis_args(command: list[str], args: argparse.Namespace) -> list[str]:
+    command = add_mode_only_args(command, args)
+    if args.split_reference_end is not None:
+        command.extend(["--split-reference-end", args.split_reference_end])
+    if args.date_start is not None:
+        command.extend(["--history-start", args.date_start])
+    return command
+
+
 def run_step(label: str, command: list[str]) -> None:
     print(f"[PIPELINE] {label}: {' '.join(command)}")
     subprocess.run(command, cwd=ROOT_DIR, check=True)
@@ -140,11 +155,17 @@ def main() -> None:
         train_model_cmd.append("--no-auto-stack")
     run_step("Train model", train_model_cmd)
 
+    validation_reports_cmd = add_mode_only_args(
+        [sys.executable, "rule_baseline/training/build_groupkey_validation_reports.py"],
+        args,
+    )
+    run_step("Build GroupKey validation reports", validation_reports_cmd)
+
     if not args.skip_analysis:
         analysis_steps = [
-            ("Analyze calibration", "rule_baseline/analysis/analyze_q_model_calibration.py", add_data_args),
-            ("Analyze alpha", "rule_baseline/analysis/analyze_alpha_quadrant.py", add_data_args),
-            ("Analyze rules alpha", "rule_baseline/analysis/analyze_rules_alpha_quadrant.py", add_common_args),
+            ("Analyze calibration", "rule_baseline/analysis/analyze_q_model_calibration.py", add_mode_only_args),
+            ("Analyze alpha", "rule_baseline/analysis/analyze_alpha_quadrant.py", add_mode_only_args),
+            ("Analyze rules alpha", "rule_baseline/analysis/analyze_rules_alpha_quadrant.py", add_analysis_args),
         ]
         for label, script_path, arg_builder in analysis_steps:
             command = arg_builder([sys.executable, script_path], args)

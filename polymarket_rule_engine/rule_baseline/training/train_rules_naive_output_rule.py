@@ -18,8 +18,10 @@ from rule_baseline.training.history_features import (
     load_history_feature_artifacts,
     prepare_history_quality_frame,
     summarize_history_features,
+    validate_materialized_history_artifacts,
     write_history_feature_artifacts,
 )
+from rule_baseline.training.rule_generation_audit import write_rule_generation_audit, build_rule_generation_audit_payload
 from rule_baseline.utils import config
 
 MIN_GROUP_UNIQUE_MARKETS = 15
@@ -105,6 +107,38 @@ FINE_SERVING_COLUMNS = [
     "rule_score_minus_domain_x_market_type_expanding_logloss",
     "rule_score_minus_category_x_market_type_expanding_logloss",
     "price_x_full_group_expanding_abs_bias_tail_spread",
+    "rule_full_group_key_matched_rule_count",
+    "rule_full_group_key_max_edge_full",
+    "rule_full_group_key_max_edge_lower_bound_full",
+    "rule_full_group_key_max_rule_score",
+    "rule_full_group_key_mean_edge_full",
+    "rule_full_group_key_mean_edge_lower_bound_full",
+    "rule_full_group_key_mean_rule_score",
+    "rule_full_group_key_sum_n_full",
+    "rule_domain_matched_rule_count",
+    "rule_domain_max_edge_full",
+    "rule_domain_max_edge_lower_bound_full",
+    "rule_domain_max_rule_score",
+    "rule_domain_mean_edge_full",
+    "rule_domain_mean_edge_lower_bound_full",
+    "rule_domain_mean_rule_score",
+    "rule_domain_sum_n_full",
+    "rule_category_matched_rule_count",
+    "rule_category_max_edge_full",
+    "rule_category_max_edge_lower_bound_full",
+    "rule_category_max_rule_score",
+    "rule_category_mean_edge_full",
+    "rule_category_mean_edge_lower_bound_full",
+    "rule_category_mean_rule_score",
+    "rule_category_sum_n_full",
+    "rule_market_type_matched_rule_count",
+    "rule_market_type_max_edge_full",
+    "rule_market_type_max_edge_lower_bound_full",
+    "rule_market_type_max_rule_score",
+    "rule_market_type_mean_edge_full",
+    "rule_market_type_mean_edge_lower_bound_full",
+    "rule_market_type_mean_rule_score",
+    "rule_market_type_sum_n_full",
 ]
 FINE_DEFAULT_AGGREGATIONS = {
     "q_full": "weighted_mean",
@@ -145,6 +179,38 @@ FINE_DEFAULT_AGGREGATIONS = {
     "rule_score_minus_domain_x_market_type_expanding_logloss": "weighted_mean",
     "rule_score_minus_category_x_market_type_expanding_logloss": "weighted_mean",
     "price_x_full_group_expanding_abs_bias_tail_spread": "weighted_mean",
+    "rule_full_group_key_matched_rule_count": "mean",
+    "rule_full_group_key_max_edge_full": "max",
+    "rule_full_group_key_max_edge_lower_bound_full": "max",
+    "rule_full_group_key_max_rule_score": "max",
+    "rule_full_group_key_mean_edge_full": "weighted_mean",
+    "rule_full_group_key_mean_edge_lower_bound_full": "weighted_mean",
+    "rule_full_group_key_mean_rule_score": "weighted_mean",
+    "rule_full_group_key_sum_n_full": "sum",
+    "rule_domain_matched_rule_count": "mean",
+    "rule_domain_max_edge_full": "max",
+    "rule_domain_max_edge_lower_bound_full": "max",
+    "rule_domain_max_rule_score": "max",
+    "rule_domain_mean_edge_full": "weighted_mean",
+    "rule_domain_mean_edge_lower_bound_full": "weighted_mean",
+    "rule_domain_mean_rule_score": "weighted_mean",
+    "rule_domain_sum_n_full": "sum",
+    "rule_category_matched_rule_count": "mean",
+    "rule_category_max_edge_full": "max",
+    "rule_category_max_edge_lower_bound_full": "max",
+    "rule_category_max_rule_score": "max",
+    "rule_category_mean_edge_full": "weighted_mean",
+    "rule_category_mean_edge_lower_bound_full": "weighted_mean",
+    "rule_category_mean_rule_score": "weighted_mean",
+    "rule_category_sum_n_full": "sum",
+    "rule_market_type_matched_rule_count": "mean",
+    "rule_market_type_max_edge_full": "max",
+    "rule_market_type_max_edge_lower_bound_full": "max",
+    "rule_market_type_max_rule_score": "max",
+    "rule_market_type_mean_edge_full": "weighted_mean",
+    "rule_market_type_mean_edge_lower_bound_full": "weighted_mean",
+    "rule_market_type_mean_rule_score": "weighted_mean",
+    "rule_market_type_sum_n_full": "sum",
 }
 
 
@@ -344,6 +410,7 @@ def build_fine_serving_features(
         ]
         available_columns = [column for column in interaction_columns if column in group_features.columns]
         fine = fine.merge(group_features[available_columns], on="group_key", how="left")
+        fine = _build_matched_rule_aggregate_features(fine)
         fine["hist_price_x_full_group_expanding_bias"] = (
             fine["rule_price_center"] * pd.to_numeric(fine.get("full_group_expanding_bias_mean"), errors="coerce").fillna(0.0)
         )
@@ -456,6 +523,38 @@ def build_fine_serving_features(
             "rule_score_minus_domain_x_market_type_expanding_logloss",
             "rule_score_minus_category_x_market_type_expanding_logloss",
             "price_x_full_group_expanding_abs_bias_tail_spread",
+            "rule_full_group_key_matched_rule_count",
+            "rule_full_group_key_max_edge_full",
+            "rule_full_group_key_max_edge_lower_bound_full",
+            "rule_full_group_key_max_rule_score",
+            "rule_full_group_key_mean_edge_full",
+            "rule_full_group_key_mean_edge_lower_bound_full",
+            "rule_full_group_key_mean_rule_score",
+            "rule_full_group_key_sum_n_full",
+            "rule_domain_matched_rule_count",
+            "rule_domain_max_edge_full",
+            "rule_domain_max_edge_lower_bound_full",
+            "rule_domain_max_rule_score",
+            "rule_domain_mean_edge_full",
+            "rule_domain_mean_edge_lower_bound_full",
+            "rule_domain_mean_rule_score",
+            "rule_domain_sum_n_full",
+            "rule_category_matched_rule_count",
+            "rule_category_max_edge_full",
+            "rule_category_max_edge_lower_bound_full",
+            "rule_category_max_rule_score",
+            "rule_category_mean_edge_full",
+            "rule_category_mean_edge_lower_bound_full",
+            "rule_category_mean_rule_score",
+            "rule_category_sum_n_full",
+            "rule_market_type_matched_rule_count",
+            "rule_market_type_max_edge_full",
+            "rule_market_type_max_edge_lower_bound_full",
+            "rule_market_type_max_rule_score",
+            "rule_market_type_mean_edge_full",
+            "rule_market_type_mean_edge_lower_bound_full",
+            "rule_market_type_mean_rule_score",
+            "rule_market_type_sum_n_full",
         ]:
             fine[column] = 0.0
     return fine.reindex(columns=FINE_SERVING_COLUMNS).sort_values(
@@ -467,6 +566,8 @@ def _aggregate_group_default(group_frame: pd.DataFrame, column: str, how: str) -
     series = pd.to_numeric(group_frame[column], errors="coerce")
     if how == "sum":
         return float(series.fillna(0.0).sum())
+    if how == "max":
+        return float(series.max()) if not series.dropna().empty else 0.0
     if how == "weighted_mean":
         weights = pd.to_numeric(group_frame["n_full"], errors="coerce").fillna(0.0).clip(lower=0.0)
         total_weight = float(weights.sum())
@@ -481,6 +582,44 @@ def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
         pd.to_numeric(numerator, errors="coerce").fillna(0.0),
         pd.to_numeric(denominator, errors="coerce").replace(0.0, np.nan),
     ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
+def _build_matched_rule_aggregate_features(fine: pd.DataFrame) -> pd.DataFrame:
+    aggregate_specs = [
+        ("matched_rule_count", "edge_full", "size"),
+        ("max_edge_full", "edge_full", "max"),
+        ("max_edge_lower_bound_full", "edge_lower_bound_full", "max"),
+        ("max_rule_score", "rule_score", "max"),
+        ("mean_edge_full", "edge_full", "mean"),
+        ("mean_edge_lower_bound_full", "edge_lower_bound_full", "mean"),
+        ("mean_rule_score", "rule_score", "mean"),
+        ("sum_n_full", "n_full", "sum"),
+    ]
+    grain_specs = [
+        ("full_group_key", ["group_key"]),
+        ("domain", ["domain"]),
+        ("category", ["category"]),
+        ("market_type", ["market_type"]),
+    ]
+    fine_with_aggregates = fine.copy()
+    shared_keys = ["price_bin", "horizon_hours", "direction"]
+    for grain_name, grain_columns in grain_specs:
+        grouped = (
+            fine.groupby(grain_columns + shared_keys, observed=True)
+            .agg(
+                **{
+                    f"rule_{grain_name}_{feature_name}": (source_column, reducer)
+                    for feature_name, source_column, reducer in aggregate_specs
+                }
+            )
+            .reset_index()
+        )
+        fine_with_aggregates = fine_with_aggregates.merge(
+            grouped,
+            on=grain_columns + shared_keys,
+            how="left",
+        )
+    return fine_with_aggregates
 
 
 def build_group_serving_features(
@@ -888,6 +1027,7 @@ def main() -> None:
     rules_df, report_df = build_rules(df, args.artifact_mode)
     history_feature_frames = summarize_history_features(df)
     write_history_feature_artifacts(history_feature_frames, artifact_paths.history_feature_paths)
+    validate_materialized_history_artifacts(artifact_paths.history_feature_paths)
     history_feature_frames = load_history_feature_artifacts(artifact_paths.history_feature_paths)
     rule_selection_summary = summarize_rule_selection(df, report_df, rules_df)
     snapshot_funnel = with_stage_deltas(
@@ -967,6 +1107,48 @@ def main() -> None:
             },
         },
     )
+    write_rule_generation_audit(
+        artifact_paths=artifact_paths,
+        payload=build_rule_generation_audit_payload(
+            artifact_paths=artifact_paths,
+            rules_df=rules_df,
+            report_df=report_df,
+            group_serving_features=group_serving_features,
+            fine_serving_features=fine_serving_features,
+            rule_funnel_summary={
+                "artifact_mode": args.artifact_mode,
+                "rule_training_mode": rule_training_mode,
+                "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+                "boundaries": split.to_dict(),
+                "raw_market_funnel": funnel_summary["raw_market_funnel"],
+                "snapshot_funnel": snapshot_funnel,
+                "rule_selection": {
+                    "selected_rule_count": rule_selection_summary["selected_rule_count"],
+                    "rule_bucket_status_counts": rule_selection_summary["rule_bucket_status_counts"],
+                    "selection_status_market_impact": rule_selection_summary["selection_status_market_impact"],
+                },
+            },
+            split_summary=split_summary,
+            rule_training_summary={
+                "artifact_mode": args.artifact_mode,
+                "selected_rules": int(len(rules_df)),
+                "report_rows": int(len(report_df)),
+                "group_serving_rows": int(len(group_serving_features)),
+                "fine_serving_rows": int(len(fine_serving_features)),
+                "selection_status_counts": report_df["selection_status"].value_counts().to_dict() if not report_df.empty else {},
+                "boundaries": split.to_dict(),
+                "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+                "method": {
+                    "estimator": "raw_frequency",
+                    "rule_training_mode": rule_training_mode,
+                    "bayesian_smoothing": False,
+                    "prior_mean": False,
+                    "benjamini_hochberg": False,
+                },
+            },
+            debug_filters={"max_rows": args.max_rows, "recent_days": args.recent_days},
+        ),
+    )
 
     print(f"[INFO] Saved {len(rules_df)} rules to {artifact_paths.rules_path}")
     print(f"[INFO] Saved {len(history_feature_frames)} history artifacts to {artifact_paths.edge_dir}")
@@ -975,6 +1157,7 @@ def main() -> None:
     print(f"[INFO] Saved full rule report to {artifact_paths.rule_report_path}")
     print(f"[INFO] Saved split summary to {artifact_paths.split_summary_path}")
     print(f"[INFO] Saved rule funnel summary to {artifact_paths.rule_funnel_summary_path}")
+    print(f"[INFO] Saved rule generation audit to {artifact_paths.rule_generation_audit_markdown_path}")
 
 
 if __name__ == "__main__":

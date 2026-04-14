@@ -1,8 +1,9 @@
 import os
+import shutil
 import sys
 import unittest
-from tempfile import TemporaryDirectory
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 
@@ -16,6 +17,12 @@ from rule_baseline.training.snapshot_training_audit import (
 
 
 class SnapshotTrainingAuditTest(unittest.TestCase):
+    def _make_tempdir(self) -> Path:
+        path = Path("polymarket_rule_engine/tests/_tmp_runtime") / f"snapshot-audit-{uuid4().hex}"
+        path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(path, ignore_errors=True))
+        return path
+
     def test_build_payload_tracks_funnel_and_artifacts(self) -> None:
         artifact_paths = build_artifact_paths("offline")
         snapshots_loaded = pd.DataFrame(
@@ -29,8 +36,9 @@ class SnapshotTrainingAuditTest(unittest.TestCase):
         df_feat = snapshots_quality.assign(dataset_split="train", y=1, price=0.5)
         rules_df = pd.DataFrame([{"group_key": "a|SPORTS|other"}])
 
-        with TemporaryDirectory() as tmpdir:
-            report_path = Path(tmpdir) / "naive_all_leaves_report.csv"
+        tmpdir = self._make_tempdir()
+        with self.subTest("payload_tracks_funnel_and_artifacts"):
+            report_path = tmpdir / "naive_all_leaves_report.csv"
             pd.DataFrame(
                 [
                     {"group_key": "a|SPORTS|other", "selection_status": "keep"},
@@ -39,8 +47,8 @@ class SnapshotTrainingAuditTest(unittest.TestCase):
             ).to_csv(report_path, index=False)
             local_paths = artifact_paths
             object.__setattr__(local_paths, "rule_report_path", report_path)
-            object.__setattr__(local_paths, "snapshot_training_audit_json_path", Path(tmpdir) / "snapshot_training_funnel.json")
-            object.__setattr__(local_paths, "snapshot_training_audit_markdown_path", Path(tmpdir) / "snapshot_training_funnel.md")
+            object.__setattr__(local_paths, "snapshot_training_audit_json_path", tmpdir / "snapshot_training_funnel.json")
+            object.__setattr__(local_paths, "snapshot_training_audit_markdown_path", tmpdir / "snapshot_training_funnel.md")
 
             payload = build_snapshot_training_audit_payload(
                 artifact_paths=local_paths,

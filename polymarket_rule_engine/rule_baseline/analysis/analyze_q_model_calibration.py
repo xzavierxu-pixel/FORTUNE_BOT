@@ -38,21 +38,40 @@ def compute_metrics(df: pd.DataFrame) -> dict[str, float]:
     return metrics
 
 
+def load_analysis_predictions(artifact_paths, artifact_mode: str) -> tuple[pd.DataFrame, str]:
+    if artifact_paths.predictions_path.exists():
+        published = pd.read_csv(artifact_paths.predictions_path)
+        if not published.empty:
+            return published, "published"
+
+    if not artifact_paths.predictions_full_path.exists():
+        raise FileNotFoundError(
+            f"Predictions files not found: {artifact_paths.predictions_path} / {artifact_paths.predictions_full_path}"
+        )
+
+    full = pd.read_csv(artifact_paths.predictions_full_path)
+    if artifact_mode != "offline" or "dataset_split" not in full.columns:
+        return full, "full"
+
+    for split_name in ("test", "valid", "train"):
+        subset = full[full["dataset_split"] == split_name].copy()
+        if not subset.empty:
+            return subset, split_name
+    return full.iloc[0:0].copy(), "empty"
+
+
 def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
     artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
-    predictions_path = artifact_paths.predictions_path
-    if not predictions_path.exists():
-        raise FileNotFoundError(f"Predictions file not found: {predictions_path}")
-
-    df = pd.read_csv(predictions_path)
+    df, evaluation_scope = load_analysis_predictions(artifact_paths, args.artifact_mode)
     df = df[(df["price"] > 0.0) & (df["price"] < 1.0)].copy()
     df = df[(df["q_pred"] > 0.0) & (df["q_pred"] < 1.0)].copy()
     if df.empty:
         pd.DataFrame(
             [
                 {
+                    "evaluation_scope": evaluation_scope,
                     "rows": 0.0,
                     "logloss_price": np.nan,
                     "logloss_model": np.nan,
@@ -78,6 +97,7 @@ def main() -> None:
         return
 
     metrics = compute_metrics(df)
+    metrics["evaluation_scope"] = evaluation_scope
     metrics_df = pd.DataFrame([metrics])
 
     df["q_bucket"] = pd.qcut(df["q_pred"], 10, duplicates="drop")

@@ -27,6 +27,7 @@ from execution_engine.online.scoring.rule_runtime import (
     collapse_rule_hits,
     prepare_feature_inputs,
 )
+from execution_engine.online.scoring.rules import build_group_default_rule_hits
 from execution_engine.runtime.config import PegConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -306,6 +307,29 @@ def _merge_growth_columns(predicted: pd.DataFrame, viable: pd.DataFrame) -> pd.D
     )
 
 
+def _build_live_rule_hits(runtime: OnlineRuntimeContainer, snapshots: pd.DataFrame) -> pd.DataFrame:
+    exact_hits = runtime.rule_runtime.match_rules(snapshots, runtime.rules_frame)
+    if not exact_hits.empty:
+        exact_hits = exact_hits.copy()
+        exact_hits["rule_match_priority"] = 1
+        matched_keys = exact_hits[["market_id", "snapshot_time"]].drop_duplicates()
+        remaining = snapshots.merge(
+            matched_keys.assign(_matched=True),
+            on=["market_id", "snapshot_time"],
+            how="left",
+        )
+        remaining = remaining[remaining["_matched"] != True].drop(columns=["_matched"])
+    else:
+        remaining = snapshots.copy()
+
+    fallback_hits = build_group_default_rule_hits(remaining, runtime.serving_feature_bundle)
+    if exact_hits.empty:
+        return fallback_hits.reset_index(drop=True)
+    if fallback_hits.empty:
+        return exact_hits.reset_index(drop=True)
+    return pd.concat([exact_hits, fallback_hits], ignore_index=True, sort=False).reset_index(drop=True)
+
+
 @dataclass(frozen=True)
 class LiveInferenceResult:
     live_filter: LiveFilterResult
@@ -347,7 +371,7 @@ def run_live_inference(
         market_context,
         _build_market_annotations(live_filter.eligible),
     )
-    matched = runtime.rule_runtime.match_rules(snapshots, runtime.rules_frame)
+    matched = _build_live_rule_hits(runtime, snapshots)
     if matched.empty:
         empty = pd.DataFrame()
         return LiveInferenceResult(

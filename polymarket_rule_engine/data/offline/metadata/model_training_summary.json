@@ -1,23 +1,23 @@
 {
   "artifact_mode": "offline",
-  "calibration_mode": "none",
+  "calibration_mode": "global_isotonic",
   "target_mode": "q",
-  "feature_count": 899,
+  "feature_count": 1015,
   "rows_by_split": {
-    "train": 91568
+    "train": 32883
   },
   "metrics_by_split": {
     "train": {
-      "rows": 91568,
-      "logloss_price": 0.6657864415156091,
-      "logloss_model": 0.5751988176304823,
-      "brier_price": 0.23691025156987155,
-      "brier_model": 0.19786447352983255,
-      "auc_price": 0.6247494718121236,
-      "auc_model": 0.7690040116425543,
-      "mae_trade_value": 0.8628245854063026,
-      "rmse_trade_value": 0.9625640193656182,
-      "sign_accuracy": 0.6811549886423205
+      "rows": 32883,
+      "logloss_price": 0.6678657355845736,
+      "logloss_model": 0.01604443458182861,
+      "brier_price": 0.23785386046741477,
+      "brier_model": 0.004464848899378331,
+      "auc_price": 0.6148350962303304,
+      "auc_model": 0.9999035213812162,
+      "mae_trade_value": 0.025961582007604928,
+      "rmse_trade_value": 0.14560787787217178,
+      "sign_accuracy": 0.9951950856065445
     },
     "published": {
       "rows": 0,
@@ -41,7 +41,7 @@
     "test_end": "2028-01-01T05:00:00+00:00"
   },
   "debug_filters": {
-    "max_rows": null,
+    "max_rows": 100000,
     "recent_days": null
   },
   "model_artifact": {
@@ -50,14 +50,14 @@
     "deploy_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_deploy",
     "full_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_full",
     "predictor_presets": "medium_quality",
-    "predictor_hyperparameters_profile": "lr_only",
+    "predictor_hyperparameters_profile": "gbm_cat",
     "predictor_time_limit": 300,
     "random_seed": 21,
     "num_bag_folds": null,
     "num_bag_sets": null,
     "num_stack_levels": null,
     "auto_stack": null,
-    "refit_full": false,
+    "refit_full": true,
     "grouped_calibration_column": "horizon_hours",
     "grouped_calibration_min_rows": 20,
     "runtime_manifest": {
@@ -67,8 +67,8 @@
       "label_column": "y",
       "artifact_mode": "offline",
       "predictor_path": "predictor",
-      "predictor_name": "WeightedEnsemble_L2",
-      "refit_full_used": false,
+      "predictor_name": "WeightedEnsemble_L2_FULL",
+      "refit_full_used": true,
       "deployment_optimized": false,
       "bundle_role": "deployment",
       "full_bundle_dir": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_full",
@@ -81,7 +81,7 @@
         "test_start": "2027-12-02T05:00:00+00:00",
         "test_end": "2028-01-01T05:00:00+00:00"
       },
-      "calibration_mode": "none",
+      "calibration_mode": "global_isotonic",
       "grouped_calibration_column": "horizon_hours",
       "predictor_presets": "medium_quality",
       "random_seed": 21,
@@ -97,11 +97,12 @@
         "random_seed": 21,
         "label_column": "y",
         "predictor_hyperparameters": {
-          "LR": {}
+          "GBM": {},
+          "CAT": {}
         },
-        "fit_rows": 91568,
+        "fit_rows": 32883,
         "calibration_rows": 0,
-        "calibration_mode": "none",
+        "calibration_mode": "global_isotonic",
         "calibration_holdout_policy": "explicit_valid_split",
         "calibration_overlap_allowed": false
       },
@@ -375,16 +376,16 @@
         }
       },
       "deployment_validation": {
-        "fit_duration_sec": 225.42079549998743,
+        "fit_duration_sec": 302.68128350004554,
         "clone_for_deployment_ok": true,
-        "clone_for_deployment_duration_sec": 0.5092869999934919,
+        "clone_for_deployment_duration_sec": 1.0041073999600485,
         "clone_for_deployment_error": "",
         "persist_attempted": false,
         "persist_ok": false,
         "persist_duration_sec": null,
         "persist_error": ""
       },
-      "fit_rows": 91568,
+      "fit_rows": 32883,
       "calibration_rows": 0
     },
     "feature_semantics_version": "decision_time_v1",
@@ -658,16 +659,16 @@
     },
     "calibrator_meta": {
       "type": "none",
-      "mode": "none",
+      "mode": "global_isotonic",
       "group_column": "horizon_hours",
       "min_rows": 20,
-      "fit_rows": 91568,
+      "fit_rows": 32883,
       "calibration_rows": 0,
       "grouped_fallback_to_global": false,
       "group_calibrator_count": 0
     },
     "deployment_summary_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_deploy\\metadata\\deployment_summary.json",
     "full_training_summary_path": "C:\\Users\\ROG\\Desktop\\fortune_bot\\polymarket_rule_engine\\data\\offline\\models\\q_model_bundle_full\\metadata\\deployment_summary.json",
-    "training_wall_clock_sec": 229.3936239000177
+    "training_wall_clock_sec": 613.593672899995
   }
 }

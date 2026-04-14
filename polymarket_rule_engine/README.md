@@ -158,9 +158,28 @@ python rule_baseline/training/train_rules_naive_output_rule.py `
 输出重点：
 
 - `data/offline/edge/trading_rules.csv`
+- `data/offline/edge/history_features_global.parquet`
+- `data/offline/edge/history_features_domain.parquet`
+- `data/offline/edge/history_features_category.parquet`
+- `data/offline/edge/history_features_market_type.parquet`
+- `data/offline/edge/history_features_domain_x_category.parquet`
+- `data/offline/edge/history_features_domain_x_market_type.parquet`
+- `data/offline/edge/history_features_category_x_market_type.parquet`
+- `data/offline/edge/history_features_full_group.parquet`
+- `data/offline/edge/group_serving_features.parquet`
+- `data/offline/edge/fine_serving_features.parquet`
+- `data/offline/edge/serving_feature_defaults.json`
 - `data/offline/naive_rules/naive_all_leaves_report.csv`
 - `data/offline/metadata/rule_training_summary.json`
 - `data/offline/metadata/split_summary.json`
+- `data/offline/audit/rule_funnel_summary.json`
+- `data/offline/audit/rule_generation_audit.json`
+- `data/offline/audit/rule_generation_audit.md`
+- `data/offline/audit/artifact_inventory.json`
+- `data/offline/audit/artifact_inventory.md`
+- `docs/groupkey_serving_schema_reference.md`
+- `docs/groupkey_migration_validation.md`
+- `docs/groupkey_consistency_report.md`
 
 ### 3.4 训练主模型
 
@@ -533,6 +552,7 @@ python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode of
 
 ```powershell
 python rule_baseline/training/train_rules_naive_output_rule.py --artifact-mode offline
+python rule_baseline/training/build_groupkey_validation_reports.py --artifact-mode offline
 python rule_baseline/training/train_snapshot_model.py --artifact-mode offline
 python rule_baseline/backtesting/backtest_portfolio_qmodel.py --artifact-mode offline
 ```
@@ -557,6 +577,12 @@ python rule_baseline/data_collection/fetch_raw_events.py
 python rule_baseline/data_collection/build_snapshots.py
 python rule_baseline/workflow/run_pipeline.py --artifact-mode offline
 ```
+
+说明：
+
+- `run_pipeline.py` 现在会在 `Train model` 之后自动执行 `build_groupkey_validation_reports.py`
+- 规则训练步骤现在会自动物化全部 `history_features_*.parquet`，并写出 `rule_generation_audit.json/md`
+- blueprint inventory 现在可通过 `python rule_baseline/training/build_groupkey_feature_inventory.py` 刷新，并产出 `docs/groupkey_feature_inventory_summary.md`
 
 ---
 

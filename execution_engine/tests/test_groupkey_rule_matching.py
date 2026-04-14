@@ -12,7 +12,13 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
-from execution_engine.online.scoring.rules import ServingFeatureBundle, attach_serving_features, score_frame_rule_coverage
+from execution_engine.online.scoring.rules import (
+    ServingFeatureBundle,
+    attach_serving_features,
+    build_group_default_rule_hits,
+    score_frame_group_rule_coverage,
+    score_frame_rule_coverage,
+)
 from rule_baseline.backtesting.backtest_portfolio_qmodel import load_rules, match_rules
 
 
@@ -107,6 +113,40 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
 
         self.assertEqual(int(scored.loc[0, "rule_coverage_match_count"]), 1)
         self.assertTrue(bool(scored.loc[0, "rule_coverage_exact_match"]))
+
+    def test_group_rule_coverage_uses_only_domain_category_market_type(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "market_id": "m1",
+                    "domain": "example.com",
+                    "category": "SPORTS",
+                    "market_type": "other",
+                    "remaining_hours": 48.0,
+                    "live_mid_price": 0.91,
+                }
+            ]
+        )
+        rules = pd.DataFrame(
+            [
+                {
+                    "group_key": "example.com|SPORTS|other",
+                    "domain": "example.com",
+                    "category": "SPORTS",
+                    "market_type": "other",
+                    "h_min": 1.0,
+                    "h_max": 12.0,
+                    "price_min": 0.4,
+                    "price_max": 0.5,
+                }
+            ]
+        )
+
+        scored = score_frame_group_rule_coverage(frame, rules)
+
+        self.assertEqual(int(scored.loc[0, "group_rule_coverage_match_count"]), 1)
+        self.assertTrue(bool(scored.loc[0, "group_rule_coverage_exact_match"]))
+        self.assertEqual(scored.loc[0, "group_rule_key"], "example.com|SPORTS|other")
 
     def test_load_rules_preserves_horizon_hours_column(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -245,6 +285,51 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
         )
         self.assertAlmostEqual(float(enriched.loc[0, "fine_feature_edge_full"]), 0.17, places=6)
         self.assertAlmostEqual(float(enriched.loc[0, "fine_feature_q_full"]), 0.61, places=6)
+
+    def test_build_group_default_rule_hits_constructs_model_time_fallback_row(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {
+                    "market_id": "m1",
+                    "snapshot_time": "2026-04-01T00:00:00Z",
+                    "domain": "example.com",
+                    "category": "SPORTS",
+                    "market_type": "other",
+                    "price": 0.91,
+                    "horizon_hours": 48.0,
+                }
+            ]
+        )
+        bundle = ServingFeatureBundle(
+            fine_features=pd.DataFrame(),
+            group_features=pd.DataFrame(
+                [
+                    {
+                        "group_key": "example.com|SPORTS|other",
+                        "group_decision": "keep",
+                        "group_default_leaf_id": "__GROUP_DEFAULT__|example.com|SPORTS|other",
+                        "group_default_direction": 1,
+                        "group_default_q_full": 0.61,
+                        "group_default_p_full": 0.44,
+                        "group_default_edge_full": 0.17,
+                        "group_default_edge_std_full": 0.08,
+                        "group_default_edge_lower_bound_full": 0.12,
+                        "group_default_rule_score": 0.12,
+                        "group_default_n_full": 140.0,
+                    }
+                ]
+            ),
+            defaults_manifest={},
+        )
+
+        fallback_hits = build_group_default_rule_hits(frame, bundle)
+
+        self.assertEqual(len(fallback_hits), 1)
+        self.assertEqual(fallback_hits.loc[0, "rule_group_key"], "example.com|SPORTS|other")
+        self.assertEqual(int(fallback_hits.loc[0, "rule_leaf_id"]), -1)
+        self.assertEqual(int(fallback_hits.loc[0, "rule_direction"]), 1)
+        self.assertAlmostEqual(float(fallback_hits.loc[0, "edge_full"]), 0.17, places=6)
+        self.assertEqual(fallback_hits.loc[0, "rule_match_reason"], "group_default_fallback")
 
 
 if __name__ == "__main__":

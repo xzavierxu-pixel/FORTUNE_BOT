@@ -39,8 +39,18 @@ def load_inputs(
         history_start_override=history_start,
     )
     snapshots = assign_dataset_split(snapshots, split)
-    snapshots = snapshots[snapshots["dataset_split"] == "test"].copy()
+    preferred_splits = ["test", "valid", "train"]
+    selected_split = "empty"
+    selected = pd.DataFrame(columns=snapshots.columns)
+    for split_name in preferred_splits:
+        candidate = snapshots[snapshots["dataset_split"] == split_name].copy()
+        if not candidate.empty:
+            selected = candidate
+            selected_split = split_name
+            break
+    snapshots = selected.copy()
     snapshots = snapshots[(snapshots["price"] >= PRICE_MIN) & (snapshots["price"] <= PRICE_MAX)].copy()
+    snapshots.attrs["evaluation_scope"] = selected_split
 
     rules = pd.read_csv(artifact_paths.rules_path)
     for column in ["domain", "category", "market_type"]:
@@ -152,11 +162,34 @@ def main() -> None:
     args = parse_args()
     artifact_paths = build_artifact_paths(args.artifact_mode)
     snapshots, rules = load_inputs(artifact_paths, args.split_reference_end, args.history_start)
-    matched = match_rules_to_snapshots(snapshots, rules)
-    classified = classify_rule_quadrant(matched)
-    metrics = compute_rule_metrics(classified)
-
     artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
+    evaluation_scope = str(snapshots.attrs.get("evaluation_scope") or "unknown")
+    if snapshots.empty:
+        pd.DataFrame(columns=["group_key", "leaf_id", "domain", "category", "market_type", "n", "rule_edge", "actual_edge", "contrarian_pct", "alpha_ratio", "weighted_score", "mean_pnl", "evaluation_scope"]).to_csv(
+            artifact_paths.analysis_dir / "rules_alpha_metrics.csv",
+            index=False,
+        )
+        pd.DataFrame().to_csv(artifact_paths.analysis_dir / "rules_predictions_with_quadrant.csv", index=False)
+        print("[INFO] No snapshots available for rules alpha analysis. Wrote empty artifacts.")
+        return
+
+    try:
+        matched = match_rules_to_snapshots(snapshots, rules)
+    except RuntimeError:
+        pd.DataFrame(columns=["group_key", "leaf_id", "domain", "category", "market_type", "n", "rule_edge", "actual_edge", "contrarian_pct", "alpha_ratio", "weighted_score", "mean_pnl", "evaluation_scope"]).to_csv(
+            artifact_paths.analysis_dir / "rules_alpha_metrics.csv",
+            index=False,
+        )
+        pd.DataFrame().to_csv(artifact_paths.analysis_dir / "rules_predictions_with_quadrant.csv", index=False)
+        print(f"[INFO] No rules matched snapshots for rules alpha analysis under scope={evaluation_scope}. Wrote empty artifacts.")
+        return
+
+    classified = classify_rule_quadrant(matched)
+    classified["evaluation_scope"] = evaluation_scope
+    metrics = compute_rule_metrics(classified)
+    if not metrics.empty:
+        metrics["evaluation_scope"] = evaluation_scope
+
     metrics.to_csv(artifact_paths.analysis_dir / "rules_alpha_metrics.csv", index=False)
     classified.to_csv(artifact_paths.analysis_dir / "rules_predictions_with_quadrant.csv", index=False)
 

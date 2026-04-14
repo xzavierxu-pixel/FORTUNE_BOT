@@ -44,6 +44,10 @@ class ArtifactPaths:
     rule_training_summary_path: Path
     model_training_summary_path: Path
     rule_funnel_summary_path: Path
+    rule_generation_audit_json_path: Path
+    rule_generation_audit_markdown_path: Path
+    artifact_inventory_json_path: Path
+    artifact_inventory_markdown_path: Path
     snapshot_training_audit_json_path: Path
     snapshot_training_audit_markdown_path: Path
 
@@ -103,6 +107,10 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         rule_training_summary_path=root / "metadata" / "rule_training_summary.json",
         model_training_summary_path=root / "metadata" / "model_training_summary.json",
         rule_funnel_summary_path=root / "audit" / "rule_funnel_summary.json",
+        rule_generation_audit_json_path=root / "audit" / "rule_generation_audit.json",
+        rule_generation_audit_markdown_path=root / "audit" / "rule_generation_audit.md",
+        artifact_inventory_json_path=root / "audit" / "artifact_inventory.json",
+        artifact_inventory_markdown_path=root / "audit" / "artifact_inventory.md",
         snapshot_training_audit_json_path=root / "audit" / "snapshot_training_funnel.json",
         snapshot_training_audit_markdown_path=root / "audit" / "snapshot_training_funnel.md",
     )

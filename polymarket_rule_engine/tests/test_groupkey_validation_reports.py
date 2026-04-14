@@ -8,6 +8,8 @@ sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.models.runtime_bundle import FeatureContract
 from rule_baseline.training.groupkey_reports import (
+    _docs_dir,
+    build_schema_reference_markdown,
     build_consistency_report_markdown,
     build_migration_validation_markdown,
     build_runtime_report_markdown,
@@ -15,6 +17,11 @@ from rule_baseline.training.groupkey_reports import (
 
 
 class GroupKeyValidationReportsTest(unittest.TestCase):
+    def test_docs_dir_resolves_to_repo_docs_independent_of_cwd(self) -> None:
+        docs_dir = _docs_dir()
+        self.assertTrue(str(docs_dir).endswith("polymarket_rule_engine\\docs"))
+        self.assertEqual(docs_dir.name, "docs")
+
     def test_build_migration_validation_markdown_contains_summary_and_distribution(self) -> None:
         rule_funnel_summary = {
             "snapshot_funnel": [
@@ -163,6 +170,55 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
         self.assertIn("dataset_split=test, rows=120", markdown)
         self.assertIn("### Unknown Group Preview", markdown)
         self.assertIn("group_key=example.com|SPORTS|other, rows=22", markdown)
+
+    def test_build_schema_reference_markdown_groups_columns_by_role(self) -> None:
+        rules_df = pd.DataFrame(
+            [{"group_key": "a|SPORTS|other", "domain": "a", "category": "SPORTS", "market_type": "other", "q_full": 0.6, "group_decision": "keep"}]
+        )
+        group_features = pd.DataFrame(
+            [
+                {
+                    "group_key": "a|SPORTS|other",
+                    "domain": "a",
+                    "group_default_q_full": 0.6,
+                    "group_match_found_default": 1,
+                    "full_group_expanding_bias_mean": 0.1,
+                    "rule_edge_minus_domain_expanding_bias": 0.02,
+                }
+            ]
+        )
+        fine_features = pd.DataFrame(
+            [
+                {
+                    "group_key": "a|SPORTS|other",
+                    "price_bin": "0.40-0.50",
+                    "horizon_hours": 6,
+                    "q_full": 0.6,
+                    "rule_edge_minus_domain_expanding_bias": 0.02,
+                }
+            ]
+        )
+        defaults_manifest = {
+            "fallback_policy": "group_key_aggregates",
+            "fine_feature_defaults": {"q_full": {"group_column": "group_default_q_full"}},
+            "indicator_defaults": {"fine_match_found": 0},
+        }
+
+        markdown = build_schema_reference_markdown(
+            rules_df=rules_df,
+            group_features=group_features,
+            fine_features=fine_features,
+            defaults_manifest=defaults_manifest,
+        )
+
+        self.assertIn("# GroupKey Serving Schema Reference", markdown)
+        self.assertIn("## trading_rules.csv", markdown)
+        self.assertIn("## group_serving_features.parquet", markdown)
+        self.assertIn("## fine_serving_features.parquet", markdown)
+        self.assertIn("### fallback_defaults", markdown)
+        self.assertIn("group_default_q_full", markdown)
+        self.assertIn("### generated_interactions", markdown)
+        self.assertIn("rule_edge_minus_domain_expanding_bias", markdown)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import json
 
 import pandas as pd
 
-from execution_engine.online.scoring.rules import score_frame_rule_coverage
+from execution_engine.online.scoring.rules import score_frame_group_rule_coverage
 from execution_engine.runtime.config import PegConfig
 
 STRUCTURAL_REJECT = "STRUCTURAL_REJECT"
@@ -17,7 +17,6 @@ STATE_REJECT = "STATE_REJECT"
 DIRECT_CANDIDATE = "DIRECT_CANDIDATE"
 
 LIVE_ELIGIBLE = "LIVE_ELIGIBLE"
-LIVE_PRICE_MISS = "LIVE_PRICE_MISS"
 LIVE_SPREAD_TOO_WIDE = "LIVE_SPREAD_TOO_WIDE"
 LIVE_STATE_MISSING = "LIVE_STATE_MISSING"
 LIVE_STATE_STALE = "LIVE_STATE_STALE"
@@ -119,7 +118,7 @@ def apply_structural_coarse_filter(
     candidates = markets.copy().reset_index(drop=True)
     candidates["remaining_hours"] = pd.to_numeric(candidates.get("remaining_hours"), errors="coerce")
     candidates["coarse_filter_state"] = DIRECT_CANDIDATE
-    candidates["coarse_filter_reason"] = "rule_family_horizon_match"
+    candidates["coarse_filter_reason"] = "rule_family_match"
 
     if "market_id" not in candidates.columns:
         candidates["market_id"] = ""
@@ -186,30 +185,6 @@ def apply_structural_coarse_filter(
             "rule_family_miss",
         ]
 
-        active_horizon = active[active["coarse_filter_state"] == DIRECT_CANDIDATE].copy()
-        if not active_horizon.empty:
-            rule_bins = rules_frame[
-                ["domain", "category", "market_type", "h_min", "h_max"]
-            ].dropna().drop_duplicates()
-            merged = active_horizon.merge(
-                rule_bins,
-                on=["domain", "category", "market_type"],
-                how="left",
-            )
-            horizon_match = (
-                (pd.to_numeric(merged["remaining_hours"], errors="coerce") >= pd.to_numeric(merged["h_min"], errors="coerce") - slack)
-                & (pd.to_numeric(merged["remaining_hours"], errors="coerce") <= pd.to_numeric(merged["h_max"], errors="coerce") + slack)
-            )
-            matched_market_ids = set(merged.loc[horizon_match, "market_id"].astype(str))
-            miss_mask = ~active_horizon["market_id"].astype(str).isin(matched_market_ids)
-            active_horizon.loc[miss_mask, ["coarse_filter_state", "coarse_filter_reason"]] = [
-                STRUCTURAL_REJECT,
-                "rule_horizon_miss",
-            ]
-            active.loc[active_horizon.index, ["coarse_filter_state", "coarse_filter_reason"]] = active_horizon[
-                ["coarse_filter_state", "coarse_filter_reason"]
-            ]
-
         candidates.loc[active.index, ["coarse_filter_state", "coarse_filter_reason"]] = active[
             ["coarse_filter_state", "coarse_filter_reason"]
         ]
@@ -251,7 +226,7 @@ def apply_live_price_filter(
         state_row = token_state_by_token.get(token_id)
         enriched = dict(row)
         enriched["live_filter_state"] = LIVE_ELIGIBLE
-        enriched["live_filter_reason"] = "live_rule_match"
+        enriched["live_filter_reason"] = "live_state_ok"
         enriched["token_state_age_sec"] = None
         if state_row is None:
             enriched["live_filter_state"] = LIVE_STATE_MISSING
@@ -315,17 +290,7 @@ def apply_live_price_filter(
         stage2["_stage2_row_id"] = stage2.index.astype(int)
     live_rule_inputs = stage2[stage2["live_filter_state"] == LIVE_ELIGIBLE].copy()
     if not live_rule_inputs.empty:
-        live_rule_inputs = score_frame_rule_coverage(
-            live_rule_inputs,
-            rules_frame,
-            horizon_column="remaining_hours",
-            price_column="live_mid_price",
-        )
-        miss_mask = ~live_rule_inputs["rule_coverage_exact_match"].fillna(False)
-        live_rule_inputs.loc[miss_mask, ["live_filter_state", "live_filter_reason"]] = [
-            LIVE_PRICE_MISS,
-            "live_price_outside_rule_band",
-        ]
+        live_rule_inputs = score_frame_group_rule_coverage(live_rule_inputs, rules_frame)
         for row in live_rule_inputs.to_dict(orient="records"):
             row_id = int(row.get("_stage2_row_id", -1))
             if row_id >= 0:

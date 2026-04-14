@@ -1,8 +1,9 @@
 import os
+import shutil
 import sys
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 import pandas as pd
 
@@ -12,11 +13,18 @@ from rule_baseline.training.history_features import (
     LEVEL_DEFINITIONS,
     load_history_feature_artifacts,
     summarize_history_features,
+    validate_materialized_history_artifacts,
     write_history_feature_artifacts,
 )
 
 
 class HistoryFeatureArtifactsTest(unittest.TestCase):
+    def _make_tempdir(self) -> Path:
+        path = Path("polymarket_rule_engine/tests/_tmp_runtime") / f"history-{uuid4().hex}"
+        path.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(path, ignore_errors=True))
+        return path
+
     def test_history_features_can_be_persisted_and_reloaded_per_level(self) -> None:
         snapshots = pd.DataFrame(
             [
@@ -56,11 +64,13 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
         history_frames = summarize_history_features(snapshots)
         self.assertEqual(set(history_frames), set(LEVEL_DEFINITIONS))
         self.assertIn("global_expanding_logloss_mean", history_frames["global"].columns)
+        self.assertIn("global_expanding_bias_p50", history_frames["global"].columns)
         self.assertIn("full_group_recent_50_bias_mean", history_frames["full_group"].columns)
 
-        with TemporaryDirectory() as tmpdir:
+        tmpdir = self._make_tempdir()
+        with self.subTest("persist_and_reload"):
             paths = {
-                level_name: Path(tmpdir) / f"history_features_{level_name}.parquet"
+                level_name: tmpdir / f"history_features_{level_name}.parquet"
                 for level_name in LEVEL_DEFINITIONS
             }
             write_history_feature_artifacts(history_frames, paths)
@@ -70,7 +80,23 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
         self.assertEqual(len(reloaded["global"]), 1)
         self.assertEqual(len(reloaded["full_group"]), 2)
         self.assertIn("domain_recent_200_brier_mean", reloaded["domain"].columns)
+        self.assertIn("domain_recent_200_bias_p50", reloaded["domain"].columns)
         self.assertIn("category_x_market_type_expanding_abs_bias_p90", reloaded["category_x_market_type"].columns)
+
+    def test_validate_materialized_history_artifacts_fails_when_any_level_is_missing(self) -> None:
+        tmpdir = self._make_tempdir()
+        with self.subTest("missing_level_validation"):
+            paths = {
+                level_name: tmpdir / f"history_features_{level_name}.parquet"
+                for level_name in LEVEL_DEFINITIONS
+            }
+            for level_name, path in paths.items():
+                if level_name == "market_type":
+                    continue
+                pd.DataFrame([{"level_key": level_name, "value": 1.0}]).to_parquet(path, index=False)
+
+            with self.assertRaisesRegex(FileNotFoundError, "market_type"):
+                validate_materialized_history_artifacts(paths)
 
 
 if __name__ == "__main__":

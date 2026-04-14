@@ -87,6 +87,7 @@ def summarize_history_features(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                     bias_std=("row_bias", "std"),
                     bias_min=("row_bias", "min"),
                     bias_max=("row_bias", "max"),
+                    bias_p50=("row_bias", "median"),
                     abs_bias_mean=("row_abs_bias", "mean"),
                     abs_bias_p25=("row_abs_bias", lambda values: values.quantile(0.25)),
                     abs_bias_p50=("row_abs_bias", "median"),
@@ -118,6 +119,7 @@ def summarize_history_features(df: pd.DataFrame) -> dict[str, pd.DataFrame]:
                     "bias_std": f"{level_name}_{window_name}_bias_std",
                     "bias_min": f"{level_name}_{window_name}_bias_min",
                     "bias_max": f"{level_name}_{window_name}_bias_max",
+                    "bias_p50": f"{level_name}_{window_name}_bias_p50",
                     "abs_bias_mean": f"{level_name}_{window_name}_abs_bias_mean",
                     "abs_bias_p25": f"{level_name}_{window_name}_abs_bias_p25",
                     "abs_bias_p50": f"{level_name}_{window_name}_abs_bias_p50",
@@ -168,3 +170,16 @@ def load_history_feature_artifacts(history_artifact_paths: dict[str, Path]) -> d
             raise FileNotFoundError(f"History feature artifact not found for {level_name}: {path}")
         loaded[level_name] = pd.read_parquet(path)
     return loaded
+
+
+def validate_materialized_history_artifacts(history_artifact_paths: dict[str, Path]) -> None:
+    missing = [
+        f"{level_name}: {path}"
+        for level_name, path in history_artifact_paths.items()
+        if not path.exists()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Missing materialized history artifacts after generation: "
+            + ", ".join(missing)
+        )
