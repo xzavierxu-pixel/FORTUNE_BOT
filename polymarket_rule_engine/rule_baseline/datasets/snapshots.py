@@ -20,6 +20,9 @@ from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 DEFAULT_PRICE_MIN = 0.01
 DEFAULT_PRICE_MAX = 0.99
 DEFAULT_PRICE_BIN_STEP = 0.03
+RULE_TRAIN_PRICE_MIN = 0.2
+RULE_TRAIN_PRICE_MAX = 0.8
+RULE_TRAIN_PRICE_BIN_STEP = 0.1
 PRICE_BIN_STEP_OPTIONS = (0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1)
 MIN_MARKETS_PER_PRICE_BIN = 15
 RULE_BIN_GROUP_COLUMNS = ["domain", "category", "market_type"]
@@ -522,6 +525,26 @@ def build_rule_bins(
     return out.dropna(subset=["price_bin", "horizon_bin"]).copy()
 
 
+def prepare_rule_bin_frame(
+    df: pd.DataFrame,
+    *,
+    price_bin_step: float = RULE_TRAIN_PRICE_BIN_STEP,
+    bin_source_df: pd.DataFrame | None = None,
+    min_price: float = RULE_TRAIN_PRICE_MIN,
+    max_price: float = RULE_TRAIN_PRICE_MAX,
+) -> pd.DataFrame:
+    filtered = _filter_tradable_price_range(df, min_price=min_price, max_price=max_price)
+    reference = bin_source_df.copy() if bin_source_df is not None else df.copy()
+    filtered_reference = _filter_tradable_price_range(reference, min_price=min_price, max_price=max_price)
+    return build_rule_bins(
+        filtered,
+        price_bin_step=price_bin_step,
+        bin_source_df=filtered_reference,
+        min_price=min_price,
+        max_price=max_price,
+    )
+
+
 def prepare_rule_training_frame(
     artifact_mode: str = "offline",
     max_rows: int | None = None,
@@ -599,7 +622,7 @@ def prepare_rule_training_frame(
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
     funnel_summary["snapshot_funnel"].append(_stage_summary("after_dataset_split", snapshots))
     bin_source = snapshots.copy()
-    snapshots = build_rule_bins(
+    snapshots = prepare_rule_bin_frame(
         snapshots,
         price_bin_step=price_bin_step,
         bin_source_df=bin_source,

@@ -23,7 +23,7 @@ from rule_baseline.backtesting.backtest_portfolio_qmodel import (
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
 from rule_baseline.models import load_model_artifact
 from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, load_raw_markets, load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
+from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split, select_preferred_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
 from rule_baseline.utils import config
@@ -97,13 +97,14 @@ def prepare_execution_candidates(
 
 
 def compute_filter_breakdown(
-    test_snapshots: pd.DataFrame,
+    evaluation_snapshots: pd.DataFrame,
     rules: pd.DataFrame,
     market_feature_cache: pd.DataFrame,
     payload: dict,
     cfg: ExecutionParityConfig,
+    evaluation_split: str,
 ) -> tuple[dict[str, int], pd.DataFrame]:
-    matched = match_rules(test_snapshots, rules)
+    matched = match_rules(evaluation_snapshots, rules)
     matched_unique = matched[["market_id", "snapshot_time"]].drop_duplicates() if not matched.empty else pd.DataFrame()
     if not matched.empty:
         matched = matched.sort_values(["market_id", "snapshot_time", "rule_score"], ascending=[True, True, False])
@@ -113,8 +114,11 @@ def compute_filter_breakdown(
 
     if dedup_snapshot.empty:
         breakdown = {
-            "test_snapshot_rows": int(len(test_snapshots)),
-            "test_market_ids": int(test_snapshots["market_id"].nunique()),
+            "evaluation_split": evaluation_split,
+            "evaluation_snapshot_rows": int(len(evaluation_snapshots)),
+            "evaluation_market_ids": int(evaluation_snapshots["market_id"].nunique()),
+            "test_snapshot_rows": int(len(evaluation_snapshots)),
+            "test_market_ids": int(evaluation_snapshots["market_id"].nunique()),
             "matched_rule_rows": 0,
             "matched_market_ids": 0,
             "matched_market_snapshot_pairs": 0,
@@ -130,8 +134,11 @@ def compute_filter_breakdown(
     grown = compute_growth_and_direction(scored, cfg)
     earliest = apply_earliest_market_dedup(grown, score_column="edge_final") if not grown.empty else grown
     breakdown = {
-        "test_snapshot_rows": int(len(test_snapshots)),
-        "test_market_ids": int(test_snapshots["market_id"].nunique()),
+        "evaluation_split": evaluation_split,
+        "evaluation_snapshot_rows": int(len(evaluation_snapshots)),
+        "evaluation_market_ids": int(evaluation_snapshots["market_id"].nunique()),
+        "test_snapshot_rows": int(len(evaluation_snapshots)),
+        "test_market_ids": int(evaluation_snapshots["market_id"].nunique()),
         "matched_rule_rows": int(len(matched)),
         "matched_market_ids": int(matched["market_id"].nunique()),
         "matched_market_snapshot_pairs": int(len(matched_unique)),
@@ -482,15 +489,16 @@ def main() -> None:
 
     snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_temporal_split(
+    split = compute_artifact_split(
         snapshots,
+        artifact_mode="offline",
         reference_end=args.split_reference_end,
         history_start_override=args.history_start,
     )
     snapshots = assign_dataset_split(snapshots, split)
-    snapshots = snapshots[snapshots["dataset_split"] == "test"].copy()
+    evaluation_split, snapshots = select_preferred_split(snapshots)
     if snapshots.empty:
-        raise RuntimeError("No strict test-period snapshots available.")
+        raise RuntimeError("No evaluation-period snapshots available.")
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
@@ -498,7 +506,14 @@ def main() -> None:
     rules = load_rules(artifact_paths.rules_path)
     payload = load_model_payload(artifact_paths.model_path)
 
-    filter_breakdown, candidates = compute_filter_breakdown(snapshots, rules, market_feature_cache, payload, cfg)
+    filter_breakdown, candidates = compute_filter_breakdown(
+        snapshots,
+        rules,
+        market_feature_cache,
+        payload,
+        cfg,
+        evaluation_split=evaluation_split,
+    )
     artifact_paths.backtest_dir.mkdir(parents=True, exist_ok=True)
     equity_path = artifact_paths.backtest_dir / "backtest_equity_execution_parity.csv"
     trades_path = artifact_paths.backtest_dir / "backtest_trades_execution_parity.csv"

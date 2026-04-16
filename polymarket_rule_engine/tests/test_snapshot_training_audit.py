@@ -10,7 +10,7 @@ import pandas as pd
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.datasets.artifacts import build_artifact_paths
-from rule_baseline.training.snapshot_training_audit import (
+from rule_baseline.audits.snapshot_training_audit import (
     build_snapshot_training_audit_payload,
     write_snapshot_training_audit,
 )
@@ -38,7 +38,7 @@ class SnapshotTrainingAuditTest(unittest.TestCase):
 
         tmpdir = self._make_tempdir()
         with self.subTest("payload_tracks_funnel_and_artifacts"):
-            report_path = tmpdir / "naive_all_leaves_report.csv"
+            report_path = tmpdir / "all_trading_rule_audit_report.csv"
             pd.DataFrame(
                 [
                     {"group_key": "a|SPORTS|other", "selection_status": "keep"},

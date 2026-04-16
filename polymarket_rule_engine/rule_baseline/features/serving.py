@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from rule_baseline.utils import config
+
 
 @dataclass(frozen=True)
 class ServingFeatureBundle:
@@ -24,8 +26,26 @@ def build_group_key(frame: pd.DataFrame) -> pd.Series:
 
 
 def round_horizon_hours(values: pd.Series) -> pd.Series:
-    rounded = pd.to_numeric(values, errors="coerce").round()
-    return rounded.astype("Int64")
+    numeric = pd.to_numeric(values, errors="coerce")
+    buckets = pd.Series(pd.NA, index=numeric.index, dtype="Int64")
+    valid = numeric.notna() & numeric.ge(0.0)
+    if not valid.any():
+        return buckets
+
+    supported_hours = [float(value) for value in config.HORIZONS]
+    boundaries = [0.0]
+    for index in range(len(supported_hours) - 1):
+        boundaries.append((supported_hours[index] + supported_hours[index + 1]) / 2.0)
+    boundaries.append(np.inf)
+    labels = [int(value) for value in supported_hours]
+    mapped = pd.cut(
+        numeric[valid],
+        bins=boundaries,
+        labels=labels,
+        right=False,
+    )
+    buckets.loc[valid] = mapped.astype("Int64")
+    return buckets
 
 
 def build_price_bin(values: pd.Series) -> pd.Series:

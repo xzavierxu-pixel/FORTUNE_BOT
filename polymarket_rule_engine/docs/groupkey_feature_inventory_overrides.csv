@@ -1,9 +1,0 @@
-feature_name,source_table,status,audit_class,notes_append
-ix_category_absbias_q90_x_distextreme_1h,blueprint,intentionally_excluded,E_intentionally_excluded,Explicit interaction deferred because tree model can learn it from base features.
-ix_domain_absbias_q90_x_distextreme_1h,blueprint,intentionally_excluded,E_intentionally_excluded,Explicit interaction deferred because tree model can learn it from base features.
-ix_full_absbias_q90_x_distextreme_1h,blueprint,intentionally_excluded,E_intentionally_excluded,Explicit interaction deferred because tree model can learn it from base features.
-ix_markettype_absbias_q90_x_distextreme_1h,blueprint,intentionally_excluded,E_intentionally_excluded,Explicit interaction deferred because tree model can learn it from base features.
-category_id,blueprint,intentionally_excluded,E_intentionally_excluded,Prefer categorical handling rather than materializing a separate numeric serving feature.
-domain_id_hash,blueprint,intentionally_excluded,E_intentionally_excluded,Prefer categorical or encoding path rather than landing into serving assets now.
-group_key_id_hash,blueprint,intentionally_excluded,E_intentionally_excluded,Prefer categorical or encoding path rather than landing into serving assets now.
-market_type_id,blueprint,intentionally_excluded,E_intentionally_excluded,Prefer categorical handling rather than materializing a separate numeric serving feature.

@@ -71,8 +71,32 @@ def test_run_pipeline_builds_groupkey_validation_reports_after_model(monkeypatch
 
     labels = [label for label, _ in executed]
     assert "Train rules" in labels
+    assert "Export features" in labels
     assert "Train model" in labels
     assert "Build GroupKey validation reports" in labels
+    assert labels.index("Export features") > labels.index("Train rules")
+    assert labels.index("Train model") > labels.index("Export features")
     assert labels.index("Build GroupKey validation reports") > labels.index("Train model")
+    export_commands = [command for label, command in executed if label == "Export features"]
+    assert export_commands == [
+        [
+            sys.executable,
+            "rule_baseline/training/export_features.py",
+            "--calibration-mode",
+            "global_isotonic",
+            "--grouped-calibration-column",
+            "horizon_hours",
+            "--grouped-calibration-min-rows",
+            "20",
+            "--random-seed",
+            "21",
+            "--predictor-time-limit",
+            "300",
+            "--target-mode",
+            "q",
+            "--artifact-mode",
+            "offline",
+        ]
+    ]
     report_commands = [command for label, command in executed if label == "Build GroupKey validation reports"]
     assert report_commands == [[sys.executable, "rule_baseline/training/build_groupkey_validation_reports.py", "--artifact-mode", "offline"]]

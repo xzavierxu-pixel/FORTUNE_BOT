@@ -18,7 +18,7 @@ class ServingFeatureIntegrationTest(unittest.TestCase):
                     "market_id": "m1",
                     "snapshot_time": "2026-04-01T00:00:00Z",
                     "price": 0.45,
-                    "horizon_hours": 6,
+                    "horizon_hours": 7,
                     "domain": "example.com",
                     "category": "SPORTS",
                     "market_type": "other",
@@ -119,10 +119,9 @@ class ServingFeatureIntegrationTest(unittest.TestCase):
                         "group_default_q_full": 0.61,
                         "group_default_edge_full": 0.16,
                         "full_group_expanding_bias_mean": 0.04,
-                        "full_group_recent_50_vs_expanding_logloss_gap": 0.03,
-                        "full_group_recent_50_vs_expanding_bias_zscore": 0.40,
-                        "full_group_recent_200_vs_expanding_logloss_zscore": 0.25,
-                        "full_group_recent_50_tail_instability_ratio": 1.20,
+                        "full_group_recent_90days_vs_expanding_logloss_gap": 0.03,
+                        "full_group_recent_90days_vs_expanding_bias_zscore": 0.40,
+                        "full_group_recent_90days_tail_instability_ratio": 1.20,
                         "group_default_rule_edge_minus_domain_x_category_expanding_bias": 0.10,
                         "group_default_rule_score_minus_domain_x_market_type_expanding_logloss": -0.11,
                         "group_default_hist_price_x_full_group_expanding_bias": 0.017,
@@ -153,10 +152,9 @@ class ServingFeatureIntegrationTest(unittest.TestCase):
         self.assertIn("fine_feature_q_full", out.columns)
         self.assertIn("fine_feature_edge_full", out.columns)
         self.assertIn("group_feature_full_group_expanding_bias_mean", out.columns)
-        self.assertIn("group_feature_full_group_recent_50_vs_expanding_logloss_gap", out.columns)
-        self.assertIn("group_feature_full_group_recent_50_vs_expanding_bias_zscore", out.columns)
-        self.assertIn("group_feature_full_group_recent_200_vs_expanding_logloss_zscore", out.columns)
-        self.assertIn("group_feature_full_group_recent_50_tail_instability_ratio", out.columns)
+        self.assertIn("group_feature_full_group_recent_90days_vs_expanding_logloss_gap", out.columns)
+        self.assertIn("group_feature_full_group_recent_90days_vs_expanding_bias_zscore", out.columns)
+        self.assertIn("group_feature_full_group_recent_90days_tail_instability_ratio", out.columns)
         self.assertIn("fine_feature_hist_price_x_full_group_expanding_bias", out.columns)
         self.assertIn("fine_feature_rule_edge_minus_domain_expanding_bias", out.columns)
         self.assertIn("fine_feature_rule_edge_minus_domain_x_category_expanding_bias", out.columns)
@@ -168,10 +166,9 @@ class ServingFeatureIntegrationTest(unittest.TestCase):
         self.assertEqual(float(out.loc[0, "fine_feature_q_full"]), 0.63)
         self.assertEqual(float(out.loc[0, "fine_feature_edge_full"]), 0.18)
         self.assertEqual(float(out.loc[0, "group_feature_full_group_expanding_bias_mean"]), 0.04)
-        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_50_vs_expanding_logloss_gap"]), 0.03)
-        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_50_vs_expanding_bias_zscore"]), 0.40)
-        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_200_vs_expanding_logloss_zscore"]), 0.25)
-        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_50_tail_instability_ratio"]), 1.20)
+        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_90days_vs_expanding_logloss_gap"]), 0.03)
+        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_90days_vs_expanding_bias_zscore"]), 0.40)
+        self.assertEqual(float(out.loc[0, "group_feature_full_group_recent_90days_tail_instability_ratio"]), 1.20)
         self.assertEqual(float(out.loc[0, "fine_feature_hist_price_x_full_group_expanding_bias"]), 0.018)
         self.assertEqual(float(out.loc[0, "fine_feature_rule_edge_minus_domain_expanding_bias"]), 0.13)
         self.assertEqual(float(out.loc[0, "fine_feature_rule_edge_minus_domain_x_category_expanding_bias"]), 0.115)
@@ -180,6 +177,7 @@ class ServingFeatureIntegrationTest(unittest.TestCase):
         self.assertEqual(float(out.loc[0, "fine_feature_rule_score_minus_domain_x_market_type_expanding_logloss"]), -0.14)
         self.assertEqual(float(out.loc[0, "fine_feature_price_x_full_group_expanding_abs_bias_tail_spread"]), 0.09)
         self.assertEqual(float(out.loc[0, "fine_match_found"]), 1.0)
+        self.assertEqual(int(out.loc[0, "rounded_horizon_hours"]), 6)
 
 
 if __name__ == "__main__":

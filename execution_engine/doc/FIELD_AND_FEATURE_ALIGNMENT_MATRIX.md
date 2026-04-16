@@ -548,26 +548,15 @@ offline 对这组字段的 canonical 语义来自 `find_prices_batch(..., window
 | `abs_price_q_gap` | `price`, `q_smooth` | `按需计算` | 复用 offline 同名公式。 |
 | `abs_price_center_gap` | `price` | `按需计算` | 同上。 |
 | `horizon_q_gap` | `horizon_hours`, `abs_price_q_gap` | `按需计算` | 同上。 |
-| `log_horizon_x_liquidity` | `log_horizon`, `liquidity` | `按需计算` | 同上。 |
-| `spread_over_liquidity` | `spread`, `liquidity` | `按需计算` | 同上。 |
+| `log_horizon_x_liquidity` | 已移除 | 不再对齐 | 该特征已从 offline/live 默认特征流中删除，避免引入 terminal-state leakage。 |
+| `spread_over_liquidity` | 已移除 | 不再对齐 | 该特征已从 offline/live 默认特征流中删除，避免引入 terminal-state leakage。 |
 | `quote_staleness_x_horizon` | `selected_quote_offset_sec`, `horizon_hours` | `按需计算` | 只有 `selected_quote_offset_sec` 已语义对齐时才允许计算。 |
 | `rule_score_x_q_full` | `rule_score`, `q_smooth` | `按需计算` | 同上。 |
 | `edge_lower_bound_over_std` | `edge_lower_bound_full`, `edge_std_full` | `按需计算` | 只有真实消费者存在时计算。 |
 
-### 9.2 `market_structure_v2` 变体特征
+### 9.2 `market_structure_v2`
 
-| 特征 | 上游字段 | 对齐标签 | 对齐方式 |
-|---|---|---|---|
-| `book_mid_gap` | `price`, `bestBid`, `bestAsk` | `按需计算` | 只有特征变体启用且真实消费者存在时计算。 |
-| `spread_to_mid_ratio` | `spread`, `bestBid`, `bestAsk` | `按需计算` | 同上。 |
-| `quote_quality_score` | `spread_to_mid_ratio`, `selected_quote_offset_sec` | `按需计算` | 只有 quote staleness 已语义对齐时计算。 |
-| `liquidity_pressure` | `liquidityClob`, `liquidity` | `按需计算` | 同上。 |
-| `clob_turnover_24h` | `volume24hrClob`, `liquidityClob` | `按需计算` | 同上。 |
-| `clob_turnover_1w` | `volume1wkClob`, `liquidityClob` | `按需计算` | 同上。 |
-| `uncertainty_normalized_edge` | `edge_lower_bound_full`, `edge_std_full` | `按需计算` | 同上。 |
-| `rule_confidence_gap` | `rule_score`, `abs_price_q_gap` | `按需计算` | 同上。 |
-| `reward_spread_alignment` | `rewardsMaxSpread`, `spread` | `按需计算` | 同上。 |
-| `horizon_term_structure` | `log_horizon`, `abs_price_center_gap` | `按需计算` | 同上。 |
+该变体已移除，不再是支持的特征变体，也不应再作为 offline/live 对齐目标。
 
 ### 9.3 `interaction_plus_textlite` 变体特征
 

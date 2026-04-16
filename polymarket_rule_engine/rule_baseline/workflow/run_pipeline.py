@@ -124,6 +124,27 @@ def main() -> None:
     )
     run_step("Train rules", train_rules_cmd)
 
+    export_features_cmd = add_common_args(
+        [
+            sys.executable,
+            "rule_baseline/training/export_features.py",
+            "--calibration-mode",
+            args.calibration_mode,
+            "--grouped-calibration-column",
+            args.grouped_calibration_column,
+            "--grouped-calibration-min-rows",
+            str(args.grouped_calibration_min_rows),
+            "--random-seed",
+            str(args.random_seed),
+            "--predictor-time-limit",
+            str(args.predictor_time_limit),
+            "--target-mode",
+            args.target_mode,
+        ],
+        args,
+    )
+    run_step("Export features", export_features_cmd)
+
     train_model_cmd = add_common_args(
         [
             sys.executable,

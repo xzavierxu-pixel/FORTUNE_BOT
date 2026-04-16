@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from rule_baseline.training.history_features import HISTORY_ARTIFACT_FILENAMES
+from rule_baseline.history.history_features import HISTORY_ARTIFACT_FILENAMES
 from rule_baseline.models.runtime_bundle import (
     FULL_TRAINING_BUNDLE_DIRNAME,
     RUNTIME_BUNDLE_DIRNAME,
@@ -26,10 +26,11 @@ class ArtifactPaths:
     analysis_dir: Path
     metadata_dir: Path
     audit_dir: Path
-    naive_rules_dir: Path
+    docs_dir: Path
+    docs_audit_dir: Path
+    docs_groupkey_reports_dir: Path
     rules_path: Path
     rule_report_path: Path
-    rule_json_path: Path
     history_feature_paths: dict[str, Path]
     group_serving_features_path: Path
     fine_serving_features_path: Path
@@ -50,6 +51,12 @@ class ArtifactPaths:
     artifact_inventory_markdown_path: Path
     snapshot_training_audit_json_path: Path
     snapshot_training_audit_markdown_path: Path
+    docs_model_training_summary_path: Path
+    groupkey_migration_validation_path: Path
+    groupkey_consistency_report_path: Path
+    groupkey_serving_schema_reference_path: Path
+    groupkey_runtime_report_json_path: Path
+    groupkey_runtime_report_markdown_path: Path
 
     def ensure_dirs(self) -> None:
         bundle_paths = build_runtime_bundle_paths(self.model_bundle_dir)
@@ -63,7 +70,9 @@ class ArtifactPaths:
             self.analysis_dir,
             self.metadata_dir,
             self.audit_dir,
-            self.naive_rules_dir,
+            self.docs_dir,
+            self.docs_audit_dir,
+            self.docs_groupkey_reports_dir,
         ]:
             path.mkdir(parents=True, exist_ok=True)
         bundle_paths.ensure_dirs()
@@ -86,10 +95,11 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         analysis_dir=root / "analysis",
         metadata_dir=root / "metadata",
         audit_dir=root / "audit",
-        naive_rules_dir=root / "naive_rules",
+        docs_dir=config.BASE_DIR / "docs",
+        docs_audit_dir=config.BASE_DIR / "docs" / "audit",
+        docs_groupkey_reports_dir=config.BASE_DIR / "docs" / "audit" / "groupkey_reports",
         rules_path=root / "edge" / "trading_rules.csv",
-        rule_report_path=root / "naive_rules" / "naive_all_leaves_report.csv",
-        rule_json_path=root / "naive_rules" / "naive_trading_rules.json",
+        rule_report_path=root / "audit" / "all_trading_rule_audit_report.csv",
         history_feature_paths={
             level_name: root / "edge" / filename
             for level_name, filename in HISTORY_ARTIFACT_FILENAMES.items()
@@ -113,6 +123,12 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         artifact_inventory_markdown_path=root / "audit" / "artifact_inventory.md",
         snapshot_training_audit_json_path=root / "audit" / "snapshot_training_funnel.json",
         snapshot_training_audit_markdown_path=root / "audit" / "snapshot_training_funnel.md",
+        docs_model_training_summary_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "model_training_summary.json",
+        groupkey_migration_validation_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_migration_validation.md",
+        groupkey_consistency_report_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_consistency_report.md",
+        groupkey_serving_schema_reference_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_serving_schema_reference.md",
+        groupkey_runtime_report_json_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_runtime_report.json",
+        groupkey_runtime_report_markdown_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_runtime_report.md",
     )
     paths.ensure_dirs()
     return paths

@@ -9,7 +9,7 @@ import pandas as pd
 
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
-from rule_baseline.training.history_features import (
+from rule_baseline.history.history_features import (
     LEVEL_DEFINITIONS,
     load_history_feature_artifacts,
     summarize_history_features,
@@ -36,6 +36,7 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
                     "price": 0.40,
                     "y": 1,
                     "horizon_hours": 6,
+                    "closedTime": "2025-12-01T00:00:00Z",
                     "snapshot_time": "2026-04-01T00:00:00Z",
                 },
                 {
@@ -46,6 +47,7 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
                     "price": 0.60,
                     "y": 0,
                     "horizon_hours": 12,
+                    "closedTime": "2026-04-02T00:00:00Z",
                     "snapshot_time": "2026-04-02T00:00:00Z",
                 },
                 {
@@ -56,6 +58,7 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
                     "price": 0.55,
                     "y": 1,
                     "horizon_hours": 24,
+                    "closedTime": "2026-04-03T00:00:00Z",
                     "snapshot_time": "2026-04-03T00:00:00Z",
                 },
             ]
@@ -65,7 +68,9 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
         self.assertEqual(set(history_frames), set(LEVEL_DEFINITIONS))
         self.assertIn("global_expanding_logloss_mean", history_frames["global"].columns)
         self.assertIn("global_expanding_bias_p50", history_frames["global"].columns)
-        self.assertIn("full_group_recent_50_bias_mean", history_frames["full_group"].columns)
+        self.assertIn("full_group_recent_90days_bias_mean", history_frames["full_group"].columns)
+        example_group = history_frames["full_group"][history_frames["full_group"]["level_key"] == "example.com|SPORTS|moneyline"].iloc[0]
+        self.assertEqual(float(example_group["full_group_recent_90days_snapshot_count"]), 1.0)
 
         tmpdir = self._make_tempdir()
         with self.subTest("persist_and_reload"):
@@ -79,8 +84,8 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
         self.assertEqual(set(reloaded), set(LEVEL_DEFINITIONS))
         self.assertEqual(len(reloaded["global"]), 1)
         self.assertEqual(len(reloaded["full_group"]), 2)
-        self.assertIn("domain_recent_200_brier_mean", reloaded["domain"].columns)
-        self.assertIn("domain_recent_200_bias_p50", reloaded["domain"].columns)
+        self.assertIn("domain_recent_90days_brier_mean", reloaded["domain"].columns)
+        self.assertIn("domain_recent_90days_bias_p50", reloaded["domain"].columns)
         self.assertIn("category_x_market_type_expanding_abs_bias_p90", reloaded["category_x_market_type"].columns)
 
     def test_validate_materialized_history_artifacts_fails_when_any_level_is_missing(self) -> None:

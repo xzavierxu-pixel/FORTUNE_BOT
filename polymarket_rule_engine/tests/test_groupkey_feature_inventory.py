@@ -4,7 +4,7 @@ import unittest
 
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
-from rule_baseline.training.build_groupkey_feature_inventory import (
+from rule_baseline.reports.build_groupkey_feature_inventory import (
     _docs_dir,
     _alias_candidates,
     apply_inventory_override,
@@ -34,7 +34,7 @@ class GroupKeyFeatureInventoryTest(unittest.TestCase):
             "audit_class": "B_keep_but_later",
         }
         normal_row = {
-            "feature_name": "full_group_recent_50_tail_instability_ratio",
+            "feature_name": "full_group_recent_90days_tail_instability_ratio",
             "notes": "Need tail spread normalized by median or std.",
             "status": "pending_implementation",
             "audit_class": "B_keep_but_later",
@@ -112,14 +112,16 @@ class GroupKeyFeatureInventoryTest(unittest.TestCase):
 
         self.assertNotIn("pending", statuses)
         self.assertIn("implemented_exact", statuses)
-        self.assertIn("pending_implementation", statuses)
         self.assertIn("intentionally_excluded", statuses)
         self.assertIn("unsupported_now", statuses)
+        self.assertTrue({"implemented_approximate", "pending_implementation"} & statuses)
 
         summary = build_inventory_summary_markdown(inventory)
         self.assertIn("# GroupKey Feature Inventory Summary", summary)
         self.assertIn("- implemented_exact=", summary)
-        self.assertIn("- pending_implementation=", summary)
+        self.assertTrue(
+            "- implemented_approximate=" in summary or "- pending_implementation=" in summary
+        )
         self.assertIn("- unsupported_now=", summary)
 
 

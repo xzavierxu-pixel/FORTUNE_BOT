@@ -12,8 +12,22 @@ from sklearn.metrics import roc_auc_score
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.backtesting.backtest_portfolio_qmodel import BacktestConfig, match_rules, select_top_rules, trade_pnl
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
-from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, build_rule_bins, load_raw_markets, load_research_snapshots
-from rule_baseline.datasets.splits import TemporalSplit, assign_dataset_split, build_walk_forward_splits, compute_temporal_split
+from rule_baseline.datasets.snapshots import (
+    RULE_TRAIN_PRICE_BIN_STEP,
+    RULE_TRAIN_PRICE_MAX,
+    RULE_TRAIN_PRICE_MIN,
+    apply_earliest_market_dedup,
+    load_raw_markets,
+    load_research_snapshots,
+    prepare_rule_bin_frame,
+)
+from rule_baseline.datasets.splits import (
+    TemporalSplit,
+    assign_dataset_split,
+    build_walk_forward_splits,
+    compute_artifact_split,
+    select_preferred_split,
+)
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
 from rule_baseline.models import fit_model_payload, fit_regression_payload, predict_probabilities, predict_regression
@@ -91,6 +105,10 @@ def split_frame(df_feat: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.D
     )
 
 
+def select_evaluation_split(df_feat: pd.DataFrame) -> tuple[str, pd.DataFrame]:
+    return select_preferred_split(df_feat)
+
+
 def build_window_feature_frame(
     raw_snapshots: pd.DataFrame,
     market_feature_cache: pd.DataFrame,
@@ -99,7 +117,12 @@ def build_window_feature_frame(
     split_snapshots = assign_dataset_split(raw_snapshots, split)
     split_snapshots = split_snapshots[split_snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
 
-    rule_frame = build_rule_bins(split_snapshots)
+    rule_frame = prepare_rule_bin_frame(
+        split_snapshots,
+        min_price=RULE_TRAIN_PRICE_MIN,
+        max_price=RULE_TRAIN_PRICE_MAX,
+        price_bin_step=RULE_TRAIN_PRICE_BIN_STEP,
+    )
     rules_df, _ = build_rules(rule_frame, artifact_mode="offline")
     if rules_df.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -254,7 +277,7 @@ def slice_stability(
     window_label: str,
     min_count: int = 20,
 ) -> pd.DataFrame:
-    test_df = df_pred[df_pred["dataset_split"] == "test"].copy()
+    evaluation_split, test_df = select_evaluation_split(df_pred)
     rows = []
     for value, subset in test_df.groupby(group_column, observed=False):
         if len(subset) < min_count:
@@ -264,6 +287,7 @@ def slice_stability(
             {
                 "window_label": window_label,
                 "baseline": baseline,
+                "dataset_split": evaluation_split,
                 "group_column": group_column,
                 "group_value": value,
                 "rows": int(len(subset)),
@@ -285,7 +309,8 @@ def run_flat_backtest(
     max_daily_exposure_f: float = DEFAULT_MAX_DAILY_EXPOSURE_F,
 ) -> dict[str, float | int | None]:
     bankroll = 10_000.0
-    test_df = df_pred[(df_pred["dataset_split"] == "test") & (df_pred[decision_column])].copy()
+    _, evaluation_df = select_evaluation_split(df_pred)
+    test_df = evaluation_df[evaluation_df[decision_column]].copy()
     if test_df.empty:
         return {"trades": 0, "final_bankroll": bankroll, "roi": 0.0, "win_rate": np.nan, "max_drawdown_pct": 0.0}
 
@@ -342,9 +367,10 @@ def evaluate_window(
     top_k: int,
 ) -> dict[str, pd.DataFrame | dict]:
     df_feat, top_rules = build_window_feature_frame(raw_snapshots, market_feature_cache, split)
+    evaluation_split = "test" if split.test_start is not None and split.test_end is not None else "valid"
     if df_feat.empty or top_rules.empty:
         empty_summary = pd.DataFrame(
-            [{"window_label": window_label, "baseline": spec.name, "dataset_split": "test", "rows": 0, "signals": 0} for spec in BASELINE_SPECS]
+            [{"window_label": window_label, "baseline": spec.name, "dataset_split": evaluation_split, "rows": 0, "signals": 0} for spec in BASELINE_SPECS]
         )
         empty_backtest = pd.DataFrame(
             [{"window_label": window_label, "baseline": spec.name, "trades": 0, "final_bankroll": 10_000.0, "roi": 0.0} for spec in BASELINE_SPECS]
@@ -359,11 +385,13 @@ def evaluate_window(
                 "rules_selected": int(len(top_rules)),
                 "candidate_rows": 0,
                 "rows_by_split": {},
+                "evaluation_split": evaluation_split,
                 "boundaries": split.to_dict(),
             },
         }
 
     df_pred = fit_baselines(df_feat)
+    evaluation_split, evaluation_predictions = select_evaluation_split(df_pred)
     summary_df = summarize_baselines(df_pred, top_k, window_label)
     backtest_df = compare_backtests(df_pred, window_label)
 
@@ -379,19 +407,20 @@ def evaluate_window(
         "rules_selected": int(len(top_rules)),
         "candidate_rows": int(len(df_pred)),
         "rows_by_split": df_pred["dataset_split"].value_counts().to_dict(),
+        "evaluation_split": evaluation_split,
         "boundaries": split.to_dict(),
     }
     return {
         "summary": summary_df,
         "backtest": backtest_df,
         "stability": stability_df,
-        "test_predictions": df_pred[df_pred["dataset_split"] == "test"].copy(),
+        "test_predictions": evaluation_predictions.copy(),
         "metadata": metadata,
     }
 
 
 def aggregate_walk_forward(summary_df: pd.DataFrame, backtest_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    test_only = summary_df[summary_df["dataset_split"] == "test"].copy()
+    test_only = summary_df[summary_df["dataset_split"].isin(["test", "valid"])].copy()
     aggregate_summary = (
         test_only.groupby("baseline", observed=False)
         .agg(
@@ -435,8 +464,9 @@ def main() -> None:
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
     market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
 
-    latest_split = compute_temporal_split(
+    latest_split = compute_artifact_split(
         raw_snapshots,
+        artifact_mode="offline",
         reference_end=args.split_reference_end,
         history_start_override=args.history_start,
     )

@@ -6,7 +6,7 @@ import sys
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from rule_baseline.training.groupkey_reports import write_groupkey_reports
+from rule_baseline.reports.groupkey_reports import write_groupkey_reports
 
 
 def parse_args() -> argparse.Namespace:

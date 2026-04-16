@@ -10,7 +10,7 @@ import pandas as pd
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.datasets.artifacts import build_artifact_paths
-from rule_baseline.training.rule_generation_audit import (
+from rule_baseline.audits.rule_generation_audit import (
     build_rule_generation_audit_payload,
     write_rule_generation_audit,
 )
@@ -76,7 +76,7 @@ class RuleGenerationAuditTest(unittest.TestCase):
                 "history_feature_paths",
                 {level_name: edge_dir / path.name for level_name, path in local_paths.history_feature_paths.items()},
             )
-            object.__setattr__(local_paths, "rule_report_path", tmpdir / "naive_all_leaves_report.csv")
+            object.__setattr__(local_paths, "rule_report_path", audit_dir / "all_trading_rule_audit_report.csv")
             object.__setattr__(local_paths, "rule_funnel_summary_path", audit_dir / "rule_funnel_summary.json")
             object.__setattr__(local_paths, "rule_generation_audit_json_path", audit_dir / "rule_generation_audit.json")
             object.__setattr__(local_paths, "rule_generation_audit_markdown_path", audit_dir / "rule_generation_audit.md")

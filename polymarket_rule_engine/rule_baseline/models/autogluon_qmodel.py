@@ -72,18 +72,15 @@ def _coerce_feature_frame(
     categorical_columns: list[str],
 ) -> pd.DataFrame:
     out = df.loc[:, feature_columns].copy()
-    for column in numeric_columns:
-        out[column] = (
-            pd.to_numeric(out[column], errors="coerce")
-            .replace([np.inf, -np.inf], np.nan)
-            .fillna(0.0)
-            .astype(np.float32)
-        )
+    if numeric_columns:
+        numeric_frame = out.loc[:, numeric_columns].apply(pd.to_numeric, errors="coerce")
+        numeric_frame = numeric_frame.replace([np.inf, -np.inf], np.nan).fillna(0.0).astype(np.float32)
+        out = out.drop(columns=numeric_columns).join(numeric_frame)
     for column in categorical_columns:
-        out[column] = out[column].astype("string").fillna("UNKNOWN").astype(object)
+        out[column] = out[column].astype("string").fillna("UNKNOWN").astype("category")
     # Rebuild the frame once after column-wise coercion to avoid highly fragmented
     # pandas internals causing large temporary allocations inside AutoGluon.
-    return pd.DataFrame(out, copy=True)
+    return pd.DataFrame(out.loc[:, feature_columns], copy=True)
 
 
 def _extract_group_values(df: pd.DataFrame, group_column: str) -> pd.Series:

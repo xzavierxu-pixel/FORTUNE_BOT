@@ -10,7 +10,7 @@ import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths
 from rule_baseline.datasets.snapshots import load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
+from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split, select_preferred_split
 from rule_baseline.utils import config
 
 PRICE_MIN = 0.05
@@ -19,7 +19,7 @@ MIN_RULE_N = 50
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Analyze rule alpha on the strict test split.")
+    parser = argparse.ArgumentParser(description="Analyze rule alpha on the latest evaluation split.")
     parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
     parser.add_argument("--split-reference-end", type=str, default=None)
     parser.add_argument("--history-start", type=str, default=None)
@@ -33,21 +33,14 @@ def load_inputs(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     snapshots = load_research_snapshots()
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_temporal_split(
+    split = compute_artifact_split(
         snapshots,
+        artifact_mode="offline",
         reference_end=split_reference_end,
         history_start_override=history_start,
     )
     snapshots = assign_dataset_split(snapshots, split)
-    preferred_splits = ["test", "valid", "train"]
-    selected_split = "empty"
-    selected = pd.DataFrame(columns=snapshots.columns)
-    for split_name in preferred_splits:
-        candidate = snapshots[snapshots["dataset_split"] == split_name].copy()
-        if not candidate.empty:
-            selected = candidate
-            selected_split = split_name
-            break
+    selected_split, selected = select_preferred_split(snapshots)
     snapshots = selected.copy()
     snapshots = snapshots[(snapshots["price"] >= PRICE_MIN) & (snapshots["price"] <= PRICE_MAX)].copy()
     snapshots.attrs["evaluation_scope"] = selected_split
@@ -87,7 +80,7 @@ def match_rules_to_snapshots(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd
     )
     matched = merged[mask].copy()
     if matched.empty:
-        raise RuntimeError("No rules matched test snapshots under current schema.")
+        raise RuntimeError("No rules matched the selected evaluation snapshots under current schema.")
     return matched
 
 

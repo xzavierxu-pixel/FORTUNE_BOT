@@ -38,10 +38,6 @@ from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 from rule_baseline.features.annotation_normalization import build_normalization_manifest, normalize_market_annotations
 from rule_baseline.features.snapshot_semantics import FEATURE_SEMANTICS_VERSION, online_feature_columns, split_feature_contract_columns
-from rule_baseline.training.snapshot_training_audit import (
-    build_snapshot_training_audit_payload,
-    write_snapshot_training_audit,
-)
 
 TRAIN_PRICE_MIN = 0.2
 TRAIN_PRICE_MAX = 0.8
@@ -50,6 +46,10 @@ DEFAULT_SNAPSHOT_PRESETS = "medium_quality"
 DEFAULT_SNAPSHOT_TIME_LIMIT = 300
 DEFAULT_SNAPSHOT_HYPERPARAMETER_PROFILE = "gbm_cat"
 DEFAULT_SNAPSHOT_REFIT_FULL = True
+DEFAULT_OFFLINE_TRAIN_SAMPLE_ROWS = 200_000
+TRAIN_FEATURES_PARQUET_PATH = config.PROCESSED_DIR / "train.parquet"
+VALID_FEATURES_PARQUET_PATH = config.PROCESSED_DIR / "valid.parquet"
+FEATURE_EXPORT_MANIFEST_PATH = config.PROCESSED_DIR / "feature_export_manifest.json"
 
 DROP_COLS = {
     "y",
@@ -133,6 +133,7 @@ DROP_COLS = {
     "duration_below_min_horizon_flag",
     "price_in_range_flag",
     "liquidity",
+    "log_horizon_x_liquidity",
     "negRisk",
     "liquidityAmm",
     "liquidityClob",
@@ -159,6 +160,7 @@ DROP_COLS = {
     "description_market",
     "question_market",
     "volume",
+    "spread_over_liquidity",
     "volume24hr",
     "volume1wk",
     "oneHourPriceChange",
@@ -529,6 +531,36 @@ def save_model(payload: dict, model_path) -> None:
     print(f"[INFO] Saved ensemble payload to {model_path}")
 
 
+def load_feature_export_manifest(path=FEATURE_EXPORT_MANIFEST_PATH) -> dict:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Feature export manifest not found at {path}. Run export_features.py before train_snapshot_model.py."
+        )
+    with path.open("r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def load_exported_feature_frames(
+    train_path=TRAIN_FEATURES_PARQUET_PATH,
+    valid_path=VALID_FEATURES_PARQUET_PATH,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    missing = [str(path) for path in [train_path, valid_path] if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Missing exported parquet feature files. Run export_features.py first. Missing: "
+            + ", ".join(missing)
+        )
+    return pd.read_parquet(train_path), pd.read_parquet(valid_path)
+
+
+def resolve_train_sample_rows(artifact_mode: str, configured_rows: int | None) -> int | None:
+    if configured_rows is not None:
+        return configured_rows
+    if artifact_mode == "offline":
+        return DEFAULT_OFFLINE_TRAIN_SAMPLE_ROWS
+    return None
+
+
 def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, artifact_mode: str, target_mode: str) -> dict:
     if target_mode == "q":
         q_pred = model_artifact.predict(df_feat)
@@ -570,7 +602,14 @@ def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, ar
     out["edge_prob"] = out["q_pred"] - out["price"]
     out.to_csv(artifact_paths.predictions_full_path, index=False)
 
-    publish_df = out[out["dataset_split"] == "test"].copy() if artifact_mode == "offline" else out.copy()
+    if artifact_mode == "offline":
+        publish_df = out[out["dataset_split"] == "test"].copy()
+        if publish_df.empty:
+            publish_df = out[out["dataset_split"] == "valid"].copy()
+        if publish_df.empty:
+            publish_df = out[out["dataset_split"] == "train"].copy()
+    else:
+        publish_df = out.copy()
     publish_df.to_csv(artifact_paths.predictions_path, index=False)
 
     metrics_by_split = {
@@ -588,74 +627,18 @@ def main() -> None:
     artifact_paths = build_artifact_paths(args.artifact_mode)
     if args.artifact_mode == "online" and args.target_mode != "q":
         raise ValueError("Online production artifacts support only target_mode='q'.")
-
-    rebuild_canonical_merged()
-    snapshots_loaded = load_online_parity_snapshots(
-        min_price=TRAIN_PRICE_MIN,
-        max_price=TRAIN_PRICE_MAX,
-        max_rows=args.max_rows,
-        recent_days=args.recent_days,
-    )
-    snapshots_quality = snapshots_loaded[snapshots_loaded["quality_pass"]].copy()
-    if args.random_sample_rows is not None and args.random_sample_rows > 0 and len(snapshots_quality) > args.random_sample_rows:
-        snapshots_quality = snapshots_quality.sample(args.random_sample_rows, random_state=args.random_sample_seed).copy()
-    split = compute_artifact_split(
-        snapshots_quality,
-        artifact_mode=args.artifact_mode,
-        reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
-    )
-    snapshots = assign_dataset_split(snapshots_quality, split)
-    allowed_splits = ["train", "valid", "test"] if args.artifact_mode == "offline" else ["train", "valid"]
-    snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
-
-    raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
-    market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
-    normalization_manifest = build_normalization_manifest(market_annotations_raw)
-    market_annotations = normalize_market_annotations(
-        market_annotations_raw,
-        vocabulary_manifest=normalization_manifest,
-    )
-    market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
-    rules = load_rules(artifact_paths.rules_path)
-    serving_feature_bundle = load_serving_feature_bundle(artifact_paths)
-
-    df_feat = build_feature_table(
-        snapshots,
-        market_feature_cache,
-        market_annotations,
-        rules,
-        serving_feature_bundle=serving_feature_bundle,
-    )
-    if df_feat.empty:
-        raise RuntimeError("No feature rows available after rule matching.")
-    df_feat = add_training_targets(df_feat)
-
-    feature_columns = online_feature_columns([column for column in df_feat.columns if column not in DROP_COLS])
-    required_critical_columns, required_noncritical_columns = split_feature_contract_columns(feature_columns)
-    df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
-    df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
-
-    audit_payload = build_snapshot_training_audit_payload(
-        artifact_paths=artifact_paths,
-        snapshots_loaded=snapshots_loaded,
-        snapshots_quality=snapshots_quality,
-        snapshots_assigned=snapshots,
-        df_feat=df_feat,
-        feature_columns=feature_columns,
-        rules_df=rules,
-        sample_config={
-            "max_rows": args.max_rows,
-            "recent_days": args.recent_days,
-            "random_sample_rows": args.random_sample_rows,
-            "random_sample_seed": args.random_sample_seed,
-            "split_reference_end": args.split_reference_end,
-            "history_start": args.history_start,
-            "target_mode": args.target_mode,
-            "predictor_hyperparameters_profile": args.predictor_hyperparameters_profile,
-        },
-    )
-    write_snapshot_training_audit(artifact_paths=artifact_paths, payload=audit_payload)
+    manifest = load_feature_export_manifest()
+    if manifest.get("artifact_mode") != args.artifact_mode:
+        raise ValueError(
+            f"Exported feature artifact_mode={manifest.get('artifact_mode')} does not match train_snapshot_model artifact_mode={args.artifact_mode}."
+        )
+    df_train, df_valid = load_exported_feature_frames()
+    df_feat = pd.concat([df_train, df_valid], ignore_index=True)
+    feature_columns = list(manifest["feature_columns"])
+    required_critical_columns = list(manifest["required_critical_columns"])
+    required_noncritical_columns = list(manifest["required_noncritical_columns"])
+    normalization_manifest = dict(manifest.get("normalization_manifest") or {})
+    split = manifest["split_boundaries"]
 
     if df_train.empty:
         raise RuntimeError("Empty training split.")
@@ -679,7 +662,7 @@ def main() -> None:
             bundle_dir=artifact_paths.model_bundle_dir,
             full_bundle_dir=artifact_paths.full_model_bundle_dir,
             artifact_mode=args.artifact_mode,
-            split_boundaries=split.to_dict(),
+            split_boundaries=split,
             predictor_presets=predictor_presets,
             time_limit=args.predictor_time_limit,
             random_seed=args.random_seed,
@@ -716,7 +699,7 @@ def main() -> None:
     if args.target_mode != "q":
         model_artifact["artifact_mode"] = args.artifact_mode
         model_artifact["target_mode"] = args.target_mode
-        model_artifact["split_boundaries"] = split.to_dict()
+        model_artifact["split_boundaries"] = split
         save_model(model_artifact, artifact_paths.legacy_model_path)
 
     metrics_by_split = export_predictions(model_artifact, df_feat, artifact_paths, args.artifact_mode, args.target_mode)
@@ -727,8 +710,10 @@ def main() -> None:
         "feature_count": len(feature_columns),
         "rows_by_split": df_feat["dataset_split"].value_counts().to_dict(),
         "metrics_by_split": metrics_by_split,
-        "boundaries": split.to_dict(),
+        "boundaries": split,
         "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+        "feature_export_manifest_path": str(FEATURE_EXPORT_MANIFEST_PATH),
+        "feature_export_rows": manifest.get("rows", {}),
     }
     if args.target_mode == "q":
         training_summary["model_artifact"] = {
@@ -764,17 +749,10 @@ def main() -> None:
         artifact_paths.model_training_summary_path,
         training_summary,
     )
-    audit_payload = build_snapshot_training_audit_payload(
-        artifact_paths=artifact_paths,
-        snapshots_loaded=snapshots_loaded,
-        snapshots_quality=snapshots_quality,
-        snapshots_assigned=snapshots,
-        df_feat=df_feat,
-        feature_columns=feature_columns,
-        rules_df=rules,
-        sample_config=audit_payload["sample_config"],
+    write_json(
+        artifact_paths.docs_model_training_summary_path,
+        training_summary,
     )
-    write_snapshot_training_audit(artifact_paths=artifact_paths, payload=audit_payload)
 
     print(f"[INFO] Saved published predictions to {artifact_paths.predictions_path}")
     print(f"[INFO] Saved full diagnostic predictions to {artifact_paths.predictions_full_path}")

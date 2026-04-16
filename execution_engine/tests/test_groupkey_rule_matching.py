@@ -189,7 +189,7 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                     "domain": "example.com",
                     "category": "SPORTS",
                     "market_type": "other",
-                    "remaining_hours": 7.2,
+                    "remaining_hours": 9.2,
                     "live_mid_price": 0.46,
                 }
             ]

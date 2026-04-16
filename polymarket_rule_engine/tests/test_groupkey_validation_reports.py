@@ -7,8 +7,10 @@ import pandas as pd
 sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.models.runtime_bundle import FeatureContract
-from rule_baseline.training.groupkey_reports import (
+from rule_baseline.datasets.artifacts import build_artifact_paths
+from rule_baseline.reports.groupkey_reports import (
     _docs_dir,
+    _groupkey_reports_dir,
     build_schema_reference_markdown,
     build_consistency_report_markdown,
     build_migration_validation_markdown,
@@ -21,6 +23,13 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
         docs_dir = _docs_dir()
         self.assertTrue(str(docs_dir).endswith("polymarket_rule_engine\\docs"))
         self.assertEqual(docs_dir.name, "docs")
+
+    def test_groupkey_reports_dir_resolves_to_docs_audit_subfolder(self) -> None:
+        reports_dir = _groupkey_reports_dir()
+        expected = build_artifact_paths("offline").docs_groupkey_reports_dir
+        self.assertEqual(reports_dir, expected)
+        self.assertTrue(str(reports_dir).endswith("polymarket_rule_engine\\docs\\audit\\groupkey_reports"))
+        self.assertEqual(reports_dir.name, "groupkey_reports")
 
     def test_build_migration_validation_markdown_contains_summary_and_distribution(self) -> None:
         rule_funnel_summary = {
@@ -62,7 +71,7 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
             feature_columns=(
                 "price",
                 "group_feature_full_group_expanding_bias_mean",
-                "group_feature_full_group_recent_50_tail_instability_ratio",
+                "group_feature_full_group_recent_90days_tail_instability_ratio",
                 "fine_feature_q_full",
                 "fine_feature_rule_edge_minus_domain_x_category_expanding_bias",
                 "fine_feature_missing_from_assets",
@@ -72,7 +81,7 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
             required_critical_columns=("price",),
             required_noncritical_columns=(
                 "group_feature_full_group_expanding_bias_mean",
-                "group_feature_full_group_recent_50_tail_instability_ratio",
+                "group_feature_full_group_recent_90days_tail_instability_ratio",
                 "fine_feature_q_full",
                 "fine_feature_rule_edge_minus_domain_x_category_expanding_bias",
                 "fine_feature_missing_from_assets",
@@ -83,7 +92,7 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
                 {
                     "group_key": "a|SPORTS|other",
                     "full_group_expanding_bias_mean": 0.1,
-                    "full_group_recent_50_tail_instability_ratio": 1.2,
+                    "full_group_recent_90days_tail_instability_ratio": 1.2,
                     "unused_group_metric": 9.0,
                 }
             ]

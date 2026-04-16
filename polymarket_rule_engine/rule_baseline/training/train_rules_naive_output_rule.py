@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import sys
 from math import sqrt
@@ -12,8 +11,13 @@ import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
-from rule_baseline.datasets.snapshots import prepare_rule_training_frame
-from rule_baseline.training.history_features import (
+from rule_baseline.datasets.snapshots import (
+    RULE_TRAIN_PRICE_BIN_STEP,
+    RULE_TRAIN_PRICE_MAX,
+    RULE_TRAIN_PRICE_MIN,
+    prepare_rule_training_frame,
+)
+from rule_baseline.history.history_features import (
     LEVEL_DEFINITIONS,
     load_history_feature_artifacts,
     prepare_history_quality_frame,
@@ -21,14 +25,14 @@ from rule_baseline.training.history_features import (
     validate_materialized_history_artifacts,
     write_history_feature_artifacts,
 )
-from rule_baseline.training.rule_generation_audit import write_rule_generation_audit, build_rule_generation_audit_payload
+from rule_baseline.audits.rule_generation_audit import build_rule_generation_audit_payload, write_rule_generation_audit
 from rule_baseline.utils import config
 
 MIN_GROUP_UNIQUE_MARKETS = 15
 GROUP_THRESHOLD_QUANTILE = 0.25
-TRAIN_PRICE_MIN = 0.2
-TRAIN_PRICE_MAX = 0.8
-RULE_PRICE_BIN_STEP = 0.1
+TRAIN_PRICE_MIN = RULE_TRAIN_PRICE_MIN
+TRAIN_PRICE_MAX = RULE_TRAIN_PRICE_MAX
+RULE_PRICE_BIN_STEP = RULE_TRAIN_PRICE_BIN_STEP
 
 BASE_GROUP_COLUMNS = ["domain", "category", "market_type"]
 RULE_ROW_COLUMNS = ["domain", "category", "market_type", "price_bin", "horizon_hours"]
@@ -85,14 +89,13 @@ FINE_SERVING_COLUMNS = [
     "rule_support_log1p",
     "rule_snapshot_support_log1p",
     "hist_price_x_full_group_expanding_bias",
-    "hist_price_x_full_group_recent_50_bias",
-    "hist_price_x_full_group_recent_200_bias",
+    "hist_price_x_full_group_recent_90days_bias",
     "hist_price_x_full_group_expanding_logloss",
     "tail_risk_x_price",
     "rule_edge_minus_full_group_expanding_bias",
-    "rule_edge_minus_recent_50_bias",
+    "rule_edge_minus_recent_90days_bias",
     "rule_score_minus_full_group_expanding_logloss",
-    "rule_score_minus_recent_50_logloss",
+    "rule_score_minus_recent_90days_logloss",
     "rule_edge_over_full_group_logloss",
     "rule_edge_minus_domain_expanding_bias",
     "rule_edge_minus_category_expanding_bias",
@@ -157,14 +160,13 @@ FINE_DEFAULT_AGGREGATIONS = {
     "rule_support_log1p": "mean",
     "rule_snapshot_support_log1p": "mean",
     "hist_price_x_full_group_expanding_bias": "weighted_mean",
-    "hist_price_x_full_group_recent_50_bias": "weighted_mean",
-    "hist_price_x_full_group_recent_200_bias": "weighted_mean",
+    "hist_price_x_full_group_recent_90days_bias": "weighted_mean",
     "hist_price_x_full_group_expanding_logloss": "weighted_mean",
     "tail_risk_x_price": "weighted_mean",
     "rule_edge_minus_full_group_expanding_bias": "weighted_mean",
-    "rule_edge_minus_recent_50_bias": "weighted_mean",
+    "rule_edge_minus_recent_90days_bias": "weighted_mean",
     "rule_score_minus_full_group_expanding_logloss": "weighted_mean",
-    "rule_score_minus_recent_50_logloss": "weighted_mean",
+    "rule_score_minus_recent_90days_logloss": "weighted_mean",
     "rule_edge_over_full_group_logloss": "weighted_mean",
     "rule_edge_minus_domain_expanding_bias": "weighted_mean",
     "rule_edge_minus_category_expanding_bias": "weighted_mean",
@@ -364,6 +366,15 @@ def _build_price_bin_labels(price_min: pd.Series, price_max: pd.Series) -> pd.Se
     return price_min.map(lambda value: f"{float(value):.2f}") + "-" + price_max.map(lambda value: f"{float(value):.2f}")
 
 
+def _build_group_key_frame(group_keys: pd.Series) -> pd.DataFrame:
+    frame = pd.DataFrame({"group_key": pd.Index(group_keys.dropna().astype(str).unique())})
+    parts = frame["group_key"].str.split("|", n=2, expand=True, regex=False)
+    frame["domain"] = parts[0].fillna("UNKNOWN")
+    frame["category"] = parts[1].fillna("UNKNOWN")
+    frame["market_type"] = parts[2].fillna("UNKNOWN")
+    return frame.reset_index(drop=True)
+
+
 def build_fine_serving_features(
     rules_df: pd.DataFrame,
     group_features: pd.DataFrame | None = None,
@@ -389,10 +400,9 @@ def build_fine_serving_features(
         interaction_columns = [
             "group_key",
             "full_group_expanding_bias_mean",
-            "full_group_recent_50_bias_mean",
-            "full_group_recent_200_bias_mean",
+            "full_group_recent_90days_bias_mean",
             "full_group_expanding_logloss_mean",
-            "full_group_recent_50_logloss_mean",
+            "full_group_recent_90days_logloss_mean",
             "full_group_expanding_logloss_tail_spread",
             "full_group_expanding_abs_bias_tail_spread",
             "domain_expanding_bias_mean",
@@ -414,11 +424,8 @@ def build_fine_serving_features(
         fine["hist_price_x_full_group_expanding_bias"] = (
             fine["rule_price_center"] * pd.to_numeric(fine.get("full_group_expanding_bias_mean"), errors="coerce").fillna(0.0)
         )
-        fine["hist_price_x_full_group_recent_50_bias"] = (
-            fine["rule_price_center"] * pd.to_numeric(fine.get("full_group_recent_50_bias_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["hist_price_x_full_group_recent_200_bias"] = (
-            fine["rule_price_center"] * pd.to_numeric(fine.get("full_group_recent_200_bias_mean"), errors="coerce").fillna(0.0)
+        fine["hist_price_x_full_group_recent_90days_bias"] = (
+            fine["rule_price_center"] * pd.to_numeric(fine.get("full_group_recent_90days_bias_mean"), errors="coerce").fillna(0.0)
         )
         fine["hist_price_x_full_group_expanding_logloss"] = (
             fine["rule_price_center"] * pd.to_numeric(fine.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)
@@ -430,17 +437,17 @@ def build_fine_serving_features(
             pd.to_numeric(fine["edge_full"], errors="coerce")
             - pd.to_numeric(fine.get("full_group_expanding_bias_mean"), errors="coerce").fillna(0.0)
         )
-        fine["rule_edge_minus_recent_50_bias"] = (
+        fine["rule_edge_minus_recent_90days_bias"] = (
             pd.to_numeric(fine["edge_full"], errors="coerce")
-            - pd.to_numeric(fine.get("full_group_recent_50_bias_mean"), errors="coerce").fillna(0.0)
+            - pd.to_numeric(fine.get("full_group_recent_90days_bias_mean"), errors="coerce").fillna(0.0)
         )
         fine["rule_score_minus_full_group_expanding_logloss"] = (
             pd.to_numeric(fine["rule_score"], errors="coerce")
             - pd.to_numeric(fine.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)
         )
-        fine["rule_score_minus_recent_50_logloss"] = (
+        fine["rule_score_minus_recent_90days_logloss"] = (
             pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("full_group_recent_50_logloss_mean"), errors="coerce").fillna(0.0)
+            - pd.to_numeric(fine.get("full_group_recent_90days_logloss_mean"), errors="coerce").fillna(0.0)
         )
         fine["rule_edge_over_full_group_logloss"] = np.divide(
             pd.to_numeric(fine["edge_full"], errors="coerce"),
@@ -501,14 +508,13 @@ def build_fine_serving_features(
     else:
         for column in [
             "hist_price_x_full_group_expanding_bias",
-            "hist_price_x_full_group_recent_50_bias",
-            "hist_price_x_full_group_recent_200_bias",
+            "hist_price_x_full_group_recent_90days_bias",
             "hist_price_x_full_group_expanding_logloss",
             "tail_risk_x_price",
             "rule_edge_minus_full_group_expanding_bias",
-            "rule_edge_minus_recent_50_bias",
+            "rule_edge_minus_recent_90days_bias",
             "rule_score_minus_full_group_expanding_logloss",
-            "rule_score_minus_recent_50_logloss",
+            "rule_score_minus_recent_90days_logloss",
             "rule_edge_over_full_group_logloss",
             "rule_edge_minus_domain_expanding_bias",
             "rule_edge_minus_category_expanding_bias",
@@ -628,29 +634,25 @@ def build_group_serving_features(
 ) -> tuple[pd.DataFrame, dict[str, dict[str, object]]]:
     if rules_df.empty:
         return pd.DataFrame(columns=["group_key"]), {}
-    group_features = (
-        rules_df[
-            [
-                "group_key",
-                "domain",
-                "category",
-                "market_type",
-                "group_unique_markets",
-                "group_snapshot_rows",
-                "global_total_unique_markets",
-                "global_total_snapshot_rows",
-                "group_market_share_global",
-                "group_snapshot_share_global",
-                "group_median_logloss",
-                "group_median_brier",
-                "global_group_logloss_q25",
-                "global_group_brier_q25",
-                "group_decision",
-            ]
-        ]
-        .drop_duplicates(subset=["group_key"])
-        .reset_index(drop=True)
+    group_features = _build_group_key_frame(rules_df["group_key"])
+    group_metrics = (
+        rules_df.groupby("group_key", observed=True)
+        .agg(
+            group_unique_markets=("group_unique_markets", "first"),
+            group_snapshot_rows=("group_snapshot_rows", "first"),
+            global_total_unique_markets=("global_total_unique_markets", "first"),
+            global_total_snapshot_rows=("global_total_snapshot_rows", "first"),
+            group_market_share_global=("group_market_share_global", "first"),
+            group_snapshot_share_global=("group_snapshot_share_global", "first"),
+            group_median_logloss=("group_median_logloss", "first"),
+            group_median_brier=("group_median_brier", "first"),
+            global_group_logloss_q25=("global_group_logloss_q25", "first"),
+            global_group_brier_q25=("global_group_brier_q25", "first"),
+            group_decision=("group_decision", "first"),
+        )
+        .reset_index()
     )
+    group_features = group_features.merge(group_metrics, on="group_key", how="left")
     group_features["domain_is_unknown"] = group_features["domain"].astype(str).eq("UNKNOWN").astype(int)
     group_features["domain_category_key"] = (
         group_features["domain"].astype(str) + "|" + group_features["category"].astype(str)
@@ -684,36 +686,20 @@ def build_group_serving_features(
         group_features = group_features.merge(level_features, on=merge_key_column, how="left")
         group_features = group_features.drop(columns=[merge_key_column])
 
-    group_features["full_group_recent_50_vs_expanding_bias_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_50_bias_mean"), errors="coerce").fillna(0.0)
+    group_features["full_group_recent_90days_vs_expanding_bias_gap"] = (
+        pd.to_numeric(group_features.get("full_group_recent_90days_bias_mean"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("full_group_expanding_bias_mean"), errors="coerce").fillna(0.0)
     )
-    group_features["full_group_recent_200_vs_expanding_bias_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_200_bias_mean"), errors="coerce").fillna(0.0)
-        - pd.to_numeric(group_features.get("full_group_expanding_bias_mean"), errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_recent_50_vs_expanding_abs_bias_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_50_abs_bias_mean"), errors="coerce").fillna(0.0)
+    group_features["full_group_recent_90days_vs_expanding_abs_bias_gap"] = (
+        pd.to_numeric(group_features.get("full_group_recent_90days_abs_bias_mean"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("full_group_expanding_abs_bias_mean"), errors="coerce").fillna(0.0)
     )
-    group_features["full_group_recent_200_vs_expanding_abs_bias_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_200_abs_bias_mean"), errors="coerce").fillna(0.0)
-        - pd.to_numeric(group_features.get("full_group_expanding_abs_bias_mean"), errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_recent_50_vs_expanding_brier_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_50_brier_mean"), errors="coerce").fillna(0.0)
+    group_features["full_group_recent_90days_vs_expanding_brier_gap"] = (
+        pd.to_numeric(group_features.get("full_group_recent_90days_brier_mean"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("full_group_expanding_brier_mean"), errors="coerce").fillna(0.0)
     )
-    group_features["full_group_recent_200_vs_expanding_brier_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_200_brier_mean"), errors="coerce").fillna(0.0)
-        - pd.to_numeric(group_features.get("full_group_expanding_brier_mean"), errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_recent_50_vs_expanding_logloss_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_50_logloss_mean"), errors="coerce").fillna(0.0)
-        - pd.to_numeric(group_features.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_recent_200_vs_expanding_logloss_gap"] = (
-        pd.to_numeric(group_features.get("full_group_recent_200_logloss_mean"), errors="coerce").fillna(0.0)
+    group_features["full_group_recent_90days_vs_expanding_logloss_gap"] = (
+        pd.to_numeric(group_features.get("full_group_recent_90days_logloss_mean"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)
     )
     group_features["full_group_expanding_abs_bias_tail_spread"] = (
@@ -728,13 +714,9 @@ def build_group_serving_features(
         pd.to_numeric(group_features.get("full_group_expanding_logloss_p90"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("full_group_expanding_logloss_p50"), errors="coerce").fillna(0.0)
     )
-    group_features["full_group_recent_50_logloss_tail_spread"] = (
-        pd.to_numeric(group_features.get("full_group_recent_50_logloss_p90"), errors="coerce").fillna(0.0)
-        - pd.to_numeric(group_features.get("full_group_recent_50_logloss_p50"), errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_recent_200_logloss_tail_spread"] = (
-        pd.to_numeric(group_features.get("full_group_recent_200_logloss_p90"), errors="coerce").fillna(0.0)
-        - pd.to_numeric(group_features.get("full_group_recent_200_logloss_p50"), errors="coerce").fillna(0.0)
+    group_features["full_group_recent_90days_logloss_tail_spread"] = (
+        pd.to_numeric(group_features.get("full_group_recent_90days_logloss_p90"), errors="coerce").fillna(0.0)
+        - pd.to_numeric(group_features.get("full_group_recent_90days_logloss_p50"), errors="coerce").fillna(0.0)
     )
     group_features["full_group_expanding_logloss_tail_x_market_share"] = (
         group_features["full_group_expanding_logloss_tail_spread"]
@@ -756,28 +738,16 @@ def build_group_serving_features(
         pd.to_numeric(group_features.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("market_type_expanding_logloss_mean"), errors="coerce").fillna(0.0)
     )
-    group_features["full_group_recent_50_vs_expanding_bias_zscore"] = _safe_ratio(
-        group_features["full_group_recent_50_vs_expanding_bias_gap"],
+    group_features["full_group_recent_90days_vs_expanding_bias_zscore"] = _safe_ratio(
+        group_features["full_group_recent_90days_vs_expanding_bias_gap"],
         group_features.get("full_group_expanding_bias_std"),
     )
-    group_features["full_group_recent_200_vs_expanding_bias_zscore"] = _safe_ratio(
-        group_features["full_group_recent_200_vs_expanding_bias_gap"],
-        group_features.get("full_group_expanding_bias_std"),
-    )
-    group_features["full_group_recent_50_vs_expanding_logloss_zscore"] = _safe_ratio(
-        group_features["full_group_recent_50_vs_expanding_logloss_gap"],
+    group_features["full_group_recent_90days_vs_expanding_logloss_zscore"] = _safe_ratio(
+        group_features["full_group_recent_90days_vs_expanding_logloss_gap"],
         group_features.get("full_group_expanding_logloss_std"),
     )
-    group_features["full_group_recent_200_vs_expanding_logloss_zscore"] = _safe_ratio(
-        group_features["full_group_recent_200_vs_expanding_logloss_gap"],
-        group_features.get("full_group_expanding_logloss_std"),
-    )
-    group_features["full_group_recent_50_tail_instability_ratio"] = _safe_ratio(
-        group_features["full_group_recent_50_logloss_tail_spread"],
-        group_features["full_group_expanding_logloss_tail_spread"],
-    )
-    group_features["full_group_recent_200_tail_instability_ratio"] = _safe_ratio(
-        group_features["full_group_recent_200_logloss_tail_spread"],
+    group_features["full_group_recent_90days_tail_instability_ratio"] = _safe_ratio(
+        group_features["full_group_recent_90days_logloss_tail_spread"],
         group_features["full_group_expanding_logloss_tail_spread"],
     )
 
@@ -1044,12 +1014,9 @@ def main() -> None:
     fine_serving_features = build_fine_serving_features(rules_df, group_features=group_serving_features)
 
     rules_df.to_csv(artifact_paths.rules_path, index=False)
-    rules_df.to_csv(artifact_paths.naive_rules_dir / "naive_trading_rules.csv", index=False)
     group_serving_features.to_parquet(artifact_paths.group_serving_features_path, index=False)
     fine_serving_features.to_parquet(artifact_paths.fine_serving_features_path, index=False)
     report_df.to_csv(artifact_paths.rule_report_path, index=False)
-    with artifact_paths.rule_json_path.open("w", encoding="utf-8") as file:
-        json.dump(rules_df.to_dict("records"), file, ensure_ascii=False, indent=2)
     write_json(
         artifact_paths.serving_feature_defaults_path,
         {

@@ -43,7 +43,6 @@ DOMAIN_BLACKLIST: set[str] = set()
 BETA_PRIOR_STRENGTH = 20.0
 FDR_ALPHA = 0.10
 MIN_EDGE_LOWER_BOUND = 0.0
-MIN_RULE_EDGE_LOWER_BOUND_FULL = 0.04
 
 # Feature engineering
 TEXT_EMBED_DIM = 16
@@ -95,12 +94,8 @@ DOMAIN_SUMMARY_PATH = DOMAIN_DIR / "domain_summary.csv"
 DOMAIN_SUMMARY_AGGREGATED_PATH = DOMAIN_DIR / "domain_summary_aggregated.csv"
 OTHER_OUTCOME_PATTERNS_BY_URL_PATH = DOMAIN_DIR / "other_outcome_patterns_by_url.csv"
 
-NAIVE_RULES_DIR = DATA_DIR / "naive_rules"
 EDGE_DIR = DATA_DIR / "edge"
 RULES_OUTPUT_PATH = EDGE_DIR / "trading_rules.csv"
-NAIVE_RULES_OUTPUT_PATH = NAIVE_RULES_DIR / "naive_trading_rules.csv"
-NAIVE_RULES_JSON_PATH = NAIVE_RULES_DIR / "naive_trading_rules.json"
-NAIVE_RULES_REPORT_PATH = NAIVE_RULES_DIR / "naive_all_leaves_report.csv"
 
 MODELS_DIR = DATA_DIR / "models"
 MODEL_PATH = MODELS_DIR / "ensemble_snapshot_q.pkl"

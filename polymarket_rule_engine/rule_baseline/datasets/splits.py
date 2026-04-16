@@ -89,9 +89,10 @@ def compute_artifact_split(
     history_start_override: str | pd.Timestamp | None = None,
 ) -> TemporalSplit:
     if artifact_mode == "offline":
-        return compute_temporal_split(
+        return compute_train_valid_split(
             df,
             date_col=date_col,
+            validation_days=config.VALIDATION_DAYS,
             reference_end=reference_end,
             history_start_override=history_start_override,
         )
@@ -120,6 +121,21 @@ def assign_dataset_split(
     if split.test_start is not None and split.test_end is not None:
         out.loc[(timestamps >= split.test_start) & (timestamps <= split.test_end), output_col] = "test"
     return out
+
+
+def select_preferred_split(
+    df: pd.DataFrame,
+    preferred_splits: tuple[str, ...] = ("test", "valid", "train"),
+    split_col: str = "dataset_split",
+) -> tuple[str, pd.DataFrame]:
+    if split_col not in df.columns:
+        raise ValueError(f"Dataframe is missing required split column '{split_col}'.")
+
+    for split_name in preferred_splits:
+        candidate = df[df[split_col] == split_name].copy()
+        if not candidate.empty:
+            return split_name, candidate
+    return "empty", df.iloc[0:0].copy()
 
 
 def build_walk_forward_splits(

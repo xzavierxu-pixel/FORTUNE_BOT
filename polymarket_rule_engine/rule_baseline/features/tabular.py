@@ -265,7 +265,6 @@ def preprocess_features(
         "abs_price_q_gap",
         "abs_price_center_gap",
         "horizon_q_gap",
-        "spread_over_liquidity",
         "quote_staleness_x_horizon",
         "rule_score_x_q_full",
         "q_full",
@@ -436,8 +435,6 @@ def apply_feature_variant(
     out["abs_price_q_gap"] = (price - q_anchor).abs()
     out["abs_price_center_gap"] = (price - 0.5).abs()
     out["horizon_q_gap"] = horizon * out["abs_price_q_gap"]
-    out["log_horizon_x_liquidity"] = pd.Series(np.log1p(liquidity.clip(lower=0.0)), index=out.index) * _safe_numeric(log_horizon, default=0.0)
-    out["spread_over_liquidity"] = spread / (liquidity.abs() + 1.0)
     out["quote_staleness_x_horizon"] = quote_offset * (horizon + 1.0)
     out["rule_score_x_q_full"] = rule_score * q_anchor
     out["edge_lower_bound_over_std"] = edge_lower / edge_std.replace(0.0, pd.NA).fillna(1.0)
@@ -465,26 +462,6 @@ def apply_feature_variant(
     out["rule_snapshot_support_log1p"] = np.log1p(group_snapshot_rows.clip(lower=0.0))
     out["group_share_x_logloss_gap"] = group_market_share * out["group_logloss_gap_q25"]
     out["group_share_x_brier_gap"] = group_snapshot_share * out["group_brier_gap_q25"]
-
-    if feature_variant == "market_structure_v2":
-        best_bid = _safe_numeric(out.get("bestBid"), default=0.0)
-        best_ask = _safe_numeric(out.get("bestAsk"), default=0.0)
-        mid_price = ((best_bid + best_ask) / 2.0).replace([np.inf, -np.inf], 0.0).fillna(0.0)
-        liquidity_clob = _safe_numeric(out.get("liquidityClob"), default=0.0)
-        volume24_clob = _safe_numeric(out.get("volume24hrClob"), default=0.0)
-        volume1w_clob = _safe_numeric(out.get("volume1wkClob"), default=0.0)
-        rewards_max_spread = _safe_numeric(out.get("rewardsMaxSpread"), default=0.0)
-        out["book_mid_gap"] = (price - mid_price).abs()
-        out["spread_to_mid_ratio"] = spread / (mid_price.abs() + 1e-6)
-        out["quote_quality_score"] = 1.0 / (1.0 + out["spread_to_mid_ratio"].abs() + quote_offset / 60.0)
-        out["liquidity_pressure"] = liquidity_clob / (liquidity.abs() + 1.0)
-        out["clob_turnover_24h"] = volume24_clob / (liquidity_clob.abs() + 1.0)
-        out["clob_turnover_1w"] = volume1w_clob / (liquidity_clob.abs() + 1.0)
-        out["uncertainty_normalized_edge"] = edge_lower / (edge_std.abs() + 1e-6)
-        out["rule_confidence_gap"] = rule_score - out["abs_price_q_gap"]
-        out["reward_spread_alignment"] = rewards_max_spread - spread
-        out["horizon_term_structure"] = log_horizon * out["abs_price_center_gap"]
-        return out
 
     if feature_variant == "interaction_plus_textlite":
         question = _safe_text(out.get("question_market"))

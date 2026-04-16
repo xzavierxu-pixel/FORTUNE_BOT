@@ -91,6 +91,7 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "price": 0.45,
                     "y": 1,
                     "horizon_hours": 6,
+                    "closedTime": "2026-04-01T00:00:00Z",
                     "snapshot_time": "2026-04-01T00:00:00Z",
                 },
                 {
@@ -101,6 +102,7 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "price": 0.55,
                     "y": 0,
                     "horizon_hours": 12,
+                    "closedTime": "2026-04-02T00:00:00Z",
                     "snapshot_time": "2026-04-02T00:00:00Z",
                 },
             ]
@@ -118,18 +120,17 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
         self.assertIn("full_group_expanding_abs_bias_p75", group.columns)
         self.assertIn("full_group_expanding_brier_p90", group.columns)
         self.assertIn("full_group_expanding_logloss_std", group.columns)
-        self.assertIn("full_group_recent_50_logloss_p50", group.columns)
-        self.assertIn("full_group_recent_50_bias_p50", group.columns)
-        self.assertIn("full_group_recent_50_vs_expanding_logloss_gap", group.columns)
-        self.assertIn("full_group_recent_50_vs_expanding_bias_zscore", group.columns)
-        self.assertIn("full_group_recent_200_vs_expanding_logloss_zscore", group.columns)
+        self.assertIn("full_group_recent_90days_logloss_p50", group.columns)
+        self.assertIn("full_group_recent_90days_bias_p50", group.columns)
+        self.assertIn("full_group_recent_90days_vs_expanding_logloss_gap", group.columns)
+        self.assertIn("full_group_recent_90days_vs_expanding_bias_zscore", group.columns)
+        self.assertIn("full_group_recent_90days_vs_expanding_logloss_zscore", group.columns)
         self.assertIn("full_group_expanding_logloss_tail_spread", group.columns)
-        self.assertIn("full_group_recent_50_tail_instability_ratio", group.columns)
-        self.assertIn("full_group_recent_200_tail_instability_ratio", group.columns)
+        self.assertIn("full_group_recent_90days_tail_instability_ratio", group.columns)
         self.assertIn("full_group_vs_domain_logloss_gap", group.columns)
         self.assertIn("hist_price_x_full_group_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_full_group_expanding_bias", fine.columns)
-        self.assertIn("rule_score_minus_recent_50_logloss", fine.columns)
+        self.assertIn("rule_score_minus_recent_90days_logloss", fine.columns)
         self.assertIn("rule_edge_minus_domain_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_category_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_market_type_expanding_bias", fine.columns)
@@ -156,10 +157,9 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
         self.assertGreaterEqual(float(group.loc[0, "full_group_expanding_abs_bias_p75"]), 0.45)
         self.assertGreaterEqual(float(group.loc[0, "full_group_expanding_logloss_max"]), 0.59)
         self.assertGreaterEqual(float(group.loc[0, "full_group_expanding_logloss_tail_spread"]), 0.0)
-        self.assertGreaterEqual(float(group.loc[0, "full_group_recent_50_tail_instability_ratio"]), 0.0)
-        self.assertGreaterEqual(float(group.loc[0, "full_group_recent_200_tail_instability_ratio"]), 0.0)
-        self.assertAlmostEqual(float(group.loc[0, "full_group_recent_50_vs_expanding_bias_zscore"]), 0.0, places=6)
-        self.assertAlmostEqual(float(group.loc[0, "full_group_recent_200_vs_expanding_logloss_zscore"]), 0.0, places=6)
+        self.assertGreaterEqual(float(group.loc[0, "full_group_recent_90days_tail_instability_ratio"]), 0.0)
+        self.assertAlmostEqual(float(group.loc[0, "full_group_recent_90days_vs_expanding_bias_zscore"]), 0.0, places=6)
+        self.assertAlmostEqual(float(group.loc[0, "full_group_recent_90days_vs_expanding_logloss_zscore"]), 0.0, places=6)
         self.assertGreaterEqual(float(fine.loc[0, "hist_price_x_full_group_expanding_bias"]), 0.0)
 
     def test_matched_rule_aggregate_features_are_built_per_grain(self) -> None:
@@ -239,6 +239,7 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "price": 0.45,
                     "y": 1,
                     "horizon_hours": 6,
+                    "closedTime": "2026-04-01T00:00:00Z",
                     "snapshot_time": "2026-04-01T00:00:00Z",
                 },
                 {
@@ -249,6 +250,7 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "price": 0.45,
                     "y": 0,
                     "horizon_hours": 6,
+                    "closedTime": "2026-04-02T00:00:00Z",
                     "snapshot_time": "2026-04-02T00:00:00Z",
                 },
             ]

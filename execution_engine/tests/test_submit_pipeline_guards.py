@@ -9,6 +9,7 @@ import pandas as pd
 from execution_engine.online.execution.live_quote import quote_from_clob
 from execution_engine.online.execution.pricing import build_submission_signal
 from execution_engine.online.scoring.live import run_live_inference
+from execution_engine.online.scoring.rules import ServingFeatureBundle
 from execution_engine.online.scoring.selection import allocate_candidates, build_selection_decisions
 from execution_engine.online.pipeline.eligibility import apply_live_price_filter, apply_structural_coarse_filter
 from execution_engine.integrations.trading.state_machine import can_transition
@@ -1056,6 +1057,26 @@ class LiveInferenceGrowthColumnsTest(unittest.TestCase):
         runtime = SimpleNamespace(
             cfg=cfg,
             rules_frame=pd.DataFrame(),
+            serving_feature_bundle=ServingFeatureBundle(
+                fine_features=pd.DataFrame(
+                    columns=[
+                        "group_key",
+                        "price_bin",
+                        "horizon_hours",
+                        "leaf_id",
+                        "direction",
+                        "q_full",
+                        "p_full",
+                        "edge_full",
+                        "edge_std_full",
+                        "edge_lower_bound_full",
+                        "rule_score",
+                        "n_full",
+                    ]
+                ),
+                group_features=pd.DataFrame(columns=["group_key"]),
+                defaults_manifest={"fine_feature_defaults": {}},
+            ),
             feature_contract=SimpleNamespace(feature_columns=("feature_a",), categorical_columns=tuple()),
             model_payload=SimpleNamespace(
                 predict_q=lambda frame: [0.65],

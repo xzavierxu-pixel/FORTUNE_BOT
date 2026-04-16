@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath("polymarket_rule_engine"))
 
 from rule_baseline.datasets.artifacts import build_artifact_paths
 from rule_baseline.features.annotation_normalization import build_normalization_manifest
-from rule_baseline.models.autogluon_qmodel import fit_autogluon_q_model
+from rule_baseline.models.autogluon_qmodel import _coerce_feature_frame, fit_autogluon_q_model
 from rule_baseline.training.train_rules_naive_output_rule import evaluate_rule_candidate
 
 
@@ -73,6 +73,34 @@ class ArtifactBundlePathTest(unittest.TestCase):
         self.assertIn("full_group", paths.history_feature_paths)
         self.assertEqual(paths.history_feature_paths["global"].name, "history_features_global.parquet")
         self.assertEqual(paths.history_feature_paths["full_group"].name, "history_features_full_group.parquet")
+
+
+class AutoGluonFeatureCoercionTest(unittest.TestCase):
+    def test_coerce_feature_frame_compacts_numeric_and_categorical_types(self) -> None:
+        df = pd.DataFrame(
+            {
+                "price": ["0.45", "0.60", None],
+                "spread": [0.01, "0.02", "bad"],
+                "domain": ["sports", None, "politics"],
+                "market_type": ["moneyline", "spread", None],
+            }
+        )
+
+        coerced = _coerce_feature_frame(
+            df,
+            feature_columns=["price", "spread", "domain", "market_type"],
+            numeric_columns=["price", "spread"],
+            categorical_columns=["domain", "market_type"],
+        )
+
+        self.assertEqual(str(coerced["price"].dtype), "float32")
+        self.assertEqual(str(coerced["spread"].dtype), "float32")
+        self.assertEqual(str(coerced["domain"].dtype), "category")
+        self.assertEqual(str(coerced["market_type"].dtype), "category")
+        self.assertEqual(float(coerced.loc[2, "price"]), 0.0)
+        self.assertEqual(float(coerced.loc[2, "spread"]), 0.0)
+        self.assertEqual(str(coerced.loc[1, "domain"]), "UNKNOWN")
+        self.assertEqual(str(coerced.loc[2, "market_type"]), "UNKNOWN")
 
 
 class AutoGluonMetadataContractTest(unittest.TestCase):
