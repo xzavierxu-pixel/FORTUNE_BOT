@@ -998,7 +998,7 @@ class LiveInferenceGrowthColumnsTest(unittest.TestCase):
                     "rule_group_key": "example.com|SPORTS|no_yes",
                     "rule_leaf_id": 1,
                     "rule_direction": 1,
-                    "rule_score": 0.25,
+                    "edge_lower_bound_full": 0.18,
                     "price": 0.45,
                     "price_min": 0.4,
                     "price_max": 0.5,
@@ -1051,7 +1051,6 @@ class LiveInferenceGrowthColumnsTest(unittest.TestCase):
                         "edge_full",
                         "edge_std_full",
                         "edge_lower_bound_full",
-                        "rule_score",
                         "n_full",
                     ]
                 ),

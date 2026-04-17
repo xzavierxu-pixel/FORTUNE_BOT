@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from rule_baseline.datasets.splits import TemporalSplit, assign_dataset_split, compute_artifact_split
+from rule_baseline.datasets.splits import TemporalSplit, assign_configured_dataset_split, assign_dataset_split, compute_artifact_split, temporal_split_from_config
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features.annotation_normalization import (
     SNAPSHOT_CATEGORY_SOURCE,
@@ -16,6 +16,7 @@ from rule_baseline.features.annotation_normalization import (
 from rule_baseline.features.snapshot_semantics import FEATURE_SEMANTICS_VERSION, build_decision_time_snapshot_row
 from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
+from rule_baseline.workflow.pipeline_config import SplitConfig
 
 DEFAULT_PRICE_MIN = 0.01
 DEFAULT_PRICE_MAX = 0.99
@@ -316,6 +317,7 @@ def build_snapshot_base(
         & out["closedTime"].notna()
         & out["horizon_hours"].notna()
         & out["y"].notna()
+        & ~out["stale_quote_flag"].fillna(False)
     )
     out["snapshot_quality_score"] = (
         1.0
@@ -551,6 +553,7 @@ def prepare_rule_training_frame(
     recent_days: int | None = None,
     split_reference_end: str | None = None,
     history_start_override: str | None = None,
+    split_config: SplitConfig | None = None,
     min_price: float = DEFAULT_PRICE_MIN,
     max_price: float = DEFAULT_PRICE_MAX,
     price_bin_step: float = DEFAULT_PRICE_BIN_STEP,
@@ -610,15 +613,20 @@ def prepare_rule_training_frame(
     snapshots = snapshots[snapshots["quality_pass"]].copy()
     print(f"[INFO] Snapshot rows after quality_pass filter: {len(snapshots)}")
     funnel_summary["snapshot_funnel"].append(_stage_summary("after_quality_pass", snapshots))
-    split = compute_artifact_split(
-        snapshots,
-        artifact_mode=artifact_mode,
-        date_col="closedTime",
-        reference_end=split_reference_end,
-        history_start_override=history_start_override,
-    )
-    snapshots = assign_dataset_split(snapshots, split, date_col="closedTime")
-    allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
+    if split_config is not None:
+        split = temporal_split_from_config(split_config)
+        snapshots = assign_configured_dataset_split(snapshots, split_config, date_col="closedTime")
+        allowed_splits = list(split_config.allowed_splits)
+    else:
+        split = compute_artifact_split(
+            snapshots,
+            artifact_mode=artifact_mode,
+            date_col="closedTime",
+            reference_end=split_reference_end,
+            history_start_override=history_start_override,
+        )
+        snapshots = assign_dataset_split(snapshots, split, date_col="closedTime")
+        allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
     funnel_summary["snapshot_funnel"].append(_stage_summary("after_dataset_split", snapshots))
     bin_source = snapshots.copy()

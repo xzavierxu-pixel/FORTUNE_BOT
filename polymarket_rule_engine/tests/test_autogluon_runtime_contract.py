@@ -179,7 +179,7 @@ class AutoGluonMetadataContractTest(unittest.TestCase):
         self.assertFalse(result.runtime_manifest["auto_stack"])
         self.assertEqual(
             result.runtime_manifest["training_recipe"]["predictor_hyperparameters"],
-            {"GBM": {}, "CAT": {}, "XGB": {}},
+            {"GBM": {"verbosity": -1}, "CAT": {}, "XGB": {}},
         )
         self.assertEqual(result.deploy_bundle_dir.name, "bundle")
         self.assertEqual(result.full_bundle_dir.name, "q_model_bundle_full")

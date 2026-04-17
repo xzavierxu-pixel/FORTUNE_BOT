@@ -105,7 +105,6 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
                     "horizon_hours": 6,
                     "q_full": 0.6,
                     "rule_edge_minus_domain_x_category_expanding_bias": 0.1,
-                    "rule_score_minus_domain_x_market_type_expanding_logloss": -0.2,
                 }
             ]
         )
@@ -125,13 +124,12 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
 
         self.assertIn("# GroupKey Consistency Report", markdown)
         self.assertIn("- missing_contract_columns_in_assets=1", markdown)
-        self.assertIn("- bundle_missing_asset_backed_columns=2", markdown)
-        self.assertIn("- unused_asset_columns_not_in_contract=2", markdown)
-        self.assertIn("- fine_only_columns_missing_fallback=1", markdown)
+        self.assertIn("- bundle_missing_asset_backed_columns=1", markdown)
+        self.assertIn("- unused_asset_columns_not_in_contract=1", markdown)
+        self.assertIn("- fine_only_columns_missing_fallback=0", markdown)
         self.assertIn("### Bundle Missing Asset-Backed Serving Columns", markdown)
         self.assertIn("fine_feature_missing_from_assets", markdown)
         self.assertIn("group_feature_unused_group_metric", markdown)
-        self.assertIn("fine_feature_rule_score_minus_domain_x_market_type_expanding_logloss", markdown)
 
     def test_build_runtime_report_markdown_contains_rates_and_unknown_groups(self) -> None:
         payload = {
@@ -190,7 +188,6 @@ class GroupKeyValidationReportsTest(unittest.TestCase):
                     "group_key": "a|SPORTS|other",
                     "domain": "a",
                     "group_default_q_full": 0.6,
-                    "group_match_found_default": 1,
                     "full_group_expanding_bias_mean": 0.1,
                     "rule_edge_minus_domain_expanding_bias": 0.02,
                 }

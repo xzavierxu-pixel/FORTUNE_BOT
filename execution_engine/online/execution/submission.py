@@ -207,13 +207,17 @@ def _wait_for_capacity(
     row: Dict[str, Any],
     clob_client: Any,
     balance_provider: Any,
-) -> tuple[StateStore, int]:
+) -> tuple[StateStore, int, str | None]:
     wait_count = 0
+    timeout_sec = max(int(getattr(cfg, "online_capacity_wait_timeout_sec", 0) or 0), 0)
+    deadline = time.monotonic() + timeout_sec if timeout_sec > 0 else None
     while True:
         state = StateStore(cfg)
         reason = _capacity_reason(row, state, cfg, balance_provider)
         if reason is None:
-            return state, wait_count
+            return state, wait_count, None
+        if deadline is not None and time.monotonic() >= deadline:
+            return state, wait_count, reason
         wait_count += 1
         sweep_expired_orders(cfg, clob_client)
         reconcile(cfg, clob_client)
@@ -260,10 +264,27 @@ def submit_selected_orders(
     fee_rate = load_fee_rate(cfg)
 
     for row in eligible_rows.to_dict(orient="records"):
-        state, wait_count = _wait_for_capacity(cfg, row, clob_client, balance_provider)
+        state, wait_count, capacity_reason = _wait_for_capacity(cfg, row, clob_client, balance_provider)
         capacity_wait_count += wait_count
         token_id = str(row.get("selected_token_id") or "")
         market_id = str(row.get("market_id") or "")
+        if capacity_reason is not None:
+            rejection = {
+                "market_id": market_id,
+                "reason_code": capacity_reason,
+                "created_at_utc": to_iso(utc_now()),
+            }
+            record_rejection(cfg, state, rejection)
+            append_attempt(
+                attempts,
+                status_counts,
+                {
+                    "market_id": market_id,
+                    "token_id": token_id,
+                    "status": capacity_reason,
+                },
+            )
+            continue
 
         while True:
             quote_lookup_started = time.perf_counter()
@@ -360,8 +381,34 @@ def submit_selected_orders(
 
             ok, risk_reason = check_basic_risk(signal, state, cfg, balance_provider)
             if not ok and risk_reason in CAPACITY_WAIT_REASONS:
-                state, extra_wait = _wait_for_capacity(cfg, row, clob_client, balance_provider)
+                state, extra_wait, capacity_reason = _wait_for_capacity(cfg, row, clob_client, balance_provider)
                 capacity_wait_count += extra_wait + 1
+                if capacity_reason is not None:
+                    rejection = {
+                        "decision_id": signal.get("decision_id"),
+                        "market_id": market_id,
+                        "reason_code": capacity_reason,
+                        "created_at_utc": to_iso(utc_now()),
+                    }
+                    record_rejection(
+                        cfg,
+                        state,
+                        rejection,
+                        decision_id=str(signal.get("decision_id") or ""),
+                        order_attempt_id=str(signal.get("order_attempt_id") or ""),
+                    )
+                    append_attempt(
+                        attempts,
+                        status_counts,
+                        {
+                            "market_id": market_id,
+                            "token_id": token_id,
+                            "decision_id": signal.get("decision_id"),
+                            "order_attempt_id": signal.get("order_attempt_id"),
+                            "status": capacity_reason,
+                        },
+                    )
+                    break
                 continue
             if not ok:
                 rejection = {

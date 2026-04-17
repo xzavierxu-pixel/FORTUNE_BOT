@@ -25,8 +25,8 @@ from rule_baseline.datasets.splits import (
     TemporalSplit,
     assign_dataset_split,
     build_walk_forward_splits,
-    compute_artifact_split,
     select_preferred_split,
+    temporal_split_from_config,
 )
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache, preprocess_features
@@ -34,6 +34,7 @@ from rule_baseline.models import fit_model_payload, fit_regression_payload, pred
 from rule_baseline.training.train_rules_naive_output_rule import build_rules
 from rule_baseline.training.train_snapshot_model import DROP_COLS
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 TOP_K = 50
 DEFAULT_STAKE_FRACTION = 0.01
@@ -58,14 +59,10 @@ BASELINE_SPECS = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare baseline families under strict offline and walk-forward validation.")
-    parser.add_argument("--artifact-mode", choices=["offline"], default="offline")
-    parser.add_argument("--max-rows", type=int, default=None)
-    parser.add_argument("--recent-days", type=int, default=None)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--walk-forward-windows", type=int, default=3)
     parser.add_argument("--walk-forward-step-days", type=int, default=config.TEST_DAYS)
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
     return parser.parse_args()
 
 
@@ -137,10 +134,10 @@ def build_window_feature_frame(
         return pd.DataFrame(), top_rules
 
     matched = matched.sort_values(
-        ["market_id", "snapshot_time", "rule_score"],
+        ["market_id", "snapshot_time", "edge_lower_bound_full"],
         ascending=[True, True, False],
     ).drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")
-    matched = apply_earliest_market_dedup(matched, score_column="rule_score")
+    matched = apply_earliest_market_dedup(matched, score_column="edge_lower_bound_full")
     if matched.empty:
         return pd.DataFrame(), top_rules
 
@@ -456,26 +453,22 @@ def aggregate_walk_forward(summary_df: pd.DataFrame, backtest_df: pd.DataFrame) 
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
 
-    raw_snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
+    raw_snapshots = load_research_snapshots(max_rows=pipeline_config.max_rows, recent_days=pipeline_config.recent_days)
     raw_snapshots = raw_snapshots[raw_snapshots["quality_pass"]].copy()
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
     market_feature_cache = build_market_feature_cache(raw_markets, market_annotations)
 
-    latest_split = compute_artifact_split(
-        raw_snapshots,
-        artifact_mode="offline",
-        reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
-    )
+    latest_split = temporal_split_from_config(pipeline_config.split)
     walk_forward_splits = build_walk_forward_splits(
         raw_snapshots,
         n_windows=args.walk_forward_windows,
         step_days=args.walk_forward_step_days,
-        reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
+        reference_end=pipeline_config.split.split_reference_end,
+        history_start_override=pipeline_config.split.history_start,
     )
     if not walk_forward_splits:
         walk_forward_splits = [latest_split]
@@ -525,7 +518,7 @@ def main() -> None:
             "latest_window": latest_result["metadata"],
             "walk_forward_windows": [result["metadata"] for result in window_results],
             "top_k": args.top_k,
-            "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+            "debug_filters": {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
         },
     )
 

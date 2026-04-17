@@ -10,8 +10,9 @@ import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths
 from rule_baseline.datasets.snapshots import load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split, select_preferred_split
+from rule_baseline.datasets.splits import assign_configured_dataset_split, select_preferred_split
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 PRICE_MIN = 0.05
 PRICE_MAX = 0.95
@@ -20,27 +21,18 @@ MIN_RULE_N = 50
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze rule alpha on the latest evaluation split.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     return parser.parse_args()
 
 
-def load_inputs(
-    artifact_paths,
-    split_reference_end: str | None,
-    history_start: str | None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_inputs(artifact_paths, pipeline_config) -> tuple[pd.DataFrame, pd.DataFrame]:
     snapshots = load_research_snapshots()
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_artifact_split(
-        snapshots,
-        artifact_mode="offline",
-        reference_end=split_reference_end,
-        history_start_override=history_start,
+    snapshots = assign_configured_dataset_split(snapshots, pipeline_config.split)
+    selected_split, selected = select_preferred_split(
+        snapshots[snapshots["dataset_split"].isin(pipeline_config.split.allowed_splits)].copy(),
+        preferred_splits=("test", "valid", "train"),
     )
-    snapshots = assign_dataset_split(snapshots, split)
-    selected_split, selected = select_preferred_split(snapshots)
     snapshots = selected.copy()
     snapshots = snapshots[(snapshots["price"] >= PRICE_MIN) & (snapshots["price"] <= PRICE_MAX)].copy()
     snapshots.attrs["evaluation_scope"] = selected_split
@@ -153,8 +145,9 @@ def compute_rule_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
-    snapshots, rules = load_inputs(artifact_paths, args.split_reference_end, args.history_start)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
+    snapshots, rules = load_inputs(artifact_paths, pipeline_config)
     artifact_paths.analysis_dir.mkdir(parents=True, exist_ok=True)
     evaluation_scope = str(snapshots.attrs.get("evaluation_scope") or "unknown")
     if snapshots.empty:
@@ -186,7 +179,8 @@ def main() -> None:
     metrics.to_csv(artifact_paths.analysis_dir / "rules_alpha_metrics.csv", index=False)
     classified.to_csv(artifact_paths.analysis_dir / "rules_predictions_with_quadrant.csv", index=False)
 
-    print(metrics.to_string(index=False) if not metrics.empty else "<empty>")
+    # print(metrics.to_string(index=False) if not metrics.empty else "<empty>")
+    print(f"[INFO] Rules alpha analysis complete. {len(metrics)} groups analyzed. (Table printing disabled)")
 
 
 if __name__ == "__main__":

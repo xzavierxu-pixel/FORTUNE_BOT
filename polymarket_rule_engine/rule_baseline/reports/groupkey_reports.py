@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from rule_baseline.datasets.artifacts import build_artifact_paths
-from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
+from rule_baseline.datasets.splits import assign_configured_dataset_split, assign_dataset_split, compute_artifact_split
 from rule_baseline.datasets.snapshots import load_online_parity_snapshots
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features.annotation_normalization import build_normalization_manifest, normalize_market_annotations
@@ -21,6 +21,7 @@ from rule_baseline.training.train_snapshot_model import (
     match_snapshots_to_rules,
 )
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import SplitConfig
 
 
 def _read_json(path: Path) -> dict:
@@ -195,10 +196,8 @@ RULE_PRIOR_COLUMNS = {
     "edge_full",
     "edge_std_full",
     "edge_lower_bound_full",
-    "rule_score",
     "n_full",
     "rule_price_center",
-    "rule_price_width",
     "rule_horizon_center",
     "rule_horizon_width",
     "rule_edge_buffer",
@@ -227,7 +226,7 @@ def _categorize_serving_columns(columns: list[str], asset_name: str) -> dict[str
             categories["fallback_defaults"].append(column)
         elif column.endswith("_match_found") or "fallback" in column:
             categories["fallback_indicators"].append(column)
-        elif column.startswith(("hist_price_x_", "price_x_", "rule_edge_minus_", "rule_score_minus_")):
+        elif column.startswith(("hist_price_x_", "price_x_", "rule_edge_minus_")):
             categories["generated_interactions"].append(column)
         elif column in RULE_PRIOR_COLUMNS:
             categories["rule_prior"].append(column)
@@ -325,6 +324,7 @@ def build_runtime_report_payload(
     split_reference_end: str | None = None,
     history_start: str | None = None,
     unknown_group_preview_limit: int = 20,
+    split_config: SplitConfig | None = None,
 ) -> dict:
     artifact_paths = build_artifact_paths(artifact_mode)
 
@@ -335,14 +335,18 @@ def build_runtime_report_payload(
         recent_days=recent_days,
     )
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_artifact_split(
-        snapshots,
-        artifact_mode=artifact_mode,
-        reference_end=split_reference_end,
-        history_start_override=history_start,
-    )
-    snapshots = assign_dataset_split(snapshots, split)
-    allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
+    if split_config is not None:
+        snapshots = assign_configured_dataset_split(snapshots, split_config)
+        allowed_splits = list(split_config.allowed_splits)
+    else:
+        split = compute_artifact_split(
+            snapshots,
+            artifact_mode=artifact_mode,
+            reference_end=split_reference_end,
+            history_start_override=history_start,
+        )
+        snapshots = assign_dataset_split(snapshots, split)
+        allowed_splits = ["train", "valid", "test"] if artifact_mode == "offline" else ["train", "valid"]
     snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
 
     market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)

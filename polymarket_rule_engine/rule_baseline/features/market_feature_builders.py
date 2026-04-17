@@ -19,15 +19,10 @@ from rule_baseline.utils.feature_util import (
     OUTCOME_POS,
     PLAYER_PROP_KEYWORDS,
     STRONG_POS,
-    TEAM_TOTAL_KEYWORDS,
     WEAK_POS,
-    build_year_tokens,
 )
 
 THRESHOLD_PATTERN = re.compile(r"([-+]?\d+(?:\.\d+)?)")
-YEAR_TOKENS = build_year_tokens()
-
-
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         if value is None or (isinstance(value, float) and np.isnan(value)):
@@ -137,20 +132,14 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["word_diversity"] = len(set(words)) / max(q_len, 1)
     features["num_count"] = float(sum(1 for char in question if char.isdigit()))
     features["has_number"] = float(any(char.isdigit() for char in question))
-    features["has_year"] = float(any(year in question for year in YEAR_TOKENS))
     features["has_percent"] = float("%" in question or "percent" in question)
-    features["has_dollar"] = float("$" in question or "dollar" in question)
     features["has_million"] = float("million" in question or "billion" in question)
     features["has_date"] = float(any(month in question for month in MONTH_NAMES))
     features["starts_will"] = float(question.startswith("will"))
-    features["starts_can"] = float(question.startswith("can"))
-    features["has_by"] = float(" by " in question)
     features["has_before"] = float("before" in question or "by end" in question)
     features["has_after"] = float("after" in question)
-    features["has_above_below"] = float("above" in question or "below" in question)
     features["is_binary"] = float(len(_parse_tokens(market.get("tokens") or market.get("outcomes"))) == 2)
     features["has_or"] = float(" or " in question)
-    features["has_and"] = float(" and " in question)
     features["cap_ratio"] = sum(1 for char in question if char.isupper()) / max(q_chars, 1)
     features["punct_count"] = float(sum(1 for char in question if char in "?!.,")) 
     threshold_max, threshold_min = _extract_numeric_thresholds(question)
@@ -158,7 +147,6 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["threshold_min"] = threshold_min
     features["threshold_span"] = max(threshold_max - threshold_min, 0.0)
     features["is_player_prop"] = float(any(token in text for token in PLAYER_PROP_KEYWORDS))
-    features["is_team_total"] = float(any(token in text for token in TEAM_TOTAL_KEYWORDS))
     features["is_finance_threshold"] = float(any(token in text for token in FINANCE_THRESHOLD_KEYWORDS))
     features["is_date_based"] = float(features["has_date"] or features["has_before"] or features["has_after"])
     features["is_high_ambiguity"] = float(any(token in text for token in HIGH_AMBIGUITY_KEYWORDS))
@@ -184,6 +172,8 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     cat_count = 0
     max_matches = 0
     for category, keywords in CATEGORIES.items():
+        if category == "entertainment":
+            continue
         matches = sum(1 for keyword in keywords if keyword in text)
         features[f"cat_{category}"] = float(matches > 0)
         features[f"cat_{category}_str"] = float(min(matches, 5))
@@ -208,7 +198,6 @@ def extract_market_features(market: dict[str, Any]) -> dict[str, float]:
     features["dur_very_short"] = float(days <= 3)
     features["dur_short"] = float(3 < days <= 7)
     features["dur_medium"] = float(7 < days <= 30)
-    features["dur_long"] = float(30 < days <= 90)
     features["dur_very_long"] = float(days > 90)
     features["vol_per_day"] = vol / max(days, 1)
     features["log_vol_per_day"] = np.log1p(vol / max(days, 1))

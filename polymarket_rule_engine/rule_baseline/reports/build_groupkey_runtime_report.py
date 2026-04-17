@@ -11,33 +11,32 @@ from rule_baseline.reports.groupkey_reports import (
     build_runtime_report_markdown,
     build_runtime_report_payload,
 )
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build GroupKey runtime coverage and bundle footprint report.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
-    parser.add_argument("--max-rows", type=int, default=2000)
-    parser.add_argument("--recent-days", type=int, default=14)
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
     parser.add_argument("--unknown-group-preview-limit", type=int, default=20)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    max_rows = None if args.max_rows <= 0 else args.max_rows
-    recent_days = None if args.recent_days <= 0 else args.recent_days
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    max_rows = pipeline_config.max_rows
+    recent_days = pipeline_config.recent_days
 
     payload = build_runtime_report_payload(
-        artifact_mode=args.artifact_mode,
+        artifact_mode=pipeline_config.artifact_mode,
         max_rows=max_rows,
         recent_days=recent_days,
-        split_reference_end=args.split_reference_end,
-        history_start=args.history_start,
+        split_reference_end=pipeline_config.split.split_reference_end,
+        history_start=pipeline_config.split.history_start,
         unknown_group_preview_limit=args.unknown_group_preview_limit,
+        split_config=pipeline_config.split,
     )
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
     report_dir = artifact_paths.docs_groupkey_reports_dir
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = artifact_paths.groupkey_runtime_report_json_path

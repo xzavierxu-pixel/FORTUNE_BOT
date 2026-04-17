@@ -23,10 +23,11 @@ from rule_baseline.backtesting.backtest_portfolio_qmodel import (
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
 from rule_baseline.models import load_model_artifact
 from rule_baseline.datasets.snapshots import apply_earliest_market_dedup, load_raw_markets, load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split, select_preferred_split
+from rule_baseline.datasets.splits import assign_configured_dataset_split, select_preferred_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 INITIAL_BANKROLL = 10_000.0
 KELLY_FRACTION = 0.25
@@ -49,11 +50,7 @@ class ExecutionParityConfig:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Backtest parity with the simple online execution logic.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
-    parser.add_argument("--max-rows", type=int, default=None)
-    parser.add_argument("--recent-days", type=int, default=None)
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     parser.add_argument("--compare-model-path", type=str, default=None)
     return parser.parse_args()
 
@@ -82,7 +79,7 @@ def prepare_execution_candidates(
         return matched
 
     matched = matched.sort_values(
-        ["market_id", "snapshot_time", "rule_score"],
+        ["market_id", "snapshot_time", "edge_lower_bound_full"],
         ascending=[True, True, False],
     )
     matched = matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
@@ -107,7 +104,7 @@ def compute_filter_breakdown(
     matched = match_rules(evaluation_snapshots, rules)
     matched_unique = matched[["market_id", "snapshot_time"]].drop_duplicates() if not matched.empty else pd.DataFrame()
     if not matched.empty:
-        matched = matched.sort_values(["market_id", "snapshot_time", "rule_score"], ascending=[True, True, False])
+        matched = matched.sort_values(["market_id", "snapshot_time", "edge_lower_bound_full"], ascending=[True, True, False])
         dedup_snapshot = matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
     else:
         dedup_snapshot = matched
@@ -301,7 +298,7 @@ def run_execution_parity_backtest(
                         "direction": int(row["direction_model"]),
                         "rule_group_key": row["rule_group_key"],
                         "rule_leaf_id": int(row["rule_leaf_id"]),
-                        "rule_score": float(row.get("rule_score", np.nan)),
+                        "rule_edge_lower_bound": float(row.get("edge_lower_bound_full", np.nan)),
                         "stake": float(stake),
                         "stake_fraction_of_start_equity": float(stake / current_equity) if current_equity else 0.0,
                         "pnl": float(pnl),
@@ -480,21 +477,17 @@ def compute_decision_parity_summary(reference_candidates: pd.DataFrame, comparis
 
 def main() -> None:
     args = parse_args()
-    if args.artifact_mode != "offline":
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    if pipeline_config.artifact_mode != "offline":
         raise ValueError("Execution parity backtest is only supported for offline artifacts.")
 
     cfg = ExecutionParityConfig()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
 
-    snapshots = load_research_snapshots(max_rows=args.max_rows, recent_days=args.recent_days)
+    snapshots = load_research_snapshots(max_rows=pipeline_config.max_rows, recent_days=pipeline_config.recent_days)
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_artifact_split(
-        snapshots,
-        artifact_mode="offline",
-        reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
-    )
-    snapshots = assign_dataset_split(snapshots, split)
+    snapshots = assign_configured_dataset_split(snapshots, pipeline_config.split)
+    split = pipeline_config.split
     evaluation_split, snapshots = select_preferred_split(snapshots)
     if snapshots.empty:
         raise RuntimeError("No evaluation-period snapshots available.")
@@ -541,8 +534,15 @@ def main() -> None:
     skipped_df.to_csv(skipped_path, index=False)
     daily_df.to_csv(daily_path, index=False)
     pd.DataFrame([filter_breakdown]).to_csv(breakdown_path, index=False)
-    summary["split_boundaries"] = split.to_dict()
-    summary["debug_filters"] = {"max_rows": args.max_rows, "recent_days": args.recent_days}
+    summary["split_boundaries"] = {
+        "train_start": split.train_start,
+        "train_end": split.train_end,
+        "valid_start": split.valid_start,
+        "valid_end": split.valid_end,
+        "test_start": split.test_start,
+        "test_end": split.test_end,
+    }
+    summary["debug_filters"] = {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days}
     write_json(summary_path, summary)
 
     if args.compare_model_path:

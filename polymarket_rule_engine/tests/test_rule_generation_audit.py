@@ -38,7 +38,7 @@ class RuleGenerationAuditTest(unittest.TestCase):
                 {"group_key": "b|POLITICS|other", "selection_status": "drop", "group_snapshot_rows": 10, "group_unique_markets": 6},
             ]
         )
-        group_features = pd.DataFrame([{"group_key": "a|SPORTS|other", "group_match_found_default": 1}])
+        group_features = pd.DataFrame([{"group_key": "a|SPORTS|other", "group_default_q_full": 0.6}])
         fine_features = pd.DataFrame(
             [{"group_key": "a|SPORTS|other", "price_bin": "0.40-0.50", "horizon_hours": 6, "q_full": 0.6}]
         )

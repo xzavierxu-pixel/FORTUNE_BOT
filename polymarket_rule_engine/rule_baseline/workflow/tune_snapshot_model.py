@@ -22,7 +22,7 @@ from rule_baseline.backtesting.backtest_execution_parity import (
 )
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
 from rule_baseline.datasets.snapshots import load_raw_markets, load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
+from rule_baseline.datasets.splits import assign_configured_dataset_split, temporal_split_from_config
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
 from rule_baseline.models import DEFAULT_CLASSIFIER_PARAMS, fit_model_payload, predict_probabilities
@@ -36,16 +36,15 @@ from rule_baseline.training.train_snapshot_model import (
     trade_value_metrics,
 )
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 TOP_K = 50
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Tune snapshot ensemble hyperparameters under a fixed offline split.")
-    parser.add_argument("--artifact-mode", choices=["offline"], default="offline")
+    parser.add_argument("--pipeline-config", type=str, default=None)
     parser.add_argument("--target-mode", choices=["q"], default="q")
-    parser.add_argument("--split-reference-end", type=str, required=True)
-    parser.add_argument("--history-start", type=str, required=True)
     parser.add_argument("--top-k", type=int, default=TOP_K)
     parser.add_argument("--top-stage2", type=int, default=3)
     parser.add_argument("--top-execution-backtests", type=int, default=5)
@@ -130,17 +129,13 @@ def make_run_label(label: str | None) -> str:
 
 
 def prepare_dataset(args: argparse.Namespace):
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
     snapshots = load_research_snapshots()
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_artifact_split(
-        snapshots,
-        artifact_mode=args.artifact_mode,
-        reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
-    )
-    snapshots = assign_dataset_split(snapshots, split)
-    snapshots = snapshots[snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
+    split = temporal_split_from_config(pipeline_config.split)
+    snapshots = assign_configured_dataset_split(snapshots, pipeline_config.split)
+    snapshots = snapshots[snapshots["dataset_split"].isin(pipeline_config.split.allowed_splits)].copy()
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
@@ -155,7 +150,7 @@ def prepare_dataset(args: argparse.Namespace):
     feature_columns = [column for column in df_feat.columns if column not in DROP_COLS]
     df_train = df_feat[df_feat["dataset_split"] == "train"].copy()
     df_valid = df_feat[df_feat["dataset_split"] == "valid"].copy()
-    return artifact_paths, split, market_feature_cache, rules, snapshots, df_feat, df_train, df_valid, feature_columns
+    return artifact_paths, split, market_feature_cache, rules, snapshots, df_feat, df_train, df_valid, feature_columns, pipeline_config
 
 
 def build_prediction_frame(df_feat: pd.DataFrame, q_pred: np.ndarray) -> pd.DataFrame:
@@ -289,7 +284,7 @@ def load_existing_rows(path: Path) -> list[dict]:
 def main() -> None:
     args = parse_args()
     run_label = make_run_label(args.run_label)
-    artifact_paths, split, market_feature_cache, rules, snapshots, df_feat, df_train, df_valid, feature_columns = prepare_dataset(args)
+    artifact_paths, split, market_feature_cache, rules, snapshots, df_feat, df_train, df_valid, feature_columns, pipeline_config = prepare_dataset(args)
 
     tuning_dir = artifact_paths.analysis_dir / "tuning" / run_label
     tuning_dir.mkdir(parents=True, exist_ok=True)
@@ -414,14 +409,14 @@ def main() -> None:
 
     summary = {
         "run_label": run_label,
-        "artifact_mode": args.artifact_mode,
+        "artifact_mode": pipeline_config.artifact_mode,
         "target_mode": args.target_mode,
         "top_k": args.top_k,
         "top_stage2": args.top_stage2,
         "top_execution_backtests": args.top_execution_backtests,
         "split_boundaries": split.to_dict(),
-        "history_start": args.history_start,
-        "split_reference_end": args.split_reference_end,
+        "history_start": pipeline_config.split.history_start,
+        "split_reference_end": pipeline_config.split.split_reference_end,
         "default_classifier_params": DEFAULT_CLASSIFIER_PARAMS,
         "stage1_models": [spec["name"] for spec in build_stage1_model_grid()],
         "stage1_calibrations": build_stage1_calibration_grid(),

@@ -38,6 +38,7 @@ from rule_baseline.utils import config
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
 from rule_baseline.features.annotation_normalization import build_normalization_manifest, normalize_market_annotations
 from rule_baseline.features.snapshot_semantics import FEATURE_SEMANTICS_VERSION, online_feature_columns, split_feature_contract_columns
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 TRAIN_PRICE_MIN = 0.2
 TRAIN_PRICE_MAX = 0.8
@@ -46,9 +47,9 @@ DEFAULT_SNAPSHOT_PRESETS = "medium_quality"
 DEFAULT_SNAPSHOT_TIME_LIMIT = 300
 DEFAULT_SNAPSHOT_HYPERPARAMETER_PROFILE = "gbm_cat"
 DEFAULT_SNAPSHOT_REFIT_FULL = True
-DEFAULT_OFFLINE_TRAIN_SAMPLE_ROWS = 200_000
 TRAIN_FEATURES_PARQUET_PATH = config.PROCESSED_DIR / "train.parquet"
 VALID_FEATURES_PARQUET_PATH = config.PROCESSED_DIR / "valid.parquet"
+TEST_FEATURES_PARQUET_PATH = config.PROCESSED_DIR / "test.parquet"
 FEATURE_EXPORT_MANIFEST_PATH = config.PROCESSED_DIR / "feature_export_manifest.json"
 
 DROP_COLS = {
@@ -125,7 +126,6 @@ DROP_COLS = {
     "category_source",
     "is_date_based",
     "vol_x_sentiment",
-    "cat_entertainment_str",
     "startDate_market",
     "endDate_market",
     "closedTime_market",
@@ -273,7 +273,7 @@ def normalize_predictor_presets(raw_value: str) -> str | list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the snapshot ensemble model with strict split isolation.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    parser.add_argument("--pipeline-config", type=str, default=None)
     parser.add_argument(
         "--calibration-mode",
         choices=sorted(SUPPORTED_AUTOGLOUON_CALIBRATION_MODES),
@@ -286,12 +286,6 @@ def parse_args() -> argparse.Namespace:
         default="q",
         help="Training target for the main snapshot model.",
     )
-    parser.add_argument("--max-rows", type=int, default=None)
-    parser.add_argument("--recent-days", type=int, default=None)
-    parser.add_argument("--random-sample-rows", type=int, default=None)
-    parser.add_argument("--random-sample-seed", type=int, default=21)
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
     parser.add_argument("--predictor-presets", type=str, default=DEFAULT_SNAPSHOT_PRESETS)
     parser.add_argument("--predictor-time-limit", type=int, default=DEFAULT_SNAPSHOT_TIME_LIMIT)
     parser.add_argument(
@@ -329,7 +323,7 @@ def load_rules(path) -> pd.DataFrame:
         "h_min",
         "h_max",
         "q_full",
-        "rule_score",
+        "edge_lower_bound_full",
         "direction",
         "leaf_id",
         "group_key",
@@ -369,17 +363,9 @@ def _build_rule_lookup_frame(rules: pd.DataFrame) -> pd.DataFrame:
             "edge_full",
             "edge_std_full",
             "edge_lower_bound_full",
-            "rule_score",
             "direction",
             "group_key",
             "n_full",
-            "group_unique_markets",
-            "group_snapshot_rows",
-            "group_median_logloss",
-            "group_median_brier",
-            "global_group_logloss_q25",
-            "global_group_brier_q25",
-            "group_decision",
         ]
     ].copy()
 
@@ -423,7 +409,7 @@ def match_snapshots_to_rules(
     if matched.empty:
         return pd.DataFrame()
 
-    matched = matched.sort_values(["market_id", "snapshot_time", "rule_score"], ascending=[True, True, False])
+    matched = matched.sort_values(["market_id", "snapshot_time", "edge_lower_bound_full"], ascending=[True, True, False])
     matched = matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
     return matched.drop(columns=["rounded_horizon_hours"], errors="ignore")
 
@@ -543,25 +529,26 @@ def load_feature_export_manifest(path=FEATURE_EXPORT_MANIFEST_PATH) -> dict:
 def load_exported_feature_frames(
     train_path=TRAIN_FEATURES_PARQUET_PATH,
     valid_path=VALID_FEATURES_PARQUET_PATH,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    missing = [str(path) for path in [train_path, valid_path] if not path.exists()]
+    test_path=TEST_FEATURES_PARQUET_PATH,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    missing = [str(path) for path in [train_path, valid_path, test_path] if not path.exists()]
     if missing:
         raise FileNotFoundError(
             "Missing exported parquet feature files. Run export_features.py first. Missing: "
             + ", ".join(missing)
         )
-    return pd.read_parquet(train_path), pd.read_parquet(valid_path)
+    return pd.read_parquet(train_path), pd.read_parquet(valid_path), pd.read_parquet(test_path)
 
 
-def resolve_train_sample_rows(artifact_mode: str, configured_rows: int | None) -> int | None:
-    if configured_rows is not None:
-        return configured_rows
-    if artifact_mode == "offline":
-        return DEFAULT_OFFLINE_TRAIN_SAMPLE_ROWS
-    return None
-
-
-def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, artifact_mode: str, target_mode: str) -> dict:
+def export_predictions(
+    model_artifact,
+    df_feat: pd.DataFrame,
+    artifact_paths,
+    artifact_mode: str,
+    target_mode: str,
+    publish_split: str,
+    fail_if_publish_split_empty: bool,
+) -> dict:
     if target_mode == "q":
         q_pred = model_artifact.predict(df_feat)
         trade_value_pred = compute_trade_value_from_q(df_feat, q_pred)
@@ -589,7 +576,6 @@ def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, ar
         "direction",
         "group_key",
         "q_smooth",
-        "rule_score",
         "dataset_split",
         "quality_pass",
         "delta_hours_exceeded_flag",
@@ -603,13 +589,13 @@ def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, ar
     out.to_csv(artifact_paths.predictions_full_path, index=False)
 
     if artifact_mode == "offline":
-        publish_df = out[out["dataset_split"] == "test"].copy()
-        if publish_df.empty:
-            publish_df = out[out["dataset_split"] == "valid"].copy()
-        if publish_df.empty:
-            publish_df = out[out["dataset_split"] == "train"].copy()
+        publish_df = out[out["dataset_split"] == publish_split].copy()
+        if publish_df.empty and fail_if_publish_split_empty:
+            raise RuntimeError(f"Configured publish split '{publish_split}' is empty.")
     else:
-        publish_df = out.copy()
+        publish_df = out[out["dataset_split"] == publish_split].copy()
+        if publish_df.empty and fail_if_publish_split_empty:
+            raise RuntimeError(f"Configured publish split '{publish_split}' is empty.")
     publish_df.to_csv(artifact_paths.predictions_path, index=False)
 
     metrics_by_split = {
@@ -623,17 +609,18 @@ def export_predictions(model_artifact, df_feat: pd.DataFrame, artifact_paths, ar
 
 def main() -> None:
     args = parse_args()
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
     predictor_presets = normalize_predictor_presets(args.predictor_presets)
-    artifact_paths = build_artifact_paths(args.artifact_mode)
-    if args.artifact_mode == "online" and args.target_mode != "q":
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
+    if pipeline_config.artifact_mode == "online" and args.target_mode != "q":
         raise ValueError("Online production artifacts support only target_mode='q'.")
     manifest = load_feature_export_manifest()
-    if manifest.get("artifact_mode") != args.artifact_mode:
+    if manifest.get("artifact_mode") != pipeline_config.artifact_mode:
         raise ValueError(
-            f"Exported feature artifact_mode={manifest.get('artifact_mode')} does not match train_snapshot_model artifact_mode={args.artifact_mode}."
+            f"Exported feature artifact_mode={manifest.get('artifact_mode')} does not match train_snapshot_model artifact_mode={pipeline_config.artifact_mode}."
         )
-    df_train, df_valid = load_exported_feature_frames()
-    df_feat = pd.concat([df_train, df_valid], ignore_index=True)
+    df_train, df_valid, df_test = load_exported_feature_frames()
+    df_feat = pd.concat([df_train, df_valid, df_test], ignore_index=True)
     feature_columns = list(manifest["feature_columns"])
     required_critical_columns = list(manifest["required_critical_columns"])
     required_noncritical_columns = list(manifest["required_noncritical_columns"])
@@ -661,7 +648,7 @@ def main() -> None:
             grouped_calibration_min_rows=args.grouped_calibration_min_rows,
             bundle_dir=artifact_paths.model_bundle_dir,
             full_bundle_dir=artifact_paths.full_model_bundle_dir,
-            artifact_mode=args.artifact_mode,
+            artifact_mode=pipeline_config.artifact_mode,
             split_boundaries=split,
             predictor_presets=predictor_presets,
             time_limit=args.predictor_time_limit,
@@ -672,14 +659,14 @@ def main() -> None:
             num_stack_levels=args.num_stack_levels,
             auto_stack=args.auto_stack,
             refit_full=args.refit_full,
-            deploy_optimized=(args.artifact_mode == "online"),
+            deploy_optimized=(pipeline_config.artifact_mode == "online"),
             calibration_holdout_policy="explicit_valid_split",
         )
         training_wall_clock_sec = time.perf_counter() - training_started
         print(f"[INFO] Saved AutoGluon q deployment bundle to {artifact_paths.model_bundle_dir}")
         print(f"[INFO] Saved AutoGluon q full training bundle to {artifact_paths.full_model_bundle_dir}")
     elif args.target_mode == "residual_q":
-        if args.artifact_mode != "offline":
+        if pipeline_config.artifact_mode != "offline":
             raise ValueError("Research target_mode='residual_q' is only supported in offline mode.")
         model_artifact = fit_regression_payload(
             df_train,
@@ -687,7 +674,7 @@ def main() -> None:
             target_column="residual_q_target",
         )
     else:
-        if args.artifact_mode != "offline":
+        if pipeline_config.artifact_mode != "offline":
             raise ValueError(f"Research target_mode='{args.target_mode}' is only supported in offline mode.")
         target_column = "expected_pnl_target" if args.target_mode == "expected_pnl" else "expected_roi_target"
         model_artifact = fit_regression_payload(
@@ -697,21 +684,30 @@ def main() -> None:
         )
 
     if args.target_mode != "q":
-        model_artifact["artifact_mode"] = args.artifact_mode
+        model_artifact["artifact_mode"] = pipeline_config.artifact_mode
         model_artifact["target_mode"] = args.target_mode
         model_artifact["split_boundaries"] = split
         save_model(model_artifact, artifact_paths.legacy_model_path)
 
-    metrics_by_split = export_predictions(model_artifact, df_feat, artifact_paths, args.artifact_mode, args.target_mode)
+    metrics_by_split = export_predictions(
+        model_artifact,
+        df_feat,
+        artifact_paths,
+        pipeline_config.artifact_mode,
+        args.target_mode,
+        pipeline_config.publish.prediction_publish_split,
+        pipeline_config.publish.fail_if_publish_split_empty,
+    )
     training_summary = {
-        "artifact_mode": args.artifact_mode,
+        "artifact_mode": pipeline_config.artifact_mode,
         "calibration_mode": args.calibration_mode,
         "target_mode": args.target_mode,
         "feature_count": len(feature_columns),
         "rows_by_split": df_feat["dataset_split"].value_counts().to_dict(),
         "metrics_by_split": metrics_by_split,
         "boundaries": split,
-        "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+        "publish_split": pipeline_config.publish.prediction_publish_split,
+        "debug_filters": {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
         "feature_export_manifest_path": str(FEATURE_EXPORT_MANIFEST_PATH),
         "feature_export_rows": manifest.get("rows", {}),
     }

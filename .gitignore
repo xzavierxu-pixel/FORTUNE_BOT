@@ -7,6 +7,9 @@ polymarket_rule_engine/data/offline/*
 !polymarket_rule_engine/data/offline/edge/
 polymarket_rule_engine/data/offline/edge/*
 !polymarket_rule_engine/data/offline/edge/trading_rules.csv
+!polymarket_rule_engine/data/offline/edge/group_serving_features.parquet
+!polymarket_rule_engine/data/offline/edge/fine_serving_features.parquet
+!polymarket_rule_engine/data/offline/edge/serving_feature_defaults.json
 !polymarket_rule_engine/data/offline/models/
 polymarket_rule_engine/data/offline/models/*
 !polymarket_rule_engine/data/offline/models/ensemble_snapshot_q.pkl

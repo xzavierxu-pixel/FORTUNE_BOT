@@ -1,8 +1,16 @@
-import pandas as pd
-import numpy as np
 import argparse
+import os
 import sys
 from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from rule_baseline.datasets.artifacts import build_artifact_paths
+from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 def run_dqc(df: pd.DataFrame, name: str):
     print(f"\n{'='*20} Data Quality Report: {name} {'='*20}")
@@ -144,20 +152,23 @@ class Tee:
 
 def main():
     parser = argparse.ArgumentParser(description="Data Quality Check for Parquet files")
-    parser.add_argument("--train", type=str, default="polymarket_rule_engine/data/processed/train.parquet")
-    parser.add_argument("--valid", type=str, default="polymarket_rule_engine/data/processed/valid.parquet")
-    parser.add_argument("--output_dir", type=str, default="polymarket_rule_engine/data/analysis/quality_check")
+    parser.add_argument("--pipeline-config", type=str, default=None)
+    parser.add_argument("--train", type=str, default=None)
+    parser.add_argument("--valid", type=str, default=None)
+    parser.add_argument("--output_dir", type=str, default=None)
     args = parser.parse_args()
 
-    output_dir = Path(args.output_dir)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
+
+    train_path = Path(args.train) if args.train else config.PROCESSED_DIR / "train.parquet"
+    valid_path = Path(args.valid) if args.valid else config.PROCESSED_DIR / "valid.parquet"
+    output_dir = Path(args.output_dir) if args.output_dir else artifact_paths.analysis_dir / "quality_check"
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "dqc_summary.txt"
     
     # Start capturing output
     sys.stdout = Tee(str(summary_path))
-
-    train_path = Path(args.train)
-    valid_path = Path(args.valid)
 
     if not train_path.exists():
         print(f"Error: Train file not found at {train_path}")

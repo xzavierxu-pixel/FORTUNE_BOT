@@ -295,6 +295,7 @@ class PegConfig:
     online_market_ws_state_flush_sec: int
     online_token_state_max_age_sec: int
     online_capacity_wait_poll_sec: int
+    online_capacity_wait_timeout_sec: int
     online_price_cap_safety_buffer: float
     online_min_f_star: float
     online_deferred_artifacts_enabled: bool
@@ -608,6 +609,7 @@ def load_config() -> PegConfig:
         online_market_ws_state_flush_sec=_get_int("PEG_ONLINE_MARKET_WS_STATE_FLUSH_SEC", 5),
         online_token_state_max_age_sec=_get_int("PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC", 7200),
         online_capacity_wait_poll_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_POLL_SEC", 30),
+        online_capacity_wait_timeout_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_TIMEOUT_SEC", 120),
         online_price_cap_safety_buffer=_get_float("PEG_ONLINE_PRICE_CAP_SAFETY_BUFFER", 0.01),
         online_min_f_star=_get_float("PEG_MIN_F_STAR", 0.2),
         online_deferred_artifacts_enabled=_get_bool("PEG_ONLINE_DEFERRED_ARTIFACTS_ENABLED", False),

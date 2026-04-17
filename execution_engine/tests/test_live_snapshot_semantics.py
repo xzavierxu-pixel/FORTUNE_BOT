@@ -249,7 +249,6 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
                     "edge_full",
                     "edge_std_full",
                     "edge_lower_bound_full",
-                    "rule_score",
                     "n_full",
                 ]
             ),
@@ -265,7 +264,6 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
                         "group_default_edge_full": 0.17,
                         "group_default_edge_std_full": 0.08,
                         "group_default_edge_lower_bound_full": 0.12,
-                        "group_default_rule_score": 0.12,
                         "group_default_n_full": 140.0,
                     }
                 ]
@@ -279,7 +277,6 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
                     "edge_full": {"group_column": "group_default_edge_full"},
                     "edge_std_full": {"group_column": "group_default_edge_std_full"},
                     "edge_lower_bound_full": {"group_column": "group_default_edge_lower_bound_full"},
-                    "rule_score": {"group_column": "group_default_rule_score"},
                     "n_full": {"group_column": "group_default_n_full"},
                 }
             },
@@ -322,17 +319,11 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
                     "market_type",
                     "horizon_hours",
                     "fine_feature_q_full",
-                    "group_match_found",
-                    "fine_match_found",
-                    "used_group_fallback_only",
                 ),
                 numeric_columns=(
                     "price",
                     "horizon_hours",
                     "fine_feature_q_full",
-                    "group_match_found",
-                    "fine_match_found",
-                    "used_group_fallback_only",
                 ),
                 categorical_columns=("domain", "category", "market_type"),
                 required_noncritical_columns=(
@@ -342,9 +333,6 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
                     "market_type",
                     "horizon_hours",
                     "fine_feature_q_full",
-                    "group_match_found",
-                    "fine_match_found",
-                    "used_group_fallback_only",
                 ),
             ),
         )
@@ -359,9 +347,9 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
         self.assertEqual(int(result.rule_model.rule_hits.iloc[0]["rule_leaf_id"]), -1)
         self.assertEqual(result.rule_model.rule_hits.iloc[0]["rule_match_reason"], "group_default_fallback")
         self.assertEqual(len(result.rule_model.feature_inputs), 1)
-        self.assertTrue(bool(result.rule_model.feature_inputs.iloc[0]["group_match_found"]))
-        self.assertFalse(bool(result.rule_model.feature_inputs.iloc[0]["fine_match_found"]))
-        self.assertTrue(bool(result.rule_model.feature_inputs.iloc[0]["used_group_fallback_only"]))
+        self.assertNotIn("group_match_found", result.rule_model.feature_inputs.columns)
+        self.assertNotIn("fine_match_found", result.rule_model.feature_inputs.columns)
+        self.assertNotIn("used_group_fallback_only", result.rule_model.feature_inputs.columns)
         self.assertEqual(len(result.rule_model.model_outputs), 1)
         self.assertNotIn("growth_score", result.rule_model.model_outputs.columns)
         self.assertNotIn("f_exec", result.rule_model.model_outputs.columns)

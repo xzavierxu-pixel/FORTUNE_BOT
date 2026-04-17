@@ -182,11 +182,6 @@ def preprocess_features(
     else:
         out["q_smooth"] = 0.5
 
-    if "rule_score" in out.columns:
-        out["rule_score"] = pd.to_numeric(out["rule_score"], errors="coerce").fillna(0.0)
-    else:
-        out["rule_score"] = 0.0
-
     group_rule_numeric_columns = [
         "q_full",
         "p_full",
@@ -197,16 +192,13 @@ def preprocess_features(
         "h_min",
         "h_max",
         "horizon_hours_rule",
-        "group_unique_markets",
-        "group_snapshot_rows",
-        "global_total_unique_markets",
-        "global_total_snapshot_rows",
-        "group_market_share_global",
-        "group_snapshot_share_global",
-        "group_median_logloss",
-        "group_median_brier",
-        "global_group_logloss_q25",
-        "global_group_brier_q25",
+        "group_match_found",
+        "fine_match_found",
+        "used_group_fallback_only",
+        "group_feature_full_group_expanding_market_count",
+        "group_feature_full_group_expanding_snapshot_count",
+        "group_feature_full_group_expanding_logloss_p50",
+        "group_feature_full_group_expanding_brier_p50",
     ]
     serving_numeric_exclusions = ("leaf_id", "group_decision", "domain", "category", "market_type", "_key")
     dynamic_serving_numeric_columns = [
@@ -221,14 +213,19 @@ def preprocess_features(
     for column in dynamic_serving_numeric_columns:
         out[column] = pd.to_numeric(out[column], errors="coerce").fillna(0.0)
 
-    if "group_decision" not in out.columns:
-        out["group_decision"] = "UNKNOWN"
-    if "domain" not in out.columns:
-        out["domain"] = "UNKNOWN"
-    if "category" not in out.columns:
-        out["category"] = "UNKNOWN"
-    if "market_type" not in out.columns:
-        out["market_type"] = "UNKNOWN"
+    missing_object_defaults = {
+        "group_decision": "UNKNOWN",
+        "domain": "UNKNOWN",
+        "category": "UNKNOWN",
+        "market_type": "UNKNOWN",
+    }
+    missing_object_columns = {
+        column: pd.Series(default_value, index=out.index, dtype="object")
+        for column, default_value in missing_object_defaults.items()
+        if column not in out.columns
+    }
+    if missing_object_columns:
+        out = pd.concat([out, pd.DataFrame(missing_object_columns, index=out.index)], axis=1)
 
     # Structural keys for hierarchical grouping beyond the full group_key.
     out["domain_category_key"] = out["domain"].astype(str) + "|" + out["category"].astype(str)
@@ -266,7 +263,6 @@ def preprocess_features(
         "abs_price_center_gap",
         "horizon_q_gap",
         "quote_staleness_x_horizon",
-        "rule_score_x_q_full",
         "q_full",
         "p_full",
         "edge_full",
@@ -276,38 +272,20 @@ def preprocess_features(
         "h_min",
         "h_max",
         "horizon_hours_rule",
-        "group_unique_markets",
-        "group_snapshot_rows",
-        "global_total_unique_markets",
-        "global_total_snapshot_rows",
-        "group_market_share_global",
-        "group_snapshot_share_global",
-        "group_median_logloss",
-        "group_median_brier",
-        "global_group_logloss_q25",
-        "global_group_brier_q25",
-        "group_logloss_gap_q25",
-        "group_brier_gap_q25",
-        "group_quality_pass_q25",
-        "group_quality_fail_q25",
         "rule_edge_over_std",
         "rule_edge_over_logloss",
         "rule_edge_over_brier",
         "group_market_density",
         "group_snapshot_density",
-        "group_rule_score_x_edge_lower",
         "edge_lower_bound_over_std",
         "domain_is_unknown",
         "rule_price_center",
-        "rule_price_width",
         "rule_horizon_center",
         "rule_horizon_width",
         "rule_edge_buffer",
         "rule_confidence_ratio",
         "rule_support_log1p",
         "rule_snapshot_support_log1p",
-        "group_share_x_logloss_gap",
-        "group_share_x_brier_gap",
         "group_match_found",
         "fine_match_found",
         "used_group_fallback_only",
@@ -363,9 +341,14 @@ def preprocess_features(
             and column.endswith(serving_numeric_exclusions)
         ]
     )
+    missing_categorical_columns = {
+        column: pd.Series("UNKNOWN", index=out.index, dtype="object")
+        for column in categorical_columns
+        if column not in out.columns
+    }
+    if missing_categorical_columns:
+        out = pd.concat([out, pd.DataFrame(missing_categorical_columns, index=out.index)], axis=1)
     for column in categorical_columns:
-        if column not in out.columns:
-            out[column] = "UNKNOWN"
         out[column] = out[column].astype("string").fillna("UNKNOWN").astype("category")
 
     if "category_override_flag" in out.columns:
@@ -415,19 +398,26 @@ def apply_feature_variant(
     liquidity = _safe_numeric(out.get("liquidity"), default=0.0)
     spread = _safe_numeric(out.get("spread"), default=0.0)
     quote_offset = _safe_numeric(out.get("selected_quote_offset_sec"), default=0.0)
-    rule_score = _safe_numeric(out.get("rule_score"), default=0.0)
     edge_lower = _safe_numeric(out.get("edge_lower_bound_full"), default=0.0) if "edge_lower_bound_full" in out.columns else pd.Series(0.0, index=out.index)
     edge_std = _safe_numeric(out.get("edge_std_full"), default=0.0) if "edge_std_full" in out.columns else pd.Series(0.0, index=out.index)
     edge_full = _safe_numeric(out.get("edge_full"), default=0.0) if "edge_full" in out.columns else pd.Series(0.0, index=out.index)
     n_full = _safe_numeric(out.get("n_full"), default=0.0) if "n_full" in out.columns else pd.Series(0.0, index=out.index)
-    group_unique_markets = _safe_numeric(out.get("group_unique_markets"), default=0.0) if "group_unique_markets" in out.columns else pd.Series(0.0, index=out.index)
-    group_snapshot_rows = _safe_numeric(out.get("group_snapshot_rows"), default=0.0) if "group_snapshot_rows" in out.columns else pd.Series(0.0, index=out.index)
-    group_market_share = _safe_numeric(out.get("group_market_share_global"), default=0.0) if "group_market_share_global" in out.columns else pd.Series(0.0, index=out.index)
-    group_snapshot_share = _safe_numeric(out.get("group_snapshot_share_global"), default=0.0) if "group_snapshot_share_global" in out.columns else pd.Series(0.0, index=out.index)
-    group_median_logloss = _safe_numeric(out.get("group_median_logloss"), default=0.0) if "group_median_logloss" in out.columns else pd.Series(0.0, index=out.index)
-    group_median_brier = _safe_numeric(out.get("group_median_brier"), default=0.0) if "group_median_brier" in out.columns else pd.Series(0.0, index=out.index)
-    global_logloss_q25 = _safe_numeric(out.get("global_group_logloss_q25"), default=0.0) if "global_group_logloss_q25" in out.columns else pd.Series(0.0, index=out.index)
-    global_brier_q25 = _safe_numeric(out.get("global_group_brier_q25"), default=0.0) if "global_group_brier_q25" in out.columns else pd.Series(0.0, index=out.index)
+    group_unique_markets = _safe_numeric(
+        out.get("group_feature_full_group_expanding_market_count"),
+        default=0.0,
+    ) if "group_feature_full_group_expanding_market_count" in out.columns else pd.Series(0.0, index=out.index)
+    group_snapshot_rows = _safe_numeric(
+        out.get("group_feature_full_group_expanding_snapshot_count"),
+        default=0.0,
+    ) if "group_feature_full_group_expanding_snapshot_count" in out.columns else pd.Series(0.0, index=out.index)
+    group_median_logloss = _safe_numeric(
+        out.get("group_feature_full_group_expanding_logloss_p50"),
+        default=0.0,
+    ) if "group_feature_full_group_expanding_logloss_p50" in out.columns else pd.Series(0.0, index=out.index)
+    group_median_brier = _safe_numeric(
+        out.get("group_feature_full_group_expanding_brier_p50"),
+        default=0.0,
+    ) if "group_feature_full_group_expanding_brier_p50" in out.columns else pd.Series(0.0, index=out.index)
     h_min = _safe_numeric(out.get("h_min"), default=0.0) if "h_min" in out.columns else pd.Series(0.0, index=out.index)
     h_max = _safe_numeric(out.get("h_max"), default=0.0) if "h_max" in out.columns else pd.Series(0.0, index=out.index)
     p_full = _safe_numeric(out.get("p_full"), default=0.0) if "p_full" in out.columns else pd.Series(0.0, index=out.index)
@@ -436,32 +426,19 @@ def apply_feature_variant(
     out["abs_price_center_gap"] = (price - 0.5).abs()
     out["horizon_q_gap"] = horizon * out["abs_price_q_gap"]
     out["quote_staleness_x_horizon"] = quote_offset * (horizon + 1.0)
-    out["rule_score_x_q_full"] = rule_score * q_anchor
     out["edge_lower_bound_over_std"] = edge_lower / edge_std.replace(0.0, pd.NA).fillna(1.0)
-    out["group_logloss_gap_q25"] = group_median_logloss - global_logloss_q25
-    out["group_brier_gap_q25"] = group_median_brier - global_brier_q25
-    out["group_quality_pass_q25"] = (
-        (group_median_logloss >= global_logloss_q25) | (group_median_brier >= global_brier_q25)
-    ).astype(float)
-    out["group_quality_fail_q25"] = (
-        (group_median_logloss < global_logloss_q25) & (group_median_brier < global_brier_q25)
-    ).astype(float)
     out["rule_edge_over_std"] = edge_full / (edge_std.abs() + 1e-6)
     out["rule_edge_over_logloss"] = edge_full / (group_median_logloss.abs() + 1e-6)
     out["rule_edge_over_brier"] = edge_full / (group_median_brier.abs() + 1e-6)
     out["group_market_density"] = group_unique_markets / (n_full + 1.0)
     out["group_snapshot_density"] = group_snapshot_rows / (group_unique_markets + 1.0)
-    out["group_rule_score_x_edge_lower"] = rule_score * edge_lower
     out["rule_price_center"] = (p_full + price) / 2.0
-    out["rule_price_width"] = (_safe_numeric(out.get("price_max"), default=0.0) - _safe_numeric(out.get("price_min"), default=0.0)).clip(lower=0.0)
     out["rule_horizon_center"] = (h_min + h_max) / 2.0
     out["rule_horizon_width"] = (h_max - h_min).clip(lower=0.0)
     out["rule_edge_buffer"] = edge_full - edge_lower
     out["rule_confidence_ratio"] = edge_lower / (edge_full.abs() + 1e-6)
     out["rule_support_log1p"] = np.log1p(n_full.clip(lower=0.0))
     out["rule_snapshot_support_log1p"] = np.log1p(group_snapshot_rows.clip(lower=0.0))
-    out["group_share_x_logloss_gap"] = group_market_share * out["group_logloss_gap_q25"]
-    out["group_share_x_brier_gap"] = group_snapshot_share * out["group_brier_gap_q25"]
 
     if feature_variant == "interaction_plus_textlite":
         question = _safe_text(out.get("question_market"))

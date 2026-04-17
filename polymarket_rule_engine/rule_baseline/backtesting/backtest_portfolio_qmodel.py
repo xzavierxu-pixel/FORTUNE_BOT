@@ -56,7 +56,6 @@ REQUIRED_RULE_COLUMNS = {
     "edge_full",
     "edge_std_full",
     "edge_lower_bound_full",
-    "rule_score",
     "n_full",
 }
 
@@ -129,7 +128,6 @@ def load_rules(path) -> pd.DataFrame:
         "n_full",
         "edge_full",
         "edge_std_full",
-        "rule_score",
         "price_min",
         "price_max",
         "h_min",
@@ -203,7 +201,7 @@ def select_top_rules(rules: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
     if candidates.empty:
         raise ValueError("No rules passed validation-period filtering thresholds.")
 
-    candidates = candidates.sort_values("rule_score", ascending=False)
+    candidates = candidates.sort_values("edge_lower_bound_full", ascending=False)
     return candidates.head(min(cfg.top_k_rules, len(candidates))).reset_index(drop=True)
 
 
@@ -219,7 +217,6 @@ def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
         "h_min",
         "h_max",
         "horizon_hours",
-        "rule_score",
         "direction",
         "q_full",
         "p_full",
@@ -227,13 +224,6 @@ def match_rules(snapshots: pd.DataFrame, rules: pd.DataFrame) -> pd.DataFrame:
         "edge_std_full",
         "edge_lower_bound_full",
         "n_full",
-        "group_unique_markets",
-        "group_snapshot_rows",
-        "group_median_logloss",
-        "group_median_brier",
-        "global_group_logloss_q25",
-        "global_group_brier_q25",
-        "group_decision",
     ]
     available_rule_columns = [column for column in rule_columns if column in rules.columns]
     merged = snapshots.merge(
@@ -353,7 +343,7 @@ def prepare_candidate_book(
         return matched
 
     matched = matched.sort_values(
-        ["market_id", "snapshot_time", "rule_score"],
+        ["market_id", "snapshot_time", "edge_lower_bound_full"],
         ascending=[True, True, False],
     )
     matched = matched.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
@@ -523,7 +513,7 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
                     "direction": int(row["direction_model"]),
                     "rule_group_key": row["rule_group_key"],
                     "rule_leaf_id": int(row["rule_leaf_id"]),
-                    "rule_score": float(row.get("rule_score", np.nan)),
+                    "rule_edge_lower_bound": float(row.get("edge_lower_bound_full", np.nan)),
                     "f_star": float(row["f_star"]),
                     "stake": float(stake),
                     "pnl": float(pnl),

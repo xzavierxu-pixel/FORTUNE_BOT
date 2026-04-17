@@ -75,9 +75,8 @@ class GroupKeyFeatureInventoryTest(unittest.TestCase):
         self.assertEqual(classify_blueprint_pending_row(shrinkage_row)["status"], "unsupported_now")
         self.assertEqual(classify_blueprint_pending_row(one_hot_row)["status"], "intentionally_excluded")
         derived = classify_blueprint_pending_row(history_share_row)
-        self.assertEqual(derived["status"], "implemented_approximate")
-        self.assertEqual(derived["implemented_in"], "derived_history_share")
-        self.assertIn("global_expanding_snapshot_count", derived["matched_feature_name"])
+        self.assertEqual(derived["status"], "intentionally_excluded")
+        self.assertEqual(derived["audit_class"], "E_intentionally_excluded")
 
     def test_alias_candidates_cover_structural_prefix_variants(self) -> None:
         candidates = _alias_candidates("domain_category_recent_90days_abs_bias_q75")

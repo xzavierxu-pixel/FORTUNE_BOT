@@ -57,6 +57,7 @@ class ArtifactPaths:
     groupkey_serving_schema_reference_path: Path
     groupkey_runtime_report_json_path: Path
     groupkey_runtime_report_markdown_path: Path
+    pipeline_runtime_config_path: Path
 
     def ensure_dirs(self) -> None:
         bundle_paths = build_runtime_bundle_paths(self.model_bundle_dir)
@@ -129,6 +130,7 @@ def build_artifact_paths(mode: str = "offline") -> ArtifactPaths:
         groupkey_serving_schema_reference_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_serving_schema_reference.md",
         groupkey_runtime_report_json_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_runtime_report.json",
         groupkey_runtime_report_markdown_path=config.BASE_DIR / "docs" / "audit" / "groupkey_reports" / "groupkey_runtime_report.md",
+        pipeline_runtime_config_path=root / "audit" / "pipeline_runtime_config.json",
     )
     paths.ensure_dirs()
     return paths

@@ -131,7 +131,7 @@ def collapse_rule_hits(frame: pd.DataFrame) -> pd.DataFrame:
         scored["rule_match_priority"] = pd.to_numeric(scored["rule_match_priority"], errors="coerce").fillna(1).astype(int)
     return (
         scored.sort_values(
-            by=["market_id", "snapshot_time", "rule_match_priority", "rule_score"],
+            by=["market_id", "snapshot_time", "rule_match_priority", "edge_lower_bound_full"],
             ascending=[True, True, False, False],
         )
         .drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")

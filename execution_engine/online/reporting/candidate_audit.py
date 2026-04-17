@@ -154,7 +154,7 @@ def build_candidate_audit(
     market_audit_path.parent.mkdir(parents=True, exist_ok=True)
     funnel_summary_path.parent.mkdir(parents=True, exist_ok=True)
     resolved_funnel_payload = funnel_payload or _load_manifest_funnel_payload(cfg) or {}
-    use_manifest_funnel = _artifact_policy(cfg) == "minimal" and bool(resolved_funnel_payload)
+    use_manifest_funnel = _artifact_policy(cfg) == "minimal" and events.empty and bool(resolved_funnel_payload)
 
     if events.empty:
         pd.DataFrame(

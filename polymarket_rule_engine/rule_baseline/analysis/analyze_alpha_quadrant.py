@@ -9,6 +9,7 @@ import pandas as pd
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 CONTRARIAN_THRESHOLD = 0.05
 PRICE_MIN = 0.05
@@ -17,7 +18,7 @@ PRICE_MAX = 0.95
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Analyze alpha quadrants on strict OOS predictions.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    parser.add_argument("--pipeline-config", type=str, default=None)
     return parser.parse_args()
 
 
@@ -100,7 +101,7 @@ def slice_alpha(df: pd.DataFrame, column: str, min_count: int = 100) -> pd.DataF
     return result.sort_values("weighted_score", ascending=False) if not result.empty else result
 
 
-def load_analysis_predictions(artifact_paths, artifact_mode: str) -> tuple[pd.DataFrame, str]:
+def load_analysis_predictions(artifact_paths) -> tuple[pd.DataFrame, str]:
     if artifact_paths.predictions_path.exists():
         published = pd.read_csv(artifact_paths.predictions_path)
         if not published.empty:
@@ -111,21 +112,14 @@ def load_analysis_predictions(artifact_paths, artifact_mode: str) -> tuple[pd.Da
             f"Predictions files not found: {artifact_paths.predictions_path} / {artifact_paths.predictions_full_path}"
         )
 
-    full = pd.read_csv(artifact_paths.predictions_full_path)
-    if artifact_mode != "offline" or "dataset_split" not in full.columns:
-        return full, "full"
-
-    for split_name in ("test", "valid", "train"):
-        subset = full[full["dataset_split"] == split_name].copy()
-        if not subset.empty:
-            return subset, split_name
-    return full.iloc[0:0].copy(), "empty"
+    return pd.read_csv(artifact_paths.predictions_full_path), "full_diagnostic"
 
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
-    df, evaluation_scope = load_analysis_predictions(artifact_paths, args.artifact_mode)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
+    df, evaluation_scope = load_analysis_predictions(artifact_paths)
     df["price"] = df["price"].astype(float)
     df["q_pred"] = df["q_pred"].astype(float)
     df["y"] = df["y"].astype(int)

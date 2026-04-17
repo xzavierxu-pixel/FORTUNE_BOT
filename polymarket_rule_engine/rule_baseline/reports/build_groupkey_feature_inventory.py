@@ -90,7 +90,7 @@ def _infer_family(feature_name: str, source_table: str) -> str:
         return "fallback_indicator"
     if feature_name.startswith("hist_price_x_") or feature_name.startswith("price_x_"):
         return "history_price_interaction"
-    if feature_name.startswith("rule_edge_minus_") or feature_name.startswith("rule_score_minus_"):
+    if feature_name.startswith("rule_edge_minus_"):
         return "rule_gap_interaction"
     if feature_name.endswith("_tail_instability_ratio"):
         return "tail_risk"
@@ -108,7 +108,6 @@ def _infer_family(feature_name: str, source_table: str) -> str:
         "edge_full",
         "edge_std_full",
         "edge_lower_bound_full",
-        "rule_score",
         "n_full",
     }:
         return "rule_prior"
@@ -297,25 +296,16 @@ def classify_blueprint_pending_row(row: dict[str, str]) -> dict[str, str]:
         row["audit_class"] = "E_intentionally_excluded"
         return row
     if feature_name == "group_key_history_share_expanding":
-        row["status"] = "implemented_approximate"
-        row["audit_class"] = "D_duplicate_or_merge"
-        row["implemented_in"] = "derived_group_share"
-        row["match_quality"] = "approximate"
-        row["matched_feature_name"] = "group_snapshot_share_global"
-        row["serving_asset"] = "group_serving_features.parquet"
+        row["status"] = "intentionally_excluded"
+        row["audit_class"] = "E_intentionally_excluded"
         return row
     if feature_name in {
         "domain_history_share_expanding",
         "category_history_share_expanding",
         "market_type_history_share_expanding",
     }:
-        prefix = feature_name.replace("_history_share_expanding", "")
-        row["status"] = "implemented_approximate"
-        row["audit_class"] = "D_duplicate_or_merge"
-        row["implemented_in"] = "derived_history_share"
-        row["match_quality"] = "approximate"
-        row["matched_feature_name"] = f"{prefix}_expanding_snapshot_count / global_expanding_snapshot_count"
-        row["serving_asset"] = "group_serving_features.parquet"
+        row["status"] = "intentionally_excluded"
+        row["audit_class"] = "E_intentionally_excluded"
         return row
     if feature_name.startswith(unsupported_prefixes):
         row["status"] = "unsupported_now"

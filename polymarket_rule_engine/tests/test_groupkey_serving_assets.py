@@ -33,7 +33,6 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "edge_full": 0.15,
                     "edge_std_full": 0.10,
                     "edge_lower_bound_full": 0.11,
-                    "rule_score": 0.11,
                     "n_full": 20,
                     "horizon_hours": 6,
                     "group_unique_markets": 30,
@@ -64,7 +63,6 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "edge_full": 0.25,
                     "edge_std_full": 0.20,
                     "edge_lower_bound_full": 0.18,
-                    "rule_score": 0.18,
                     "n_full": 40,
                     "horizon_hours": 12,
                     "group_unique_markets": 30,
@@ -141,32 +139,23 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
         self.assertNotIn("full_group_expanding_abs_bias_tail_x_snapshot_share", group.columns)
         self.assertIn("hist_price_x_full_group_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_full_group_expanding_bias", fine.columns)
-        self.assertIn("rule_score_minus_recent_90days_logloss", fine.columns)
         self.assertIn("rule_edge_minus_domain_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_category_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_market_type_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_domain_x_category_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_domain_x_market_type_expanding_bias", fine.columns)
         self.assertIn("rule_edge_minus_category_x_market_type_expanding_bias", fine.columns)
-        self.assertIn("rule_score_minus_domain_expanding_logloss", fine.columns)
-        self.assertIn("rule_score_minus_category_expanding_logloss", fine.columns)
-        self.assertIn("rule_score_minus_market_type_expanding_logloss", fine.columns)
-        self.assertIn("rule_score_minus_domain_x_category_expanding_logloss", fine.columns)
-        self.assertIn("rule_score_minus_domain_x_market_type_expanding_logloss", fine.columns)
-        self.assertIn("rule_score_minus_category_x_market_type_expanding_logloss", fine.columns)
         self.assertIn("price_x_full_group_expanding_abs_bias_tail_spread", fine.columns)
         self.assertIn("q_full", defaults_manifest)
         self.assertEqual(defaults_manifest["q_full"]["group_column"], "group_default_q_full")
         self.assertIn("hist_price_x_full_group_expanding_bias", defaults_manifest)
         self.assertIn("rule_edge_minus_domain_expanding_bias", defaults_manifest)
-        self.assertIn("rule_score_minus_category_expanding_logloss", defaults_manifest)
         self.assertIn("rule_edge_minus_domain_x_category_expanding_bias", defaults_manifest)
-        self.assertIn("rule_score_minus_domain_x_market_type_expanding_logloss", defaults_manifest)
         self.assertAlmostEqual(float(group.loc[0, "group_default_q_full"]), (0.6 * 20 + 0.8 * 40) / 60, places=6)
         self.assertAlmostEqual(float(group.loc[0, "group_default_edge_full"]), (0.15 * 20 + 0.25 * 40) / 60, places=6)
         self.assertAlmostEqual(float(group.loc[0, "group_default_n_full"]), 60.0, places=6)
         self.assertGreaterEqual(float(group.loc[0, "full_group_expanding_abs_bias_p75"]), 0.45)
-        self.assertGreaterEqual(float(group.loc[0, "full_group_expanding_logloss_max"]), 0.59)
+        self.assertNotIn("full_group_expanding_logloss_max", group.columns)
         self.assertGreaterEqual(float(group.loc[0, "full_group_expanding_logloss_tail_spread"]), 0.0)
         self.assertGreaterEqual(float(group.loc[0, "full_group_recent_90days_tail_instability_ratio"]), 0.0)
         self.assertAlmostEqual(float(group.loc[0, "full_group_recent_90days_vs_expanding_bias_zscore"]), 0.0, places=6)
@@ -192,7 +181,6 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "edge_full": 0.15,
                     "edge_std_full": 0.10,
                     "edge_lower_bound_full": 0.11,
-                    "rule_score": 0.12,
                     "n_full": 20,
                     "horizon_hours": 6,
                     "group_unique_markets": 30,
@@ -223,7 +211,6 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
                     "edge_full": 0.25,
                     "edge_std_full": 0.20,
                     "edge_lower_bound_full": 0.18,
-                    "rule_score": 0.22,
                     "n_full": 40,
                     "horizon_hours": 6,
                     "group_unique_markets": 30,
@@ -272,7 +259,7 @@ class GroupKeyServingAssetsTest(unittest.TestCase):
         fine = build_fine_serving_features(rules, group_features=group)
 
         row_a = fine[fine["group_key"] == "a.com|SPORTS|other"].iloc[0]
-        self.assertEqual(int(row_a["rule_full_group_key_matched_rule_count"]), 1)
+        self.assertNotIn("rule_full_group_key_matched_rule_count", fine.columns)
         self.assertEqual(int(row_a["rule_domain_matched_rule_count"]), 1)
         self.assertEqual(int(row_a["rule_category_matched_rule_count"]), 2)
         self.assertEqual(int(row_a["rule_market_type_matched_rule_count"]), 2)

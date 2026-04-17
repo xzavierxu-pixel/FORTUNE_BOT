@@ -5,6 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from rule_baseline.workflow.pipeline_config import (
+    resolve_pipeline_config,
+    write_pipeline_runtime_config,
+)
+
 ROOT_DIR = Path(__file__).resolve().parents[2]
 
 
@@ -40,6 +45,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--date-start", type=str, default=None)
     parser.add_argument("--date-end", type=str, default=None)
     parser.add_argument("--split-reference-end", type=str, default=None)
+    parser.add_argument("--offline-validation-days", type=int, default=30)
+    parser.add_argument("--offline-test-days", type=int, default=30)
+    parser.add_argument("--online-validation-days", type=int, default=20)
+    parser.add_argument("--train-sample-rows", type=int, default=None)
+    parser.add_argument("--train-sample-seed", type=int, default=21)
+    parser.add_argument("--prediction-publish-split", choices=["test", "valid", "train"], default=None)
+    parser.add_argument("--fail-if-empty-split", dest="fail_if_empty_split", action="store_true")
+    parser.add_argument("--allow-empty-split", dest="fail_if_empty_split", action="store_false")
+    parser.set_defaults(fail_if_empty_split=True)
     parser.add_argument("--skip-fetch", action="store_true")
     parser.add_argument("--skip-annotations", action="store_true")
     parser.add_argument("--skip-snapshots", action="store_true")
@@ -51,52 +65,32 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def add_common_args(command: list[str], args: argparse.Namespace) -> list[str]:
-    if args.artifact_mode:
-        command.extend(["--artifact-mode", args.artifact_mode])
-    if args.max_rows is not None:
-        command.extend(["--max-rows", str(args.max_rows)])
-    if args.recent_days is not None:
-        command.extend(["--recent-days", str(args.recent_days)])
-    if args.split_reference_end is not None:
-        command.extend(["--split-reference-end", args.split_reference_end])
-    if args.date_start is not None:
-        command.extend(["--history-start", args.date_start])
-    return command
-
-
-def add_data_args(command: list[str], args: argparse.Namespace) -> list[str]:
-    if args.artifact_mode:
-        command.extend(["--artifact-mode", args.artifact_mode])
-    if args.max_rows is not None:
-        command.extend(["--max-rows", str(args.max_rows)])
-    if args.recent_days is not None:
-        command.extend(["--recent-days", str(args.recent_days)])
-    return command
-
-
-def add_mode_only_args(command: list[str], args: argparse.Namespace) -> list[str]:
-    if args.artifact_mode:
-        command.extend(["--artifact-mode", args.artifact_mode])
-    return command
-
-
-def add_analysis_args(command: list[str], args: argparse.Namespace) -> list[str]:
-    command = add_mode_only_args(command, args)
-    if args.split_reference_end is not None:
-        command.extend(["--split-reference-end", args.split_reference_end])
-    if args.date_start is not None:
-        command.extend(["--history-start", args.date_start])
-    return command
-
-
 def run_step(label: str, command: list[str]) -> None:
     print(f"[PIPELINE] {label}: {' '.join(command)}")
     subprocess.run(command, cwd=ROOT_DIR, check=True)
 
 
+def _pipeline_config_arg(path: Path) -> list[str]:
+    return ["--pipeline-config", str(path)]
+
+
 def main() -> None:
     args = parse_args()
+    pipeline_config = resolve_pipeline_config(
+        artifact_mode=args.artifact_mode,
+        max_rows=args.max_rows,
+        recent_days=args.recent_days,
+        history_start=args.date_start,
+        split_reference_end=args.split_reference_end,
+        offline_validation_days=args.offline_validation_days,
+        offline_test_days=args.offline_test_days,
+        online_validation_days=args.online_validation_days,
+        train_sample_rows=args.train_sample_rows,
+        train_sample_seed=args.train_sample_seed,
+        prediction_publish_split=args.prediction_publish_split,
+        fail_if_empty_split=args.fail_if_empty_split,
+    )
+    pipeline_config_path = write_pipeline_runtime_config(pipeline_config)
 
     if not args.skip_fetch:
         fetch_cmd = [sys.executable, "rule_baseline/data_collection/fetch_raw_events.py"]
@@ -118,52 +112,56 @@ def main() -> None:
             snapshot_cmd.append("--full-refresh")
         run_step("Build snapshots", snapshot_cmd)
 
-    train_rules_cmd = add_common_args(
-        [sys.executable, "rule_baseline/training/train_rules_naive_output_rule.py"],
-        args,
-    )
+    train_rules_cmd = [
+        sys.executable,
+        "rule_baseline/training/train_rules_naive_output_rule.py",
+        *_pipeline_config_arg(pipeline_config_path),
+    ]
     run_step("Train rules", train_rules_cmd)
 
-    export_features_cmd = add_common_args(
-        [
-            sys.executable,
-            "rule_baseline/training/export_features.py",
-            "--calibration-mode",
-            args.calibration_mode,
-            "--grouped-calibration-column",
-            args.grouped_calibration_column,
-            "--grouped-calibration-min-rows",
-            str(args.grouped_calibration_min_rows),
-            "--random-seed",
-            str(args.random_seed),
-            "--predictor-time-limit",
-            str(args.predictor_time_limit),
-            "--target-mode",
-            args.target_mode,
-        ],
-        args,
-    )
+    export_features_cmd = [
+        sys.executable,
+        "rule_baseline/training/export_features.py",
+        "--calibration-mode",
+        args.calibration_mode,
+        "--grouped-calibration-column",
+        args.grouped_calibration_column,
+        "--grouped-calibration-min-rows",
+        str(args.grouped_calibration_min_rows),
+        "--random-seed",
+        str(args.random_seed),
+        "--predictor-time-limit",
+        str(args.predictor_time_limit),
+        "--target-mode",
+        args.target_mode,
+        *_pipeline_config_arg(pipeline_config_path),
+    ]
     run_step("Export features", export_features_cmd)
 
-    train_model_cmd = add_common_args(
-        [
-            sys.executable,
-            "rule_baseline/training/train_snapshot_model.py",
-            "--calibration-mode",
-            args.calibration_mode,
-            "--grouped-calibration-column",
-            args.grouped_calibration_column,
-            "--grouped-calibration-min-rows",
-            str(args.grouped_calibration_min_rows),
-            "--random-seed",
-            str(args.random_seed),
-            "--predictor-time-limit",
-            str(args.predictor_time_limit),
-            "--target-mode",
-            args.target_mode,
-        ],
-        args,
-    )
+    dqc_cmd = [
+        sys.executable,
+        "rule_baseline/quality_check/data_quality_report.py",
+        *_pipeline_config_arg(pipeline_config_path),
+    ]
+    run_step("Review exported feature quality", dqc_cmd)
+
+    train_model_cmd = [
+        sys.executable,
+        "rule_baseline/training/train_snapshot_model.py",
+        "--calibration-mode",
+        args.calibration_mode,
+        "--grouped-calibration-column",
+        args.grouped_calibration_column,
+        "--grouped-calibration-min-rows",
+        str(args.grouped_calibration_min_rows),
+        "--random-seed",
+        str(args.random_seed),
+        "--predictor-time-limit",
+        str(args.predictor_time_limit),
+        "--target-mode",
+        args.target_mode,
+        *_pipeline_config_arg(pipeline_config_path),
+    ]
     if args.num_bag_folds is not None:
         train_model_cmd.extend(["--num-bag-folds", str(args.num_bag_folds)])
     if args.num_bag_sets is not None:
@@ -176,36 +174,35 @@ def main() -> None:
         train_model_cmd.append("--no-auto-stack")
     run_step("Train model", train_model_cmd)
 
-    validation_reports_cmd = add_mode_only_args(
-        [sys.executable, "rule_baseline/training/build_groupkey_validation_reports.py"],
-        args,
-    )
+    validation_reports_cmd = [
+        sys.executable,
+        "rule_baseline/training/build_groupkey_validation_reports.py",
+        *_pipeline_config_arg(pipeline_config_path),
+    ]
     run_step("Build GroupKey validation reports", validation_reports_cmd)
 
     if not args.skip_analysis:
         analysis_steps = [
-            ("Analyze calibration", "rule_baseline/analysis/analyze_q_model_calibration.py", add_mode_only_args),
-            ("Analyze alpha", "rule_baseline/analysis/analyze_alpha_quadrant.py", add_mode_only_args),
-            ("Analyze rules alpha", "rule_baseline/analysis/analyze_rules_alpha_quadrant.py", add_analysis_args),
+            ("Analyze calibration", "rule_baseline/analysis/analyze_q_model_calibration.py"),
+            ("Analyze alpha", "rule_baseline/analysis/analyze_alpha_quadrant.py"),
+            ("Analyze rules alpha", "rule_baseline/analysis/analyze_rules_alpha_quadrant.py"),
         ]
-        for label, script_path, arg_builder in analysis_steps:
-            command = arg_builder([sys.executable, script_path], args)
+        for label, script_path in analysis_steps:
+            command = [sys.executable, script_path, *_pipeline_config_arg(pipeline_config_path)]
             run_step(label, command)
 
     if args.artifact_mode == "offline" and not args.skip_backtest:
-        command = add_common_args([sys.executable, "rule_baseline/backtesting/backtest_execution_parity.py"], args)
+        command = [sys.executable, "rule_baseline/backtesting/backtest_execution_parity.py", *_pipeline_config_arg(pipeline_config_path)]
         run_step("Backtest execution parity", command)
 
     if args.artifact_mode == "offline" and not args.skip_baselines:
-        baseline_cmd = add_common_args(
-            [
-                sys.executable,
-                "rule_baseline/analysis/compare_baseline_families.py",
-                "--walk-forward-windows",
-                str(args.walk_forward_windows),
-            ],
-            args,
-        )
+        baseline_cmd = [
+            sys.executable,
+            "rule_baseline/analysis/compare_baseline_families.py",
+            "--walk-forward-windows",
+            str(args.walk_forward_windows),
+            *_pipeline_config_arg(pipeline_config_path),
+        ]
         if args.walk_forward_step_days is not None:
             baseline_cmd.extend(["--walk-forward-step-days", str(args.walk_forward_step_days)])
         run_step("Compare baselines", baseline_cmd)

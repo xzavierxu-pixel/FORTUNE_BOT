@@ -35,7 +35,7 @@ DEFAULT_GROUP_MIN_ROWS = 20
 DEFAULT_RANDOM_SEED = 21
 DEFAULT_TIME_LIMIT = 300
 DEFAULT_PREDICTOR_HYPERPARAMETERS = {
-    "GBM": {},
+    "GBM": {"verbosity": -1},
     "CAT": {},
     "XGB": {},
 }

@@ -16,7 +16,6 @@ _DEFAULT_CRITICAL_COLUMNS = (
     "category",
     "market_type",
     "q_full",
-    "rule_score",
     "direction",
     "group_key",
 )

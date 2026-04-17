@@ -27,6 +27,7 @@ from rule_baseline.history.history_features import (
 )
 from rule_baseline.audits.rule_generation_audit import build_rule_generation_audit_payload, write_rule_generation_audit
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 MIN_GROUP_UNIQUE_MARKETS = 15
 GROUP_THRESHOLD_QUANTILE = 0.25
@@ -52,20 +53,8 @@ RULE_SCHEMA_COLUMNS = [
     "edge_full",
     "edge_std_full",
     "edge_lower_bound_full",
-    "rule_score",
     "n_full",
     "horizon_hours",
-    "group_unique_markets",
-    "group_snapshot_rows",
-    "global_total_unique_markets",
-    "global_total_snapshot_rows",
-    "group_market_share_global",
-    "group_snapshot_share_global",
-    "group_median_logloss",
-    "group_median_brier",
-    "global_group_logloss_q25",
-    "global_group_brier_q25",
-    "group_decision",
 ]
 FINE_SERVING_COLUMNS = [
     "group_key",
@@ -78,10 +67,8 @@ FINE_SERVING_COLUMNS = [
     "edge_full",
     "edge_std_full",
     "edge_lower_bound_full",
-    "rule_score",
     "n_full",
     "rule_price_center",
-    "rule_price_width",
     "rule_horizon_center",
     "rule_horizon_width",
     "rule_edge_buffer",
@@ -94,8 +81,6 @@ FINE_SERVING_COLUMNS = [
     "tail_risk_x_price",
     "rule_edge_minus_full_group_expanding_bias",
     "rule_edge_minus_recent_90days_bias",
-    "rule_score_minus_full_group_expanding_logloss",
-    "rule_score_minus_recent_90days_logloss",
     "rule_edge_over_full_group_logloss",
     "rule_edge_minus_domain_expanding_bias",
     "rule_edge_minus_category_expanding_bias",
@@ -103,44 +88,24 @@ FINE_SERVING_COLUMNS = [
     "rule_edge_minus_domain_x_category_expanding_bias",
     "rule_edge_minus_domain_x_market_type_expanding_bias",
     "rule_edge_minus_category_x_market_type_expanding_bias",
-    "rule_score_minus_domain_expanding_logloss",
-    "rule_score_minus_category_expanding_logloss",
-    "rule_score_minus_market_type_expanding_logloss",
-    "rule_score_minus_domain_x_category_expanding_logloss",
-    "rule_score_minus_domain_x_market_type_expanding_logloss",
-    "rule_score_minus_category_x_market_type_expanding_logloss",
     "price_x_full_group_expanding_abs_bias_tail_spread",
-    "rule_full_group_key_matched_rule_count",
-    "rule_full_group_key_max_edge_full",
-    "rule_full_group_key_max_edge_lower_bound_full",
-    "rule_full_group_key_max_rule_score",
-    "rule_full_group_key_mean_edge_full",
-    "rule_full_group_key_mean_edge_lower_bound_full",
-    "rule_full_group_key_mean_rule_score",
-    "rule_full_group_key_sum_n_full",
     "rule_domain_matched_rule_count",
     "rule_domain_max_edge_full",
     "rule_domain_max_edge_lower_bound_full",
-    "rule_domain_max_rule_score",
     "rule_domain_mean_edge_full",
     "rule_domain_mean_edge_lower_bound_full",
-    "rule_domain_mean_rule_score",
     "rule_domain_sum_n_full",
     "rule_category_matched_rule_count",
     "rule_category_max_edge_full",
     "rule_category_max_edge_lower_bound_full",
-    "rule_category_max_rule_score",
     "rule_category_mean_edge_full",
     "rule_category_mean_edge_lower_bound_full",
-    "rule_category_mean_rule_score",
     "rule_category_sum_n_full",
     "rule_market_type_matched_rule_count",
     "rule_market_type_max_edge_full",
     "rule_market_type_max_edge_lower_bound_full",
-    "rule_market_type_max_rule_score",
     "rule_market_type_mean_edge_full",
     "rule_market_type_mean_edge_lower_bound_full",
-    "rule_market_type_mean_rule_score",
     "rule_market_type_sum_n_full",
 ]
 FINE_DEFAULT_AGGREGATIONS = {
@@ -149,10 +114,8 @@ FINE_DEFAULT_AGGREGATIONS = {
     "edge_full": "weighted_mean",
     "edge_std_full": "weighted_mean",
     "edge_lower_bound_full": "weighted_mean",
-    "rule_score": "weighted_mean",
     "n_full": "sum",
     "rule_price_center": "mean",
-    "rule_price_width": "mean",
     "rule_horizon_center": "mean",
     "rule_horizon_width": "mean",
     "rule_edge_buffer": "weighted_mean",
@@ -165,8 +128,6 @@ FINE_DEFAULT_AGGREGATIONS = {
     "tail_risk_x_price": "weighted_mean",
     "rule_edge_minus_full_group_expanding_bias": "weighted_mean",
     "rule_edge_minus_recent_90days_bias": "weighted_mean",
-    "rule_score_minus_full_group_expanding_logloss": "weighted_mean",
-    "rule_score_minus_recent_90days_logloss": "weighted_mean",
     "rule_edge_over_full_group_logloss": "weighted_mean",
     "rule_edge_minus_domain_expanding_bias": "weighted_mean",
     "rule_edge_minus_category_expanding_bias": "weighted_mean",
@@ -174,44 +135,24 @@ FINE_DEFAULT_AGGREGATIONS = {
     "rule_edge_minus_domain_x_category_expanding_bias": "weighted_mean",
     "rule_edge_minus_domain_x_market_type_expanding_bias": "weighted_mean",
     "rule_edge_minus_category_x_market_type_expanding_bias": "weighted_mean",
-    "rule_score_minus_domain_expanding_logloss": "weighted_mean",
-    "rule_score_minus_category_expanding_logloss": "weighted_mean",
-    "rule_score_minus_market_type_expanding_logloss": "weighted_mean",
-    "rule_score_minus_domain_x_category_expanding_logloss": "weighted_mean",
-    "rule_score_minus_domain_x_market_type_expanding_logloss": "weighted_mean",
-    "rule_score_minus_category_x_market_type_expanding_logloss": "weighted_mean",
     "price_x_full_group_expanding_abs_bias_tail_spread": "weighted_mean",
-    "rule_full_group_key_matched_rule_count": "mean",
-    "rule_full_group_key_max_edge_full": "max",
-    "rule_full_group_key_max_edge_lower_bound_full": "max",
-    "rule_full_group_key_max_rule_score": "max",
-    "rule_full_group_key_mean_edge_full": "weighted_mean",
-    "rule_full_group_key_mean_edge_lower_bound_full": "weighted_mean",
-    "rule_full_group_key_mean_rule_score": "weighted_mean",
-    "rule_full_group_key_sum_n_full": "sum",
     "rule_domain_matched_rule_count": "mean",
     "rule_domain_max_edge_full": "max",
     "rule_domain_max_edge_lower_bound_full": "max",
-    "rule_domain_max_rule_score": "max",
     "rule_domain_mean_edge_full": "weighted_mean",
     "rule_domain_mean_edge_lower_bound_full": "weighted_mean",
-    "rule_domain_mean_rule_score": "weighted_mean",
     "rule_domain_sum_n_full": "sum",
     "rule_category_matched_rule_count": "mean",
     "rule_category_max_edge_full": "max",
     "rule_category_max_edge_lower_bound_full": "max",
-    "rule_category_max_rule_score": "max",
     "rule_category_mean_edge_full": "weighted_mean",
     "rule_category_mean_edge_lower_bound_full": "weighted_mean",
-    "rule_category_mean_rule_score": "weighted_mean",
     "rule_category_sum_n_full": "sum",
     "rule_market_type_matched_rule_count": "mean",
     "rule_market_type_max_edge_full": "max",
     "rule_market_type_max_edge_lower_bound_full": "max",
-    "rule_market_type_max_rule_score": "max",
     "rule_market_type_mean_edge_full": "weighted_mean",
     "rule_market_type_mean_edge_lower_bound_full": "weighted_mean",
-    "rule_market_type_mean_rule_score": "weighted_mean",
     "rule_market_type_sum_n_full": "sum",
 }
 
@@ -305,16 +246,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Train naive rule buckets with a simple raw-frequency estimator."
     )
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
-    parser.add_argument("--max-rows", type=int, default=None, help="Optional tail-sample row cap for fast debugging.")
-    parser.add_argument(
-        "--recent-days",
-        type=int,
-        default=None,
-        help="Optional rolling window for quick debugging without touching the full history.",
-    )
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     return parser.parse_args()
 
 
@@ -384,7 +316,6 @@ def build_fine_serving_features(
     fine = rules_df.copy()
     fine["price_bin"] = _build_price_bin_labels(fine["price_min"], fine["price_max"])
     fine["rule_price_center"] = (pd.to_numeric(fine["price_min"], errors="coerce") + pd.to_numeric(fine["price_max"], errors="coerce")) / 2.0
-    fine["rule_price_width"] = pd.to_numeric(fine["price_max"], errors="coerce") - pd.to_numeric(fine["price_min"], errors="coerce")
     fine["rule_horizon_center"] = (pd.to_numeric(fine["h_min"], errors="coerce") + pd.to_numeric(fine["h_max"], errors="coerce")) / 2.0
     fine["rule_horizon_width"] = pd.to_numeric(fine["h_max"], errors="coerce") - pd.to_numeric(fine["h_min"], errors="coerce")
     fine["rule_edge_buffer"] = pd.to_numeric(fine["edge_full"], errors="coerce") - pd.to_numeric(
@@ -441,14 +372,6 @@ def build_fine_serving_features(
             pd.to_numeric(fine["edge_full"], errors="coerce")
             - pd.to_numeric(fine.get("full_group_recent_90days_bias_mean"), errors="coerce").fillna(0.0)
         )
-        fine["rule_score_minus_full_group_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["rule_score_minus_recent_90days_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("full_group_recent_90days_logloss_mean"), errors="coerce").fillna(0.0)
-        )
         fine["rule_edge_over_full_group_logloss"] = np.divide(
             pd.to_numeric(fine["edge_full"], errors="coerce"),
             pd.to_numeric(fine.get("full_group_expanding_logloss_mean"), errors="coerce").replace(0.0, np.nan),
@@ -477,30 +400,6 @@ def build_fine_serving_features(
             pd.to_numeric(fine["edge_full"], errors="coerce")
             - pd.to_numeric(fine.get("category_x_market_type_expanding_bias_mean"), errors="coerce").fillna(0.0)
         )
-        fine["rule_score_minus_domain_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("domain_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["rule_score_minus_category_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("category_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["rule_score_minus_market_type_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("market_type_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["rule_score_minus_domain_x_category_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("domain_x_category_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["rule_score_minus_domain_x_market_type_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("domain_x_market_type_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
-        fine["rule_score_minus_category_x_market_type_expanding_logloss"] = (
-            pd.to_numeric(fine["rule_score"], errors="coerce")
-            - pd.to_numeric(fine.get("category_x_market_type_expanding_logloss_mean"), errors="coerce").fillna(0.0)
-        )
         fine["price_x_full_group_expanding_abs_bias_tail_spread"] = (
             fine["rule_price_center"]
             * pd.to_numeric(fine.get("full_group_expanding_abs_bias_tail_spread"), errors="coerce").fillna(0.0)
@@ -513,8 +412,6 @@ def build_fine_serving_features(
             "tail_risk_x_price",
             "rule_edge_minus_full_group_expanding_bias",
             "rule_edge_minus_recent_90days_bias",
-            "rule_score_minus_full_group_expanding_logloss",
-            "rule_score_minus_recent_90days_logloss",
             "rule_edge_over_full_group_logloss",
             "rule_edge_minus_domain_expanding_bias",
             "rule_edge_minus_category_expanding_bias",
@@ -522,44 +419,24 @@ def build_fine_serving_features(
             "rule_edge_minus_domain_x_category_expanding_bias",
             "rule_edge_minus_domain_x_market_type_expanding_bias",
             "rule_edge_minus_category_x_market_type_expanding_bias",
-            "rule_score_minus_domain_expanding_logloss",
-            "rule_score_minus_category_expanding_logloss",
-            "rule_score_minus_market_type_expanding_logloss",
-            "rule_score_minus_domain_x_category_expanding_logloss",
-            "rule_score_minus_domain_x_market_type_expanding_logloss",
-            "rule_score_minus_category_x_market_type_expanding_logloss",
             "price_x_full_group_expanding_abs_bias_tail_spread",
-            "rule_full_group_key_matched_rule_count",
-            "rule_full_group_key_max_edge_full",
-            "rule_full_group_key_max_edge_lower_bound_full",
-            "rule_full_group_key_max_rule_score",
-            "rule_full_group_key_mean_edge_full",
-            "rule_full_group_key_mean_edge_lower_bound_full",
-            "rule_full_group_key_mean_rule_score",
-            "rule_full_group_key_sum_n_full",
             "rule_domain_matched_rule_count",
             "rule_domain_max_edge_full",
             "rule_domain_max_edge_lower_bound_full",
-            "rule_domain_max_rule_score",
             "rule_domain_mean_edge_full",
             "rule_domain_mean_edge_lower_bound_full",
-            "rule_domain_mean_rule_score",
             "rule_domain_sum_n_full",
             "rule_category_matched_rule_count",
             "rule_category_max_edge_full",
             "rule_category_max_edge_lower_bound_full",
-            "rule_category_max_rule_score",
             "rule_category_mean_edge_full",
             "rule_category_mean_edge_lower_bound_full",
-            "rule_category_mean_rule_score",
             "rule_category_sum_n_full",
             "rule_market_type_matched_rule_count",
             "rule_market_type_max_edge_full",
             "rule_market_type_max_edge_lower_bound_full",
-            "rule_market_type_max_rule_score",
             "rule_market_type_mean_edge_full",
             "rule_market_type_mean_edge_lower_bound_full",
-            "rule_market_type_mean_rule_score",
             "rule_market_type_sum_n_full",
         ]:
             fine[column] = 0.0
@@ -595,14 +472,11 @@ def _build_matched_rule_aggregate_features(fine: pd.DataFrame) -> pd.DataFrame:
         ("matched_rule_count", "edge_full", "size"),
         ("max_edge_full", "edge_full", "max"),
         ("max_edge_lower_bound_full", "edge_lower_bound_full", "max"),
-        ("max_rule_score", "rule_score", "max"),
         ("mean_edge_full", "edge_full", "mean"),
         ("mean_edge_lower_bound_full", "edge_lower_bound_full", "mean"),
-        ("mean_rule_score", "rule_score", "mean"),
         ("sum_n_full", "n_full", "sum"),
     ]
     grain_specs = [
-        ("full_group_key", ["group_key"]),
         ("domain", ["domain"]),
         ("category", ["category"]),
         ("market_type", ["market_type"]),
@@ -753,15 +627,11 @@ def build_group_serving_features(
         "group_column": "group_default_leaf_id",
         "aggregation": "sentinel",
     }
-    group_features["fine_match_found_default"] = 0
-    group_features["group_match_found_default"] = 1
     return group_features.sort_values("group_key").reset_index(drop=True), fine_defaults_manifest
 
 
 def build_group_decisions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, float]]:
     quality = prepare_history_quality_frame(df)
-    global_total_unique_markets = int(quality["market_id"].astype(str).nunique()) if not quality.empty else 0
-    global_total_snapshot_rows = int(len(quality))
     group_stats = (
         quality.groupby(BASE_GROUP_COLUMNS + ["group_key"], observed=True)
         .agg(
@@ -774,10 +644,6 @@ def build_group_decisions(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, flo
         )
         .reset_index()
     )
-    group_stats["global_total_unique_markets"] = global_total_unique_markets
-    group_stats["global_total_snapshot_rows"] = global_total_snapshot_rows
-    group_stats["group_market_share_global"] = group_stats["group_unique_markets"] / max(global_total_unique_markets, 1)
-    group_stats["group_snapshot_share_global"] = group_stats["group_snapshot_rows"] / max(global_total_snapshot_rows, 1)
     group_stats["group_direction"] = (
         group_stats["group_wins"] / group_stats["group_snapshot_rows"] - group_stats["group_price_mean"]
     ).map(edge_sign)
@@ -869,20 +735,8 @@ def evaluate_rule_candidate(row: pd.Series, artifact_mode: str) -> tuple[dict, s
         "edge_full": float(edge_full),
         "edge_std_full": float(edge_std_full),
         "edge_lower_bound_full": float(edge_lower_bound_full),
-        "rule_score": float(edge_lower_bound_full),
         "n_full": int(n_full),
         "horizon_hours": int(horizon_hours),
-        "group_unique_markets": int(row["group_unique_markets"]),
-        "group_snapshot_rows": int(row["group_snapshot_rows"]),
-        "global_total_unique_markets": int(row["global_total_unique_markets"]),
-        "global_total_snapshot_rows": int(row["global_total_snapshot_rows"]),
-        "group_market_share_global": float(row["group_market_share_global"]),
-        "group_snapshot_share_global": float(row["group_snapshot_share_global"]),
-        "group_median_logloss": float(row["group_median_logloss"]),
-        "group_median_brier": float(row["group_median_brier"]),
-        "global_group_logloss_q25": float(row["global_group_logloss_q25"]),
-        "global_group_brier_q25": float(row["global_group_brier_q25"]),
-        "group_decision": str(row["selection_status"]),
     }, "selected"
 
 
@@ -911,10 +765,6 @@ def build_rules(df: pd.DataFrame, artifact_mode: str) -> tuple[pd.DataFrame, pd.
                 "group_key",
                 "group_unique_markets",
                 "group_snapshot_rows",
-                "global_total_unique_markets",
-                "global_total_snapshot_rows",
-                "group_market_share_global",
-                "group_snapshot_share_global",
                 "group_median_logloss",
                 "group_median_brier",
                 "group_direction",
@@ -935,8 +785,8 @@ def build_rules(df: pd.DataFrame, artifact_mode: str) -> tuple[pd.DataFrame, pd.
     rules_df = pd.DataFrame(selected_rules)
     if not rules_df.empty:
         rules_df = rules_df.sort_values(
-            ["group_unique_markets", "group_key", "horizon_hours", "price_min"],
-            ascending=[False, True, True, True],
+            ["group_key", "horizon_hours", "price_min"],
+            ascending=[True, True, True],
         ).reset_index(drop=True)
         rules_df = rules_df.reindex(columns=RULE_SCHEMA_COLUMNS)
 
@@ -955,20 +805,22 @@ def empty_rules_frame() -> pd.DataFrame:
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
     rule_training_mode = "full_history_unified"
 
     df, split, funnel_summary = prepare_rule_training_frame(
-        artifact_mode=args.artifact_mode,
-        max_rows=args.max_rows,
-        recent_days=args.recent_days,
-        split_reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
+        artifact_mode=pipeline_config.artifact_mode,
+        max_rows=pipeline_config.max_rows,
+        recent_days=pipeline_config.recent_days,
+        split_reference_end=pipeline_config.split.split_reference_end,
+        history_start_override=pipeline_config.split.history_start,
+        split_config=pipeline_config.split,
         min_price=TRAIN_PRICE_MIN,
         max_price=TRAIN_PRICE_MAX,
         price_bin_step=RULE_PRICE_BIN_STEP,
     )
-    rules_df, report_df = build_rules(df, args.artifact_mode)
+    rules_df, report_df = build_rules(df, pipeline_config.artifact_mode)
     history_feature_frames = summarize_history_features(df)
     write_history_feature_artifacts(history_feature_frames, artifact_paths.history_feature_paths)
     validate_materialized_history_artifacts(artifact_paths.history_feature_paths)
@@ -1005,7 +857,7 @@ def main() -> None:
     )
 
     split_summary = {
-        "artifact_mode": args.artifact_mode,
+        "artifact_mode": pipeline_config.artifact_mode,
         "total_rows": int(len(df)),
         "rows_by_split": df["dataset_split"].value_counts().to_dict(),
         "boundaries": split.to_dict(),
@@ -1015,14 +867,14 @@ def main() -> None:
     write_json(
         artifact_paths.rule_training_summary_path,
         {
-            "artifact_mode": args.artifact_mode,
+            "artifact_mode": pipeline_config.artifact_mode,
             "selected_rules": int(len(rules_df)),
             "report_rows": int(len(report_df)),
             "group_serving_rows": int(len(group_serving_features)),
             "fine_serving_rows": int(len(fine_serving_features)),
             "selection_status_counts": report_df["selection_status"].value_counts().to_dict() if not report_df.empty else {},
             "boundaries": split.to_dict(),
-            "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+            "debug_filters": {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
             "method": {
                 "estimator": "raw_frequency",
                 "rule_training_mode": rule_training_mode,
@@ -1035,9 +887,9 @@ def main() -> None:
     write_json(
         artifact_paths.rule_funnel_summary_path,
         {
-            "artifact_mode": args.artifact_mode,
+            "artifact_mode": pipeline_config.artifact_mode,
             "rule_training_mode": rule_training_mode,
-            "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+            "debug_filters": {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
             "boundaries": split.to_dict(),
             "raw_market_funnel": funnel_summary["raw_market_funnel"],
             "snapshot_funnel": snapshot_funnel,
@@ -1057,9 +909,9 @@ def main() -> None:
             group_serving_features=group_serving_features,
             fine_serving_features=fine_serving_features,
             rule_funnel_summary={
-                "artifact_mode": args.artifact_mode,
+                "artifact_mode": pipeline_config.artifact_mode,
                 "rule_training_mode": rule_training_mode,
-                "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+                "debug_filters": {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
                 "boundaries": split.to_dict(),
                 "raw_market_funnel": funnel_summary["raw_market_funnel"],
                 "snapshot_funnel": snapshot_funnel,
@@ -1071,14 +923,14 @@ def main() -> None:
             },
             split_summary=split_summary,
             rule_training_summary={
-                "artifact_mode": args.artifact_mode,
+                "artifact_mode": pipeline_config.artifact_mode,
                 "selected_rules": int(len(rules_df)),
                 "report_rows": int(len(report_df)),
                 "group_serving_rows": int(len(group_serving_features)),
                 "fine_serving_rows": int(len(fine_serving_features)),
                 "selection_status_counts": report_df["selection_status"].value_counts().to_dict() if not report_df.empty else {},
                 "boundaries": split.to_dict(),
-                "debug_filters": {"max_rows": args.max_rows, "recent_days": args.recent_days},
+                "debug_filters": {"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
                 "method": {
                     "estimator": "raw_frequency",
                     "rule_training_mode": rule_training_mode,
@@ -1087,7 +939,7 @@ def main() -> None:
                     "benjamini_hochberg": False,
                 },
             },
-            debug_filters={"max_rows": args.max_rows, "recent_days": args.recent_days},
+            debug_filters={"max_rows": pipeline_config.max_rows, "recent_days": pipeline_config.recent_days},
         ),
     )
 

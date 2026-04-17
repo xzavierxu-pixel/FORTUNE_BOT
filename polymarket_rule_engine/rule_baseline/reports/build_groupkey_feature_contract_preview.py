@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 
 from rule_baseline.datasets.artifacts import build_artifact_paths, write_json
 from rule_baseline.datasets.raw_market_batches import rebuild_canonical_merged
-from rule_baseline.datasets.splits import assign_dataset_split, compute_artifact_split
+from rule_baseline.datasets.splits import assign_configured_dataset_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
 from rule_baseline.features.annotation_normalization import build_normalization_manifest, normalize_market_annotations
@@ -27,24 +27,22 @@ from rule_baseline.training.train_snapshot_model import (
 )
 from rule_baseline.datasets.snapshots import load_online_parity_snapshots, load_raw_markets
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Preview current GroupKey feature contract without training AutoGluon.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
-    parser.add_argument("--max-rows", type=int, default=2000)
-    parser.add_argument("--recent-days", type=int, default=14)
     parser.add_argument("--markdown-preview-limit", type=int, default=100)
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
-    max_rows = None if args.max_rows is not None and args.max_rows <= 0 else args.max_rows
-    recent_days = None if args.recent_days is not None and args.recent_days <= 0 else args.recent_days
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
+    max_rows = pipeline_config.max_rows
+    recent_days = pipeline_config.recent_days
 
     rebuild_canonical_merged()
     snapshots = load_online_parity_snapshots(
@@ -54,15 +52,8 @@ def main() -> None:
         recent_days=recent_days,
     )
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_artifact_split(
-        snapshots,
-        artifact_mode=args.artifact_mode,
-        reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
-    )
-    snapshots = assign_dataset_split(snapshots, split)
-    allowed_splits = ["train", "valid", "test"] if args.artifact_mode == "offline" else ["train", "valid"]
-    snapshots = snapshots[snapshots["dataset_split"].isin(allowed_splits)].copy()
+    snapshots = assign_configured_dataset_split(snapshots, pipeline_config.split)
+    snapshots = snapshots[snapshots["dataset_split"].isin(pipeline_config.split.allowed_splits)].copy()
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     market_annotations_raw = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
@@ -107,12 +98,12 @@ def main() -> None:
     markdown_path = docs_dir / "groupkey_feature_contract_preview.md"
 
     payload = {
-        "artifact_mode": args.artifact_mode,
+        "artifact_mode": pipeline_config.artifact_mode,
         "sample_filters": {
             "max_rows": max_rows,
             "recent_days": recent_days,
-            "split_reference_end": args.split_reference_end,
-            "history_start": args.history_start,
+            "split_reference_end": pipeline_config.split.split_reference_end,
+            "history_start": pipeline_config.split.history_start,
         },
         "rows": int(len(df_feat)),
         "current_feature_columns": len(current_feature_columns),

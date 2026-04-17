@@ -1,0 +1,245 @@
+{
+  "fallback_policy": "group_key_aggregates",
+  "fine_feature_defaults": {
+    "q_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_q_full",
+      "aggregation": "weighted_mean"
+    },
+    "p_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_p_full",
+      "aggregation": "weighted_mean"
+    },
+    "edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_edge_full",
+      "aggregation": "weighted_mean"
+    },
+    "edge_std_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_edge_std_full",
+      "aggregation": "weighted_mean"
+    },
+    "edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_edge_lower_bound_full",
+      "aggregation": "weighted_mean"
+    },
+    "n_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_n_full",
+      "aggregation": "sum"
+    },
+    "rule_price_center": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_price_center",
+      "aggregation": "mean"
+    },
+    "rule_horizon_center": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_horizon_center",
+      "aggregation": "mean"
+    },
+    "rule_horizon_width": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_horizon_width",
+      "aggregation": "mean"
+    },
+    "rule_edge_buffer": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_buffer",
+      "aggregation": "weighted_mean"
+    },
+    "rule_confidence_ratio": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_confidence_ratio",
+      "aggregation": "weighted_mean"
+    },
+    "rule_support_log1p": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_support_log1p",
+      "aggregation": "mean"
+    },
+    "rule_snapshot_support_log1p": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_snapshot_support_log1p",
+      "aggregation": "mean"
+    },
+    "hist_price_x_full_group_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_hist_price_x_full_group_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "hist_price_x_full_group_recent_90days_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_hist_price_x_full_group_recent_90days_bias",
+      "aggregation": "weighted_mean"
+    },
+    "hist_price_x_full_group_expanding_logloss": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_hist_price_x_full_group_expanding_logloss",
+      "aggregation": "weighted_mean"
+    },
+    "tail_risk_x_price": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_tail_risk_x_price",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_full_group_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_full_group_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_recent_90days_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_recent_90days_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_over_full_group_logloss": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_over_full_group_logloss",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_domain_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_domain_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_category_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_category_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_market_type_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_market_type_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_domain_x_category_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_domain_x_category_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_domain_x_market_type_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_domain_x_market_type_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "rule_edge_minus_category_x_market_type_expanding_bias": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_edge_minus_category_x_market_type_expanding_bias",
+      "aggregation": "weighted_mean"
+    },
+    "price_x_full_group_expanding_abs_bias_tail_spread": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_price_x_full_group_expanding_abs_bias_tail_spread",
+      "aggregation": "weighted_mean"
+    },
+    "rule_domain_matched_rule_count": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_domain_matched_rule_count",
+      "aggregation": "mean"
+    },
+    "rule_domain_max_edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_domain_max_edge_full",
+      "aggregation": "max"
+    },
+    "rule_domain_max_edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_domain_max_edge_lower_bound_full",
+      "aggregation": "max"
+    },
+    "rule_domain_mean_edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_domain_mean_edge_full",
+      "aggregation": "weighted_mean"
+    },
+    "rule_domain_mean_edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_domain_mean_edge_lower_bound_full",
+      "aggregation": "weighted_mean"
+    },
+    "rule_domain_sum_n_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_domain_sum_n_full",
+      "aggregation": "sum"
+    },
+    "rule_category_matched_rule_count": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_category_matched_rule_count",
+      "aggregation": "mean"
+    },
+    "rule_category_max_edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_category_max_edge_full",
+      "aggregation": "max"
+    },
+    "rule_category_max_edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_category_max_edge_lower_bound_full",
+      "aggregation": "max"
+    },
+    "rule_category_mean_edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_category_mean_edge_full",
+      "aggregation": "weighted_mean"
+    },
+    "rule_category_mean_edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_category_mean_edge_lower_bound_full",
+      "aggregation": "weighted_mean"
+    },
+    "rule_category_sum_n_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_category_sum_n_full",
+      "aggregation": "sum"
+    },
+    "rule_market_type_matched_rule_count": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_market_type_matched_rule_count",
+      "aggregation": "mean"
+    },
+    "rule_market_type_max_edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_market_type_max_edge_full",
+      "aggregation": "max"
+    },
+    "rule_market_type_max_edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_market_type_max_edge_lower_bound_full",
+      "aggregation": "max"
+    },
+    "rule_market_type_mean_edge_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_market_type_mean_edge_full",
+      "aggregation": "weighted_mean"
+    },
+    "rule_market_type_mean_edge_lower_bound_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_market_type_mean_edge_lower_bound_full",
+      "aggregation": "weighted_mean"
+    },
+    "rule_market_type_sum_n_full": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_rule_market_type_sum_n_full",
+      "aggregation": "sum"
+    },
+    "direction": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_direction",
+      "aggregation": "signed_sum_edge"
+    },
+    "leaf_id": {
+      "fallback_scope": "group_key",
+      "group_column": "group_default_leaf_id",
+      "aggregation": "sentinel"
+    }
+  },
+  "indicator_defaults": {
+    "fine_match_found": 0,
+    "group_match_found": 0,
+    "used_group_fallback_only": 0
+  }
+}

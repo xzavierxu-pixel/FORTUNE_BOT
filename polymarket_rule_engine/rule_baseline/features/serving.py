@@ -109,6 +109,28 @@ def attach_serving_features(
             out["fine_match_found"] = out["fine_feature_leaf_id"].notna()
 
     defaults = bundle.defaults_manifest.get("fine_feature_defaults", {})
+    canonical_fine_columns = {
+        "leaf_id",
+        "direction",
+        "price_min",
+        "price_max",
+        "h_min",
+        "h_max",
+        "horizon_hours_rule",
+        "q_full",
+        "p_full",
+        "edge_full",
+        "edge_std_full",
+        "edge_lower_bound_full",
+        "n_full",
+        "rule_price_center",
+        "rule_horizon_center",
+        "rule_horizon_width",
+        "rule_edge_buffer",
+        "rule_confidence_ratio",
+        "rule_support_log1p",
+        "rule_snapshot_support_log1p",
+    }
     for feature_name, metadata in defaults.items():
         fine_column = f"fine_feature_{feature_name}"
         group_column = f"group_feature_{metadata.get('group_column')}"
@@ -116,7 +138,18 @@ def attach_serving_features(
             out[fine_column] = pd.NA
         if group_column not in out.columns:
             out[group_column] = pd.NA
-        out[fine_column] = out[fine_column].where(out["fine_match_found"], out[group_column])
+        resolved = out[fine_column].where(out["fine_match_found"], out[group_column])
+        if feature_name in canonical_fine_columns:
+            out[feature_name] = resolved
+        else:
+            out[fine_column] = resolved
+
+    if "group_feature_group_decision" in out.columns and "group_decision" not in out.columns:
+        out["group_decision"] = out["group_feature_group_decision"]
+
+    fine_drop_columns = [f"fine_feature_{column}" for column in canonical_fine_columns if f"fine_feature_{column}" in out.columns]
+    if fine_drop_columns:
+        out = out.drop(columns=fine_drop_columns)
 
     out["used_group_fallback_only"] = out["group_match_found"] & ~out["fine_match_found"]
     return out

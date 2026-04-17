@@ -72,31 +72,26 @@ def test_run_pipeline_builds_groupkey_validation_reports_after_model(monkeypatch
     labels = [label for label, _ in executed]
     assert "Train rules" in labels
     assert "Export features" in labels
+    assert "Review exported feature quality" in labels
     assert "Train model" in labels
     assert "Build GroupKey validation reports" in labels
     assert labels.index("Export features") > labels.index("Train rules")
-    assert labels.index("Train model") > labels.index("Export features")
+    assert labels.index("Review exported feature quality") > labels.index("Export features")
+    assert labels.index("Train model") > labels.index("Review exported feature quality")
     assert labels.index("Build GroupKey validation reports") > labels.index("Train model")
     export_commands = [command for label, command in executed if label == "Export features"]
-    assert export_commands == [
-        [
-            sys.executable,
-            "rule_baseline/training/export_features.py",
-            "--calibration-mode",
-            "global_isotonic",
-            "--grouped-calibration-column",
-            "horizon_hours",
-            "--grouped-calibration-min-rows",
-            "20",
-            "--random-seed",
-            "21",
-            "--predictor-time-limit",
-            "300",
-            "--target-mode",
-            "q",
-            "--artifact-mode",
-            "offline",
-        ]
-    ]
+    assert len(export_commands) == 1
+    export_command = export_commands[0]
+    assert export_command[0] == sys.executable
+    assert export_command[1] == "rule_baseline/training/export_features.py"
+    assert "--calibration-mode" in export_command
+    assert "--target-mode" in export_command
+    assert "--pipeline-config" in export_command
+    dqc_commands = [command for label, command in executed if label == "Review exported feature quality"]
+    assert len(dqc_commands) == 1
+    assert dqc_commands[0][:2] == [sys.executable, "rule_baseline/quality_check/data_quality_report.py"]
+    assert "--pipeline-config" in dqc_commands[0]
     report_commands = [command for label, command in executed if label == "Build GroupKey validation reports"]
-    assert report_commands == [[sys.executable, "rule_baseline/training/build_groupkey_validation_reports.py", "--artifact-mode", "offline"]]
+    assert len(report_commands) == 1
+    assert report_commands[0][:2] == [sys.executable, "rule_baseline/training/build_groupkey_validation_reports.py"]
+    assert "--pipeline-config" in report_commands[0]

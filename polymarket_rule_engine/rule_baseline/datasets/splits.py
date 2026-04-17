@@ -5,14 +5,15 @@ from dataclasses import asdict, dataclass
 import pandas as pd
 
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import SplitConfig
 
 
 @dataclass(frozen=True)
 class TemporalSplit:
     train_start: pd.Timestamp
     train_end: pd.Timestamp
-    valid_start: pd.Timestamp
-    valid_end: pd.Timestamp
+    valid_start: pd.Timestamp | None
+    valid_end: pd.Timestamp | None
     test_start: pd.Timestamp | None = None
     test_end: pd.Timestamp | None = None
 
@@ -107,6 +108,17 @@ def compute_artifact_split(
     raise ValueError(f"Unsupported artifact mode: {artifact_mode}")
 
 
+def temporal_split_from_config(split_config: SplitConfig) -> TemporalSplit:
+    return TemporalSplit(
+        train_start=pd.Timestamp(split_config.train_start),
+        train_end=pd.Timestamp(split_config.train_end),
+        valid_start=pd.Timestamp(split_config.valid_start) if split_config.valid_start is not None else None,
+        valid_end=pd.Timestamp(split_config.valid_end) if split_config.valid_end is not None else None,
+        test_start=pd.Timestamp(split_config.test_start) if split_config.test_start is not None else None,
+        test_end=pd.Timestamp(split_config.test_end) if split_config.test_end is not None else None,
+    )
+
+
 def assign_dataset_split(
     df: pd.DataFrame,
     split: TemporalSplit,
@@ -117,10 +129,26 @@ def assign_dataset_split(
     timestamps = pd.to_datetime(out[date_col], utc=True, errors="coerce")
     out[output_col] = "discard"
     out.loc[(timestamps >= split.train_start) & (timestamps <= split.train_end), output_col] = "train"
-    out.loc[(timestamps >= split.valid_start) & (timestamps <= split.valid_end), output_col] = "valid"
+    if split.valid_start is not None and split.valid_end is not None:
+        out.loc[(timestamps >= split.valid_start) & (timestamps <= split.valid_end), output_col] = "valid"
     if split.test_start is not None and split.test_end is not None:
         out.loc[(timestamps >= split.test_start) & (timestamps <= split.test_end), output_col] = "test"
     return out
+
+
+def assign_configured_dataset_split(
+    df: pd.DataFrame,
+    split_config: SplitConfig,
+    *,
+    date_col: str = "closedTime",
+    output_col: str = "dataset_split",
+) -> pd.DataFrame:
+    return assign_dataset_split(
+        df,
+        temporal_split_from_config(split_config),
+        date_col=date_col,
+        output_col=output_col,
+    )
 
 
 def select_preferred_split(

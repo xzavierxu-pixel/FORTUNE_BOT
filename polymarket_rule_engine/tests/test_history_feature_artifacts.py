@@ -68,6 +68,8 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
         self.assertEqual(set(history_frames), set(LEVEL_DEFINITIONS))
         self.assertIn("global_expanding_logloss_mean", history_frames["global"].columns)
         self.assertIn("global_expanding_bias_p50", history_frames["global"].columns)
+        self.assertNotIn("global_expanding_logloss_max", history_frames["global"].columns)
+        self.assertNotIn("global_expanding_bias_min", history_frames["global"].columns)
         self.assertIn("full_group_recent_90days_bias_mean", history_frames["full_group"].columns)
         example_group = history_frames["full_group"][history_frames["full_group"]["level_key"] == "example.com|SPORTS|moneyline"].iloc[0]
         self.assertEqual(float(example_group["full_group_recent_90days_snapshot_count"]), 1.0)
@@ -87,6 +89,7 @@ class HistoryFeatureArtifactsTest(unittest.TestCase):
         self.assertIn("domain_recent_90days_brier_mean", reloaded["domain"].columns)
         self.assertIn("domain_recent_90days_bias_p50", reloaded["domain"].columns)
         self.assertIn("category_x_market_type_expanding_abs_bias_p90", reloaded["category_x_market_type"].columns)
+        self.assertNotIn("category_x_market_type_expanding_abs_bias_max", reloaded["category_x_market_type"].columns)
 
     def test_validate_materialized_history_artifacts_fails_when_any_level_is_missing(self) -> None:
         tmpdir = self._make_tempdir()

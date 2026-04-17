@@ -59,7 +59,6 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                     "h_min": 5.0,
                     "h_max": 9.0,
                     "horizon_hours": 6,
-                    "rule_score": 0.1,
                     "direction": 1,
                     "q_full": 0.6,
                     "edge_full": 0.1,
@@ -169,7 +168,6 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                         "edge_full": 0.15,
                         "edge_std_full": 0.1,
                         "edge_lower_bound_full": 0.08,
-                        "rule_score": 0.08,
                         "n_full": 20,
                         "horizon_hours": 6,
                     }
@@ -208,10 +206,8 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                         "edge_full": 0.25,
                         "edge_std_full": 0.1,
                         "edge_lower_bound_full": 0.2,
-                        "rule_score": 0.2,
                         "n_full": 50,
                         "rule_price_center": 0.45,
-                        "rule_price_width": 0.1,
                         "rule_horizon_center": 7.0,
                         "rule_horizon_width": 4.0,
                         "rule_edge_buffer": 0.05,
@@ -231,10 +227,8 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                         "group_default_edge_full": 0.17,
                         "group_default_edge_std_full": 0.08,
                         "group_default_edge_lower_bound_full": 0.12,
-                        "group_default_rule_score": 0.12,
                         "group_default_n_full": 140.0,
                         "group_default_rule_price_center": 0.5,
-                        "group_default_rule_price_width": 0.1,
                         "group_default_rule_horizon_center": 8.0,
                         "group_default_rule_horizon_width": 6.0,
                         "group_default_rule_edge_buffer": 0.05,
@@ -255,10 +249,8 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                     "edge_full": {"group_column": "group_default_edge_full"},
                     "edge_std_full": {"group_column": "group_default_edge_std_full"},
                     "edge_lower_bound_full": {"group_column": "group_default_edge_lower_bound_full"},
-                    "rule_score": {"group_column": "group_default_rule_score"},
                     "n_full": {"group_column": "group_default_n_full"},
                     "rule_price_center": {"group_column": "group_default_rule_price_center"},
-                    "rule_price_width": {"group_column": "group_default_rule_price_width"},
                     "rule_horizon_center": {"group_column": "group_default_rule_horizon_center"},
                     "rule_horizon_width": {"group_column": "group_default_rule_horizon_width"},
                     "rule_edge_buffer": {"group_column": "group_default_rule_edge_buffer"},
@@ -280,11 +272,11 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
         self.assertTrue(bool(enriched.loc[0, "group_match_found"]))
         self.assertTrue(bool(enriched.loc[0, "used_group_fallback_only"]))
         self.assertEqual(
-            enriched.loc[0, "fine_feature_leaf_id"],
+            enriched.loc[0, "leaf_id"],
             "__GROUP_DEFAULT__|example.com|SPORTS|other",
         )
-        self.assertAlmostEqual(float(enriched.loc[0, "fine_feature_edge_full"]), 0.17, places=6)
-        self.assertAlmostEqual(float(enriched.loc[0, "fine_feature_q_full"]), 0.61, places=6)
+        self.assertAlmostEqual(float(enriched.loc[0, "edge_full"]), 0.17, places=6)
+        self.assertAlmostEqual(float(enriched.loc[0, "q_full"]), 0.61, places=6)
 
     def test_build_group_default_rule_hits_constructs_model_time_fallback_row(self) -> None:
         frame = pd.DataFrame(
@@ -314,7 +306,6 @@ class GroupKeyRuleMatchingTest(unittest.TestCase):
                         "group_default_edge_full": 0.17,
                         "group_default_edge_std_full": 0.08,
                         "group_default_edge_lower_bound_full": 0.12,
-                        "group_default_rule_score": 0.12,
                         "group_default_n_full": 140.0,
                     }
                 ]

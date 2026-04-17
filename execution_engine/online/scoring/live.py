@@ -268,10 +268,7 @@ def _predict_from_feature_inputs(
     feature_inputs: pd.DataFrame,
 ) -> pd.DataFrame:
     predicted = rule_hits.copy()
-    q_pred = runtime.model_payload.predict_q(feature_inputs)
-    trade_value_pred = runtime.model_payload.predict_trade_value(predicted, feature_inputs)
-    predicted["q_pred"] = q_pred
-    predicted["trade_value_pred"] = trade_value_pred
+    predicted["q_pred"] = runtime.model_payload.predict_q(feature_inputs)
     return predicted
 
 

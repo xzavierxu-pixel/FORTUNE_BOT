@@ -9,15 +9,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 from rule_baseline.datasets.artifacts import build_artifact_paths
 from rule_baseline.datasets.snapshots import prepare_rule_training_frame
 from rule_baseline.history.history_features import summarize_history_features, write_history_feature_artifacts
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build standalone hierarchical history feature artifacts.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
-    parser.add_argument("--max-rows", type=int, default=None)
-    parser.add_argument("--recent-days", type=int, default=None)
-    parser.add_argument("--split-reference-end", type=str, default=None)
-    parser.add_argument("--history-start", type=str, default=None)
+    parser.add_argument("--pipeline-config", type=str, default=None)
     parser.add_argument("--min-price", type=float, default=0.2)
     parser.add_argument("--max-price", type=float, default=0.8)
     parser.add_argument("--price-bin-step", type=float, default=0.1)
@@ -26,13 +23,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
     df, _, _ = prepare_rule_training_frame(
-        artifact_mode=args.artifact_mode,
-        max_rows=args.max_rows,
-        recent_days=args.recent_days,
-        split_reference_end=args.split_reference_end,
-        history_start_override=args.history_start,
+        artifact_mode=pipeline_config.artifact_mode,
+        max_rows=pipeline_config.max_rows,
+        recent_days=pipeline_config.recent_days,
+        split_reference_end=pipeline_config.split.split_reference_end,
+        history_start_override=pipeline_config.split.history_start,
+        split_config=pipeline_config.split,
         min_price=args.min_price,
         max_price=args.max_price,
         price_bin_step=args.price_bin_step,

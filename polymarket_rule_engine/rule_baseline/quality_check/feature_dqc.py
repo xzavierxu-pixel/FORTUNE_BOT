@@ -11,29 +11,29 @@ import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from rule_baseline.datasets.artifacts import build_artifact_paths
 from rule_baseline.datasets.snapshots import load_raw_markets, load_research_snapshots
-from rule_baseline.datasets.splits import assign_dataset_split, compute_temporal_split
+from rule_baseline.datasets.splits import assign_configured_dataset_split
 from rule_baseline.domain_extractor.market_annotations import load_market_annotations
 from rule_baseline.features import build_market_feature_cache
 from rule_baseline.models import load_model_artifact
 from rule_baseline.training.train_snapshot_model import add_training_targets, build_feature_table, load_rules
 from rule_baseline.utils import config
+from rule_baseline.workflow.pipeline_config import load_pipeline_runtime_config
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate feature-level data quality check artifacts.")
-    parser.add_argument("--artifact-mode", choices=["offline", "online"], default="offline")
+    parser.add_argument("--pipeline-config", type=str, default=None)
     return parser.parse_args()
 
 
-def load_feature_frame(artifact_mode: str) -> tuple[pd.DataFrame, list[str], object]:
-    artifact_paths = build_artifact_paths(artifact_mode)
+def load_feature_frame(pipeline_config) -> tuple[pd.DataFrame, list[str], object]:
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
     payload = load_model_artifact(artifact_paths.model_path)
 
     snapshots = load_research_snapshots()
     snapshots = snapshots[snapshots["quality_pass"]].copy()
-    split = compute_temporal_split(snapshots)
-    snapshots = assign_dataset_split(snapshots, split)
-    snapshots = snapshots[snapshots["dataset_split"].isin(["train", "valid", "test"])].copy()
+    snapshots = assign_configured_dataset_split(snapshots, pipeline_config.split)
+    snapshots = snapshots[snapshots["dataset_split"].isin(pipeline_config.split.allowed_splits)].copy()
 
     raw_markets = load_raw_markets(config.RAW_MERGED_PATH)
     market_annotations = load_market_annotations(config.MARKET_DOMAIN_FEATURES_PATH)
@@ -66,7 +66,7 @@ def feature_metadata(feature: str) -> tuple[str, str]:
         "closing_drift",
     }:
         return "期限结构特征", "同一市场不同 horizon 的价格路径和 term structure 派生特征。"
-    if feature in {"leaf_id", "price_min", "price_max", "h_min", "h_max", "q_smooth", "q_full", "rule_score", "direction", "group_key"}:
+    if feature in {"leaf_id", "price_min", "price_max", "h_min", "h_max", "q_smooth", "q_full", "direction", "group_key"}:
         return "规则匹配特征", "snapshot 匹配到规则 bucket 后带入模型的规则上下文。"
     if feature in {"domain", "category", "category_raw", "category_parsed", "category_override_flag", "market_type", "sub_domain_market", "source_url_market", "outcome_pattern_market"}:
         return "市场分类特征", "市场来源、分类和 outcome pattern 等标签信息。"
@@ -210,11 +210,12 @@ def safe_write_csv(df: pd.DataFrame, path: Path) -> Path:
 
 def main() -> None:
     args = parse_args()
-    artifact_paths = build_artifact_paths(args.artifact_mode)
+    pipeline_config = load_pipeline_runtime_config(args.pipeline_config)
+    artifact_paths = build_artifact_paths(pipeline_config.artifact_mode)
     output_dir = artifact_paths.analysis_dir / "quality_check"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    df_feat, feature_columns, payload = load_feature_frame(args.artifact_mode)
+    df_feat, feature_columns, payload = load_feature_frame(pipeline_config)
     dqc = build_feature_dqc(df_feat, feature_columns, payload)
     numeric_alerts = build_numeric_alerts(dqc)
 

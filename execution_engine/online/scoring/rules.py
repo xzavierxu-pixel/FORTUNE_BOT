@@ -330,7 +330,6 @@ def build_group_default_rule_hits(
         "group_default_edge_full",
         "group_default_edge_std_full",
         "group_default_edge_lower_bound_full",
-        "group_default_rule_score",
         "group_default_n_full",
         "group_unique_markets",
         "group_snapshot_rows",
@@ -365,7 +364,6 @@ def build_group_default_rule_hits(
     merged["edge_full"] = numeric_series("group_default_edge_full")
     merged["edge_std_full"] = numeric_series("group_default_edge_std_full")
     merged["edge_lower_bound_full"] = numeric_series("group_default_edge_lower_bound_full")
-    merged["rule_score"] = numeric_series("group_default_rule_score")
     merged["n_full"] = numeric_series("group_default_n_full")
     merged["rule_match_priority"] = 0
     merged["rule_match_reason"] = "group_default_fallback"
