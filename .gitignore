@@ -66,6 +66,7 @@ venv.bak/
 *.model
 *.weights
 !polymarket_rule_engine/data/offline/models
+!polymarket_rule_engine/data/offline/models/q_model_bundle_deploy/**
 
 # OS generated files
 .DS_Store

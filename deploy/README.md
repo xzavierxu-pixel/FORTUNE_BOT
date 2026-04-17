@@ -103,7 +103,7 @@ Fresh clone:
 cd /opt
 sudo mkdir -p /opt/fortune_bot
 sudo chown -R "$USER":"$USER" /opt/fortune_bot
-git clone --branch version3 --single-branch git@github.com:xzavierxu-pixel/FORTUNE_BOT.git /opt/fortune_bot
+git clone --branch version4 --single-branch git@github.com:xzavierxu-pixel/FORTUNE_BOT.git /opt/fortune_bot
 cd /opt/fortune_bot
 ```
 
@@ -393,13 +393,13 @@ systemctl status fortune-bot-label-analysis.service
 systemctl status fortune-bot-healthcheck.service
 ```
 
-Pull the latest code from `version3`:
+Pull the latest code from `version4`:
 
 ```bash
 cd /opt/fortune_bot
 git fetch origin
-git checkout version3
-git pull --ff-only origin version3
+git checkout version4
+git pull --ff-only origin version4
 ```
 
 If dependency or startup scripts changed, rebuild the venv before restarting:
