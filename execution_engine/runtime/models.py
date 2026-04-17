@@ -45,8 +45,7 @@ class SignalPayload(TypedDict, total=False):
     rule_group_key: str
     rule_leaf_id: int
     q_pred: float
-    growth_score: float
-    f_exec: float
+    f_star: float
     edge_prob: float
     settlement_key: str
     cluster_key: str
@@ -82,8 +81,7 @@ class DecisionRecord(TypedDict, total=False):
     rule_group_key: str
     rule_leaf_id: int
     q_pred: float
-    growth_score: float
-    f_exec: float
+    f_star: float
     edge_prob: float
     settlement_key: str
     cluster_key: str
@@ -123,8 +121,7 @@ class OrderRecord(TypedDict, total=False):
     rule_group_key: str
     rule_leaf_id: int
     q_pred: float
-    growth_score: float
-    f_exec: float
+    f_star: float
     edge_prob: float
     settlement_key: str
     cluster_key: str

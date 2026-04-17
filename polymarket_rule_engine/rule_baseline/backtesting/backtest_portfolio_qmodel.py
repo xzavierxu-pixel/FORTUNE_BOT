@@ -300,91 +300,38 @@ def compute_growth_and_direction(candidates: pd.DataFrame, cfg: BacktestConfig) 
     out = candidates.copy()
     q = out["q_pred"].astype(float).values
     p = out["price"].astype(float).values
-    rule_dir = out["rule_direction"].astype(int).values
-    trade_value_pred = out["trade_value_pred"].astype(float).values
-    confidence_discount = np.ones(len(out), dtype=float)
-    if "edge_lower_bound_full" in out.columns and "edge_full" in out.columns:
-        edge_full = out["edge_full"].astype(float).replace(0.0, np.nan)
-        confidence_discount = (
-            out["edge_lower_bound_full"].astype(float) / edge_full
-        ).clip(lower=0.95, upper=1.0).fillna(0.95).values
 
     edge_prob = q - p
     direction = np.zeros(len(out), dtype=int)
     f_star = np.zeros(len(out), dtype=float)
-    f_exec = np.zeros(len(out), dtype=float)
-    g_net = np.full(len(out), -np.inf, dtype=float)
-    growth_score = np.full(len(out), -np.inf, dtype=float)
 
-    loss_return = -1.0 - cfg.fee_rate
-
-    for idx, (qi, pi, edge, rule_direction, trade_value_est, discount) in enumerate(
-        zip(q, p, edge_prob, rule_dir, trade_value_pred, confidence_discount)
-    ):
+    for idx, (qi, pi, edge) in enumerate(zip(q, p, edge_prob)):
         if not np.isfinite(qi) or not np.isfinite(pi) or pi <= 0.0 or pi >= 1.0:
             continue
-        effective_trade_value = trade_value_est * discount
-        if not np.isfinite(effective_trade_value) or effective_trade_value <= 0:
-            continue
 
-        if rule_direction == 1:
-            if not (edge > cfg.min_prob_edge and qi >= cfg.min_trade_confidence):
-                continue
-            win_return = (1.0 - pi) / max(pi, 1e-6) - cfg.fee_rate
-            q_win = qi
+        if edge > 0:
             direction_value = 1
-        elif rule_direction == -1:
-            if not (edge < -cfg.min_prob_edge and (1.0 - qi) >= cfg.min_trade_confidence):
-                continue
-            win_return = pi / max(1.0 - pi, 1e-6) - cfg.fee_rate
-            q_win = 1.0 - qi
+            f_opt = edge / (1.0 - pi)
+        elif edge < 0:
             direction_value = -1
+            f_opt = -edge / pi
         else:
             continue
 
-        if win_return <= 0:
-            continue
-
-        expected_return = q_win * win_return + (1.0 - q_win) * loss_return
-        expected_return = min(expected_return, effective_trade_value)
-        if expected_return <= 0:
-            continue
-
-        denom = win_return * loss_return
-        if denom == 0:
-            continue
-
-        f_opt = -expected_return / denom
         if not np.isfinite(f_opt) or f_opt <= 0:
-            continue
-
-        f_position = min(cfg.kelly_fraction * f_opt, cfg.max_position_f)
-        if 1.0 + f_position * loss_return <= 0:
-            continue
-
-        g_value = q_win * np.log1p(f_position * win_return) + (1.0 - q_win) * np.log1p(f_position * loss_return)
-        if not np.isfinite(g_value) or g_value <= 0:
             continue
 
         direction[idx] = direction_value
         f_star[idx] = f_opt
-        f_exec[idx] = f_position
-        g_net[idx] = g_value
-        growth_score[idx] = g_value / max(f_position, 1e-12)
 
     out["edge_prob"] = edge_prob
     out["direction_model"] = direction
     out["edge_final"] = np.where(direction > 0, edge_prob, np.where(direction < 0, -edge_prob, -np.inf))
     out["f_star"] = f_star
-    out["f_exec"] = f_exec
-    out["g_net"] = g_net
-    out["growth_score"] = growth_score
     return out[
         (out["direction_model"] != 0)
-        & np.isfinite(out["growth_score"])
-        & (out["growth_score"] > 0)
-        & np.isfinite(out["edge_final"])
-        & (out["edge_final"] > 0)
+        & np.isfinite(out["f_star"])
+        & (out["f_star"] > 0)
     ].copy()
 
 
@@ -416,12 +363,12 @@ def prepare_candidate_book(
         return scored
 
     scored = scored.sort_values(
-        ["market_id", "snapshot_time", "edge_final"],
+        ["market_id", "snapshot_time", "f_star"],
         ascending=[True, True, False],
     )
     scored = scored.drop_duplicates(subset=["market_id", "snapshot_time"], keep="first").reset_index(drop=True)
-    scored = apply_earliest_market_dedup(scored, score_column="edge_final")
-    return scored.sort_values(["snapshot_time", "edge_final"], ascending=[True, False]).reset_index(drop=True)
+    scored = apply_earliest_market_dedup(scored, score_column="f_star")
+    return scored.sort_values(["snapshot_time", "f_star"], ascending=[True, False]).reset_index(drop=True)
 
 
 def trade_pnl(direction: int, stake: float, price_yes: float, y: int, fee_rate: float) -> float:
@@ -489,7 +436,7 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
             equity_records.append({"date": current_date, "bankroll": equity_start, "daily_pnl": realized_pnl, "num_trades": 0})
             continue
 
-        day_candidates = pd.DataFrame(active_rows).sort_values("edge_final", ascending=False).head(cfg.max_daily_trades)
+        day_candidates = pd.DataFrame(active_rows).sort_values("f_star", ascending=False).head(cfg.max_daily_trades)
         bankroll_start = equity_start
         remaining_budget = min(cfg.max_daily_exposure_f * bankroll_start, cash)
         daily_pnl = realized_pnl
@@ -522,7 +469,7 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
             side_room = cfg.max_side_exposure_f * bankroll_start - exposure_by_side.get(direction_label, 0.0)
 
             stake = min(
-                float(row["f_exec"]) * bankroll_start,
+                float(row["f_star"]) * bankroll_start,
                 remaining_budget,
                 domain_room,
                 category_room,
@@ -577,10 +524,7 @@ def run_backtest(candidates: pd.DataFrame, cfg: BacktestConfig) -> tuple[pd.Data
                     "rule_group_key": row["rule_group_key"],
                     "rule_leaf_id": int(row["rule_leaf_id"]),
                     "rule_score": float(row.get("rule_score", np.nan)),
-                    "growth_score": float(row["growth_score"]),
-                    "g_net": float(row["g_net"]),
                     "f_star": float(row["f_star"]),
-                    "f_exec": float(row["f_exec"]),
                     "stake": float(stake),
                     "pnl": float(pnl),
                     "pnl_pct_of_stake": float(pnl_pct),

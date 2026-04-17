@@ -92,8 +92,7 @@ def build_order_lifecycle(cfg: PegConfig, selections: pd.DataFrame, scope: Label
                 "market_id",
                 "selected_token_id",
                 "selected_outcome_label",
-                "growth_score",
-                "f_exec",
+                "f_star",
                 "q_pred",
                 "trade_value_pred",
                 "price",
@@ -112,8 +111,7 @@ def build_order_lifecycle(cfg: PegConfig, selections: pd.DataFrame, scope: Label
             columns={
                 "selected_token_id": "token_id",
                 "selected_outcome_label": "selection_outcome_label",
-                "growth_score": "selection_growth_score",
-                "f_exec": "selection_f_exec",
+                "f_star": "selection_f_star",
                 "q_pred": "selection_q_pred",
                 "trade_value_pred": "selection_trade_value_pred",
                 "price": "selection_price",
@@ -163,8 +161,7 @@ def build_order_lifecycle(cfg: PegConfig, selections: pd.DataFrame, scope: Label
         str_series(lifecycle, "selection_cluster_key")
     )
     lifecycle["q_pred"] = num_series(lifecycle, "q_pred").fillna(num_series(lifecycle, "selection_q_pred"))
-    lifecycle["growth_score"] = num_series(lifecycle, "growth_score").fillna(num_series(lifecycle, "selection_growth_score"))
-    lifecycle["f_exec"] = num_series(lifecycle, "f_exec").fillna(num_series(lifecycle, "selection_f_exec"))
+    lifecycle["f_star"] = num_series(lifecycle, "f_star").fillna(num_series(lifecycle, "selection_f_star"))
     lifecycle["trade_value_pred"] = num_series(lifecycle, "selection_trade_value_pred")
     lifecycle["price"] = num_series(lifecycle, "selection_price")
     lifecycle["horizon_hours"] = num_series(lifecycle, "selection_horizon_hours")
@@ -228,8 +225,7 @@ def build_order_lifecycle(cfg: PegConfig, selections: pd.DataFrame, scope: Label
         "cancel_no_fill",
         "rejected_no_fill",
         "q_pred",
-        "growth_score",
-        "f_exec",
+        "f_star",
         "trade_value_pred",
         "price",
         "edge_prob",

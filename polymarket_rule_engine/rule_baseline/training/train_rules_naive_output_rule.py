@@ -635,24 +635,6 @@ def build_group_serving_features(
     if rules_df.empty:
         return pd.DataFrame(columns=["group_key"]), {}
     group_features = _build_group_key_frame(rules_df["group_key"])
-    group_metrics = (
-        rules_df.groupby("group_key", observed=True)
-        .agg(
-            group_unique_markets=("group_unique_markets", "first"),
-            group_snapshot_rows=("group_snapshot_rows", "first"),
-            global_total_unique_markets=("global_total_unique_markets", "first"),
-            global_total_snapshot_rows=("global_total_snapshot_rows", "first"),
-            group_market_share_global=("group_market_share_global", "first"),
-            group_snapshot_share_global=("group_snapshot_share_global", "first"),
-            group_median_logloss=("group_median_logloss", "first"),
-            group_median_brier=("group_median_brier", "first"),
-            global_group_logloss_q25=("global_group_logloss_q25", "first"),
-            global_group_brier_q25=("global_group_brier_q25", "first"),
-            group_decision=("group_decision", "first"),
-        )
-        .reset_index()
-    )
-    group_features = group_features.merge(group_metrics, on="group_key", how="left")
     group_features["domain_is_unknown"] = group_features["domain"].astype(str).eq("UNKNOWN").astype(int)
     group_features["domain_category_key"] = (
         group_features["domain"].astype(str) + "|" + group_features["category"].astype(str)
@@ -717,14 +699,6 @@ def build_group_serving_features(
     group_features["full_group_recent_90days_logloss_tail_spread"] = (
         pd.to_numeric(group_features.get("full_group_recent_90days_logloss_p90"), errors="coerce").fillna(0.0)
         - pd.to_numeric(group_features.get("full_group_recent_90days_logloss_p50"), errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_expanding_logloss_tail_x_market_share"] = (
-        group_features["full_group_expanding_logloss_tail_spread"]
-        * pd.to_numeric(group_features["group_market_share_global"], errors="coerce").fillna(0.0)
-    )
-    group_features["full_group_expanding_abs_bias_tail_x_snapshot_share"] = (
-        group_features["full_group_expanding_abs_bias_tail_spread"]
-        * pd.to_numeric(group_features["group_snapshot_share_global"], errors="coerce").fillna(0.0)
     )
     group_features["full_group_vs_domain_logloss_gap"] = (
         pd.to_numeric(group_features.get("full_group_expanding_logloss_mean"), errors="coerce").fillna(0.0)

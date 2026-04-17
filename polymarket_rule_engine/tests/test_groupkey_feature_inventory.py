@@ -46,7 +46,7 @@ class GroupKeyFeatureInventoryTest(unittest.TestCase):
             "audit_class": "B_keep_but_later",
         }
         shrinkage_row = {
-            "feature_name": "global_recent_200_bias_se",
+            "feature_name": "global_recent_90days_bias_se",
             "notes": "建议与 count/shrinkage 一起使用",
             "status": "pending_implementation",
             "audit_class": "B_keep_but_later",
@@ -80,9 +80,9 @@ class GroupKeyFeatureInventoryTest(unittest.TestCase):
         self.assertIn("global_expanding_snapshot_count", derived["matched_feature_name"])
 
     def test_alias_candidates_cover_structural_prefix_variants(self) -> None:
-        candidates = _alias_candidates("domain_category_recent_200_abs_bias_q75")
-        self.assertIn("domain_x_category_recent_200_abs_bias_q75", candidates)
-        self.assertIn("domain_x_category_recent_200_abs_bias_p75", candidates)
+        candidates = _alias_candidates("domain_category_recent_90days_abs_bias_q75")
+        self.assertIn("domain_x_category_recent_90days_abs_bias_q75", candidates)
+        self.assertIn("domain_x_category_recent_90days_abs_bias_p75", candidates)
 
     def test_apply_inventory_override_replaces_status_and_appends_notes(self) -> None:
         row = {

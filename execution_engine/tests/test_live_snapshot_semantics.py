@@ -292,9 +292,6 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
                 edge_final=predicted["q_pred"] - predicted["price"],
                 direction_model=predicted["rule_direction"],
                 f_star=0.1,
-                f_exec=0.02,
-                g_net=0.01,
-                growth_score=1.0,
             ),
             apply_earliest_market_dedup=lambda frame, score_column: frame.copy(),
             backtest_config=SimpleNamespace(),
@@ -366,6 +363,9 @@ class LiveSnapshotSemanticsTest(unittest.TestCase):
         self.assertFalse(bool(result.rule_model.feature_inputs.iloc[0]["fine_match_found"]))
         self.assertTrue(bool(result.rule_model.feature_inputs.iloc[0]["used_group_fallback_only"]))
         self.assertEqual(len(result.rule_model.model_outputs), 1)
+        self.assertNotIn("growth_score", result.rule_model.model_outputs.columns)
+        self.assertNotIn("f_exec", result.rule_model.model_outputs.columns)
+        self.assertNotIn("g_net", result.rule_model.model_outputs.columns)
         self.assertEqual(len(result.rule_model.viable_candidates), 1)
 
 

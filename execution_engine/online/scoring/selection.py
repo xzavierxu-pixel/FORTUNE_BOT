@@ -29,15 +29,15 @@ def _to_int(value: Any, default: int | None = None) -> int | None:
         return default
 
 
-def filter_candidates_by_growth_score(
+def filter_candidates_by_f_star(
     candidates: pd.DataFrame,
     *,
-    min_growth_score: float = 0.2,
+    min_f_star: float = 0.2,
 ) -> pd.DataFrame:
-    if candidates.empty or "growth_score" not in candidates.columns:
+    if candidates.empty or "f_star" not in candidates.columns:
         return candidates.copy()
-    scores = pd.to_numeric(candidates["growth_score"], errors="coerce")
-    return candidates.loc[scores > float(min_growth_score)].copy()
+    scores = pd.to_numeric(candidates["f_star"], errors="coerce")
+    return candidates.loc[scores > float(min_f_star)].copy()
 
 
 def select_target_side(frame: pd.DataFrame) -> pd.DataFrame:
@@ -67,9 +67,9 @@ def allocate_candidates(
     state: StateStore,
     bt_cfg: Any,
 ) -> pd.DataFrame:
-    filtered_candidates = filter_candidates_by_growth_score(
+    filtered_candidates = filter_candidates_by_f_star(
         candidates,
-        min_growth_score=float(getattr(cfg, "online_min_growth_score", 0.2)),
+        min_f_star=float(getattr(cfg, "online_min_f_star", 0.2)),
     )
     if filtered_candidates.empty:
         return filtered_candidates
@@ -94,10 +94,10 @@ def allocate_candidates(
     ranked = filtered_candidates.copy()
     if "snapshot_time" not in ranked.columns:
         ranked["snapshot_time"] = pd.NaT
-    if "edge_final" not in ranked.columns:
-        ranked["edge_final"] = 0.0
+    if "f_star" not in ranked.columns:
+        ranked["f_star"] = 0.0
     ranked = ranked.sort_values(
-        by=["snapshot_time", "edge_final", "market_id"],
+        by=["snapshot_time", "f_star", "market_id"],
         ascending=[True, False, True],
     )
     for _, row in ranked.iterrows():
@@ -112,7 +112,7 @@ def allocate_candidates(
         settlement_ts = pd.to_datetime(row.get("closedTime"), utc=True, errors="coerce")
         settlement_key = settlement_ts.date().isoformat() if pd.notna(settlement_ts) else "UNKNOWN"
         cluster_key = f"{row.get('source_host', 'UNKNOWN')}|{row.get('category', 'UNKNOWN')}|{settlement_key}"
-        desired_stake = float(row.get("f_exec", 0.0)) * bankroll
+        desired_stake = float(row.get("f_star", 0.0)) * bankroll
         stake = min(
             desired_stake,
             bt_cfg.max_position_f * bankroll,
@@ -139,7 +139,7 @@ def build_selection_decisions(
     selected: pd.DataFrame,
     cfg: PegConfig,
     *,
-    min_growth_score: float = 0.2,
+    min_f_star: float = 0.2,
     held_event_ids: set[str] | None = None,
 ) -> pd.DataFrame:
     if model_outputs.empty:
@@ -173,7 +173,7 @@ def build_selection_decisions(
         )
         picked = selected_lookup.get(key)
         execution_row = picked or row
-        growth_score = _to_float(execution_row.get("growth_score"), default=0.0)
+        f_star_value = _to_float(execution_row.get("f_star"), default=0.0)
         event_id = str(execution_row.get("event_id") or row.get("event_id") or "")
         selected_for_submission = picked is not None
         if selected_for_submission:
@@ -182,10 +182,10 @@ def build_selection_decisions(
             selection_reason = "event_position_exists"
         elif event_id and event_id in selected_event_ids:
             selection_reason = "event_already_selected"
-        elif growth_score <= min_growth_score:
-            selection_reason = "growth_below_threshold"
-        elif growth_score <= 0:
-            selection_reason = "no_positive_growth"
+        elif f_star_value <= min_f_star:
+            selection_reason = "f_star_below_threshold"
+        elif f_star_value <= 0:
+            selection_reason = "f_star_nonpositive"
         else:
             selection_reason = "not_allocated"
 
@@ -200,9 +200,8 @@ def build_selection_decisions(
                 "selected_for_submission": selected_for_submission,
                 "selection_reason": selection_reason,
                 "stake_usdc": _to_float((picked or {}).get("stake_usdc")),
-                "growth_score": growth_score,
+                "f_star": f_star_value,
                 "edge_final": _to_float(execution_row.get("edge_final")),
-                "f_exec": _to_float(execution_row.get("f_exec")),
                 "q_pred": _to_float(execution_row.get("q_pred"), default=0.5),
                 "trade_value_pred": _to_float(execution_row.get("trade_value_pred")),
                 "price": _to_float(execution_row.get("price")),

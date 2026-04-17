@@ -289,9 +289,6 @@ def _merge_growth_columns(predicted: pd.DataFrame, viable: pd.DataFrame) -> pd.D
         "direction_model",
         "edge_final",
         "f_star",
-        "f_exec",
-        "g_net",
-        "growth_score",
     ]
     if viable.empty:
         for column in growth_columns[4:]:
@@ -415,14 +412,14 @@ def run_live_inference(
     if not viable.empty:
         viable = (
             viable.sort_values(
-                by=["market_id", "snapshot_time", "edge_final"],
+                by=["market_id", "snapshot_time", "f_star"],
                 ascending=[True, True, False],
             )
             .drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")
             .reset_index(drop=True)
         )
-        viable = runtime.rule_runtime.apply_earliest_market_dedup(viable, score_column="edge_final")
-        viable = viable.sort_values(["batch_id", "edge_final"], ascending=[True, False]).reset_index(drop=True)
+        viable = runtime.rule_runtime.apply_earliest_market_dedup(viable, score_column="f_star")
+        viable = viable.sort_values(["batch_id", "f_star"], ascending=[True, False]).reset_index(drop=True)
 
     return LiveInferenceResult(
         live_filter=live_filter,

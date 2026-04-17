@@ -32,7 +32,7 @@ from execution_engine.online.scoring.live import LiveInferenceResult, run_live_i
 from execution_engine.online.scoring.selection import (
     allocate_candidates,
     build_selection_decisions,
-    filter_candidates_by_growth_score,
+    filter_candidates_by_f_star,
     select_target_side,
 )
 from execution_engine.online.streaming.manager import StreamRunResult, stream_market_data
@@ -921,9 +921,9 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
         )
     state = StateStore(runtime.cfg)
     held_event_ids = set(state.held_event_ids)
-    growth_filtered_candidates = filter_candidates_by_growth_score(
+    growth_filtered_candidates = filter_candidates_by_f_star(
         viable_candidates,
-        min_growth_score=float(runtime.cfg.online_min_growth_score),
+        min_f_star=float(runtime.cfg.online_min_f_star),
     )
     growth_filtered_count = max(int(len(viable_candidates)) - int(len(growth_filtered_candidates)), 0)
     selected = (
@@ -940,7 +940,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
         model_outputs,
         selected,
         runtime.cfg,
-        min_growth_score=float(runtime.cfg.online_min_growth_score),
+        min_f_star=float(runtime.cfg.online_min_f_star),
         held_event_ids=held_event_ids,
     )
     if selection.empty:

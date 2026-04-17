@@ -296,7 +296,7 @@ class PegConfig:
     online_token_state_max_age_sec: int
     online_capacity_wait_poll_sec: int
     online_price_cap_safety_buffer: float
-    online_min_growth_score: float
+    online_min_f_star: float
     online_deferred_artifacts_enabled: bool
     submit_window_run_monitor_after: bool
     submit_window_monitor_sleep_sec: int
@@ -609,7 +609,7 @@ def load_config() -> PegConfig:
         online_token_state_max_age_sec=_get_int("PEG_ONLINE_TOKEN_STATE_MAX_AGE_SEC", 7200),
         online_capacity_wait_poll_sec=_get_int("PEG_ONLINE_CAPACITY_WAIT_POLL_SEC", 30),
         online_price_cap_safety_buffer=_get_float("PEG_ONLINE_PRICE_CAP_SAFETY_BUFFER", 0.01),
-        online_min_growth_score=_get_float("PEG_MIN_GROWTH_SCORE", 0.0),
+        online_min_f_star=_get_float("PEG_MIN_F_STAR", 0.2),
         online_deferred_artifacts_enabled=_get_bool("PEG_ONLINE_DEFERRED_ARTIFACTS_ENABLED", False),
         submit_window_run_monitor_after=_get_bool("PEG_SUBMIT_WINDOW_RUN_MONITOR_AFTER", True),
         submit_window_monitor_sleep_sec=_get_int("PEG_SUBMIT_WINDOW_MONITOR_SLEEP_SEC", 0),

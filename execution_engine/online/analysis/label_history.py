@@ -179,13 +179,13 @@ def load_selection_history(cfg: PegConfig, scope: LabelAnalysisScope = "run") ->
     combined = pd.concat(frames, ignore_index=True)
     selected_series = combined["selected_for_submission"] if "selected_for_submission" in combined.columns else pd.Series("", index=combined.index)
     combined["selected_rank"] = selected_series.astype(str).str.lower().map({"true": 1, "1": 1, "yes": 1}).fillna(0)
-    growth_series = combined["growth_score"] if "growth_score" in combined.columns else pd.Series("", index=combined.index)
-    combined["growth_score_num"] = pd.to_numeric(growth_series, errors="coerce").fillna(-999999.0)
+    f_star_series = combined["f_star"] if "f_star" in combined.columns else pd.Series("", index=combined.index)
+    combined["f_star_num"] = pd.to_numeric(f_star_series, errors="coerce").fillna(-999999.0)
     combined = combined.sort_values(
-        by=["run_id", "market_id", "selected_token_id", "selected_rank", "growth_score_num"],
+        by=["run_id", "market_id", "selected_token_id", "selected_rank", "f_star_num"],
         ascending=[True, True, True, False, False],
     ).drop_duplicates(subset=["run_id", "market_id", "selected_token_id"], keep="first")
-    return combined.drop(columns=["selected_rank", "growth_score_num"], errors="ignore").reset_index(drop=True)
+    return combined.drop(columns=["selected_rank", "f_star_num"], errors="ignore").reset_index(drop=True)
 
 
 def load_scanned_market_ids(cfg: PegConfig, scope: LabelAnalysisScope = "run") -> Set[str]:

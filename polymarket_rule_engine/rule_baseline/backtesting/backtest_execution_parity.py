@@ -92,7 +92,7 @@ def prepare_execution_candidates(
         return scored
 
     # Online parity: a market can only be acted on once, at the earliest tradable snapshot.
-    scored = apply_earliest_market_dedup(scored, score_column="edge_final")
+    scored = apply_earliest_market_dedup(scored, score_column="f_star")
     return scored.sort_values(["snapshot_time", "market_id"]).reset_index(drop=True)
 
 
@@ -132,7 +132,7 @@ def compute_filter_breakdown(
 
     scored = predict_candidates(dedup_snapshot, market_feature_cache, payload)
     grown = compute_growth_and_direction(scored, cfg)
-    earliest = apply_earliest_market_dedup(grown, score_column="edge_final") if not grown.empty else grown
+    earliest = apply_earliest_market_dedup(grown, score_column="f_star") if not grown.empty else grown
     breakdown = {
         "evaluation_split": evaluation_split,
         "evaluation_snapshot_rows": int(len(evaluation_snapshots)),
@@ -226,7 +226,7 @@ def run_execution_parity_backtest(
                     day_stats["cash_before_trades"] = float(cash)
 
                 current_equity = cash + current_open_stake()
-                desired_stake = float(row["f_exec"]) * current_equity
+                desired_stake = float(row["f_star"]) * current_equity
 
                 if cash <= 0:
                     day_stats["skipped_count"] += 1
@@ -302,7 +302,6 @@ def run_execution_parity_backtest(
                         "rule_group_key": row["rule_group_key"],
                         "rule_leaf_id": int(row["rule_leaf_id"]),
                         "rule_score": float(row.get("rule_score", np.nan)),
-                        "growth_score": float(row["growth_score"]),
                         "stake": float(stake),
                         "stake_fraction_of_start_equity": float(stake / current_equity) if current_equity else 0.0,
                         "pnl": float(pnl),

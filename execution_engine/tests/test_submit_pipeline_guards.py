@@ -95,8 +95,7 @@ class SubmitPricingGuardsTest(unittest.TestCase):
             "position_side": "OUTCOME_1",
             "rule_group_key": "example.com|SPORTS|over_under",
             "rule_leaf_id": 1,
-            "growth_score": 1.0,
-            "f_exec": 0.02,
+            "f_star": 1.0,
             "settlement_key": "2026-03-25",
             "cluster_key": "example.com|SPORTS|2026-03-25",
         }
@@ -686,8 +685,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                 {
                     "market_id": "market-1",
                     "snapshot_time": "2026-03-31T00:00:00Z",
-                    "edge_final": 0.8,
-                    "f_exec": 0.5,
+                    "f_star": 0.5,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -699,7 +697,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             clob_enabled=True,
             initial_bankroll_usdc=10.0,
             max_trade_amount_usdc=50.0,
-            online_min_growth_score=0.2,
+            online_min_f_star=0.2,
         )
         state = SimpleNamespace(net_exposure_usdc=0.0, seen_held_event=lambda event_id: False)
         bt_cfg = SimpleNamespace(max_position_f=1.0)
@@ -714,15 +712,13 @@ class AllocationBalanceSourceTest(unittest.TestCase):
         self.assertEqual(len(result), 1)
         self.assertAlmostEqual(float(result.iloc[0]["stake_usdc"]), 20.0, places=6)
 
-    def test_allocate_candidates_filters_growth_score_at_threshold(self) -> None:
+    def test_allocate_candidates_filters_f_star_at_threshold(self) -> None:
         candidates = pd.DataFrame(
             [
                 {
                     "market_id": "market-1",
                     "snapshot_time": "2026-03-31T00:00:00Z",
-                    "edge_final": 0.8,
-                    "f_exec": 0.5,
-                    "growth_score": 0.2,
+                    "f_star": 0.2,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -730,9 +726,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                 {
                     "market_id": "market-2",
                     "snapshot_time": "2026-03-31T00:01:00Z",
-                    "edge_final": 0.7,
-                    "f_exec": 0.5,
-                    "growth_score": 0.21,
+                    "f_star": 0.21,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -744,7 +738,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             clob_enabled=True,
             initial_bankroll_usdc=10.0,
             max_trade_amount_usdc=50.0,
-            online_min_growth_score=0.2,
+            online_min_f_star=0.2,
         )
         state = SimpleNamespace(net_exposure_usdc=0.0, seen_held_event=lambda event_id: False)
         bt_cfg = SimpleNamespace(max_position_f=1.0)
@@ -758,15 +752,13 @@ class AllocationBalanceSourceTest(unittest.TestCase):
 
         self.assertEqual(list(result["market_id"]), ["market-2"])
 
-    def test_allocate_candidates_allows_positive_growth_when_threshold_is_zero(self) -> None:
+    def test_allocate_candidates_allows_positive_f_star_when_threshold_is_zero(self) -> None:
         candidates = pd.DataFrame(
             [
                 {
                     "market_id": "market-1",
                     "snapshot_time": "2026-03-31T00:00:00Z",
-                    "edge_final": 0.8,
-                    "f_exec": 0.5,
-                    "growth_score": 0.0,
+                    "f_star": 0.0,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -774,9 +766,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                 {
                     "market_id": "market-2",
                     "snapshot_time": "2026-03-31T00:01:00Z",
-                    "edge_final": 0.7,
-                    "f_exec": 0.5,
-                    "growth_score": 0.01,
+                    "f_star": 0.01,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -788,7 +778,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             clob_enabled=True,
             initial_bankroll_usdc=10.0,
             max_trade_amount_usdc=50.0,
-            online_min_growth_score=0.0,
+            online_min_f_star=0.0,
         )
         state = SimpleNamespace(net_exposure_usdc=0.0, seen_held_event=lambda event_id: False)
         bt_cfg = SimpleNamespace(max_position_f=1.0)
@@ -809,9 +799,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "market_id": "market-held",
                     "event_id": "event-held",
                     "snapshot_time": "2026-03-31T00:00:00Z",
-                    "edge_final": 0.9,
-                    "f_exec": 0.4,
-                    "growth_score": 0.5,
+                    "f_star": 0.5,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -820,9 +808,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "market_id": "market-1",
                     "event_id": "event-1",
                     "snapshot_time": "2026-03-31T00:01:00Z",
-                    "edge_final": 0.8,
-                    "f_exec": 0.4,
-                    "growth_score": 0.5,
+                    "f_star": 0.5,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -831,9 +817,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "market_id": "market-2",
                     "event_id": "event-1",
                     "snapshot_time": "2026-03-31T00:02:00Z",
-                    "edge_final": 0.7,
-                    "f_exec": 0.4,
-                    "growth_score": 0.5,
+                    "f_star": 0.5,
                     "source_host": "example.com",
                     "category": "SPORTS",
                     "closedTime": "2026-04-01T00:00:00Z",
@@ -845,7 +829,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             clob_enabled=True,
             initial_bankroll_usdc=10.0,
             max_trade_amount_usdc=50.0,
-            online_min_growth_score=0.0,
+            online_min_f_star=0.0,
         )
         state = SimpleNamespace(
             net_exposure_usdc=0.0,
@@ -871,7 +855,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "snapshot_time": "2026-03-31T00:00:00Z",
                     "rule_group_key": "group",
                     "rule_leaf_id": 1,
-                    "growth_score": 0.4,
+                    "f_star": 0.4,
                 },
                 {
                     "market_id": "market-picked",
@@ -879,7 +863,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "snapshot_time": "2026-03-31T00:01:00Z",
                     "rule_group_key": "group",
                     "rule_leaf_id": 2,
-                    "growth_score": 0.4,
+                    "f_star": 0.4,
                 },
                 {
                     "market_id": "market-dup",
@@ -887,7 +871,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "snapshot_time": "2026-03-31T00:02:00Z",
                     "rule_group_key": "group",
                     "rule_leaf_id": 3,
-                    "growth_score": 0.4,
+                    "f_star": 0.4,
                 },
             ]
         )
@@ -902,7 +886,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
                     "selected_token_id": "token-picked",
                     "selected_outcome_label": "Yes",
                     "stake_usdc": 1.0,
-                    "growth_score": 0.4,
+                    "f_star": 0.4,
                 }
             ]
         )
@@ -912,7 +896,7 @@ class AllocationBalanceSourceTest(unittest.TestCase):
             model_outputs,
             selected,
             cfg,
-            min_growth_score=0.0,
+            min_f_star=0.0,
             held_event_ids={"event-held"},
         )
 
@@ -1048,9 +1032,6 @@ class LiveInferenceGrowthColumnsTest(unittest.TestCase):
                     "edge_final": 0.2,
                     "direction_model": 1,
                     "f_star": 0.3,
-                    "f_exec": 0.02,
-                    "g_net": 0.01,
-                    "growth_score": 0.5,
                 }
             ]
         )
@@ -1099,8 +1080,9 @@ class LiveInferenceGrowthColumnsTest(unittest.TestCase):
         model_outputs = result.rule_model.model_outputs
         self.assertEqual(len(model_outputs), 1)
         self.assertAlmostEqual(float(model_outputs.iloc[0]["q_pred"]), 0.65, places=6)
-        self.assertAlmostEqual(float(model_outputs.iloc[0]["f_exec"]), 0.02, places=6)
-        self.assertAlmostEqual(float(model_outputs.iloc[0]["growth_score"]), 0.5, places=6)
+        self.assertAlmostEqual(float(model_outputs.iloc[0]["f_star"]), 0.3, places=6)
+        self.assertNotIn("f_exec", model_outputs.columns)
+        self.assertNotIn("growth_score", model_outputs.columns)
 
 
 class RiskGuardBehaviorTest(unittest.TestCase):

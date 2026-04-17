@@ -226,7 +226,7 @@ def evaluate_matched_snapshots(
 
     if viable.empty:
         model_outputs = predicted.copy()
-        for column in ["edge_prob", "direction_model", "f_star", "f_exec", "g_net", "growth_score"]:
+        for column in ["edge_prob", "direction_model", "f_star", "edge_final"]:
             if column not in model_outputs.columns:
                 model_outputs[column] = None
         return RuleModelResult(
@@ -244,9 +244,7 @@ def evaluate_matched_snapshots(
         "edge_prob",
         "direction_model",
         "f_star",
-        "f_exec",
-        "g_net",
-        "growth_score",
+        "edge_final",
     ]
     model_outputs = predicted.merge(
         viable[growth_columns],
@@ -255,14 +253,14 @@ def evaluate_matched_snapshots(
     )
     viable = (
         viable.sort_values(
-            by=["market_id", "snapshot_time", "edge_final"],
+            by=["market_id", "snapshot_time", "f_star"],
             ascending=[True, True, False],
         )
         .drop_duplicates(subset=["market_id", "snapshot_time"], keep="first")
         .reset_index(drop=True)
     )
-    viable = runtime.apply_earliest_market_dedup(viable, score_column="edge_final")
-    viable = viable.sort_values(["batch_id", "edge_final"], ascending=[True, False]).reset_index(drop=True)
+    viable = runtime.apply_earliest_market_dedup(viable, score_column="f_star")
+    viable = viable.sort_values(["batch_id", "f_star"], ascending=[True, False]).reset_index(drop=True)
 
     return RuleModelResult(
         rule_hits=rule_hits,
