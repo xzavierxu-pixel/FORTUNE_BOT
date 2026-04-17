@@ -522,6 +522,7 @@ class SubmitWindowBatchResult:
     stream_latency_ms: float
     inference_latency_ms: float
     avg_token_state_age_sec: float
+    abort_reason: str
     stream_result: StreamRunResult
     inference_result: LiveInferenceResult
     submit_result: SubmitSelectionResult
@@ -537,6 +538,7 @@ class SubmitWindowPageResult:
     direct_candidate_count: int
     submitted_count: int
     fetch_latency_ms: float
+    abort_reason: str
     batches: List[SubmitWindowBatchResult]
 
 
@@ -567,6 +569,7 @@ class SubmitWindowResult:
     submit_phase_finished_at_bj: str
     post_submit_started_at_bj: str
     post_submit_finished_at_bj: str
+    abort_reason: str
     pages: List[SubmitWindowPageResult]
 
 
@@ -632,6 +635,7 @@ def _build_submit_window_manifest(
     monitor_summary: Dict[str, object],
     submit_phase_started_at_bj: str,
     submit_phase_finished_at_bj: str,
+    abort_reason: str = "",
 ) -> Dict[str, object]:
     return {
         "generated_at_utc": to_iso(utc_now()),
@@ -664,6 +668,7 @@ def _build_submit_window_manifest(
         "underfilled_batch_count": int(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
         "final_status": final_status,
+        "abort_reason": abort_reason,
         "metrics": metrics_payload,
         **monitor_summary,
         "pages": [
@@ -816,6 +821,7 @@ def complete_post_submit_monitor(cfg: PegConfig) -> SubmitWindowResult:
         submit_phase_finished_at_bj=str(manifest.get("submit_phase_finished_at_bj") or ""),
         post_submit_started_at_bj=str(manifest.get("post_submit_started_at_bj") or ""),
         post_submit_finished_at_bj=str(manifest.get("post_submit_finished_at_bj") or ""),
+        abort_reason=str(manifest.get("abort_reason") or ""),
         pages=[],
     )
 
@@ -879,6 +885,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             stream_latency_ms=stream_latency_ms,
             inference_latency_ms=inference_latency_ms,
             avg_token_state_age_sec=0.0,
+            abort_reason="",
             stream_result=stream_result,
             inference_result=inference_result,
             submit_result=_empty_result_noop(runtime.cfg, status="empty_live_eligible"),
@@ -915,6 +922,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             stream_latency_ms=stream_latency_ms,
             inference_latency_ms=inference_latency_ms,
             avg_token_state_age_sec=float(token_age_series.dropna().mean()) if token_age_series is not None and not token_age_series.dropna().empty else 0.0,
+            abort_reason="",
             stream_result=stream_result,
             inference_result=inference_result,
             submit_result=_empty_result_noop(runtime.cfg, status="empty_viable_candidates"),
@@ -965,6 +973,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
             stream_latency_ms=stream_latency_ms,
             inference_latency_ms=inference_latency_ms,
             avg_token_state_age_sec=float(token_age_series.dropna().mean()) if token_age_series is not None and not token_age_series.dropna().empty else 0.0,
+            abort_reason="",
             stream_result=stream_result,
             inference_result=inference_result,
             submit_result=_empty_result_noop(runtime.cfg, status="empty_selection"),
@@ -1044,6 +1053,7 @@ def _process_batch(runtime: OnlineRuntimeContainer, batch: CandidateBatch) -> Su
         stream_latency_ms=stream_latency_ms,
         inference_latency_ms=inference_latency_ms,
         avg_token_state_age_sec=float(token_age_series.dropna().mean()) if token_age_series is not None and not token_age_series.dropna().empty else 0.0,
+        abort_reason=str(submit_result.abort_reason or ""),
         stream_result=stream_result,
         inference_result=inference_result,
         submit_result=submit_result,
@@ -1112,13 +1122,21 @@ def _process_page(
             direct_candidate_count=0,
             submitted_count=0,
             fetch_latency_ms=fetch_latency_ms,
+            abort_reason="",
             batches=[],
         )
     batches = queue.add_frame(structural.direct_candidates)
     final_batch = queue.flush()
     if final_batch is not None:
         batches.append(final_batch)
-    batch_results = [_process_batch(runtime, batch) for batch in batches]
+    batch_results: List[SubmitWindowBatchResult] = []
+    abort_reason = ""
+    for batch in batches:
+        batch_result = _process_batch(runtime, batch)
+        batch_results.append(batch_result)
+        if batch_result.abort_reason:
+            abort_reason = batch_result.abort_reason
+            break
     return SubmitWindowPageResult(
         page_offset=page.page_offset,
         event_count=page.event_count,
@@ -1133,6 +1151,7 @@ def _process_page(
         direct_candidate_count=int(len(structural.direct_candidates)),
         submitted_count=sum(batch.submit_result.submitted_count for batch in batch_results),
         fetch_latency_ms=fetch_latency_ms,
+        abort_reason=abort_reason,
         batches=batch_results,
     )
 
@@ -1200,6 +1219,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
     selection_to_submit_latency_weight = 0
     spread_gate_reject_count = 0
     submit_status_counts: Dict[str, int] = {}
+    abort_reason = ""
 
     page_limit = max(int(cfg.online_gamma_event_page_size), 1)
     page_offset = 0
@@ -1262,6 +1282,8 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
                 )
                 selection_to_submit_latency_weight += batch.submit_result.submitted_count
             spread_gate_reject_count += batch.submit_result.spread_gate_reject_count
+        if page_result.abort_reason:
+            abort_reason = page_result.abort_reason
         deferred_started = perf_counter()
         deferred_writer.write_report(
             {
@@ -1280,6 +1302,8 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
             page.markets.get("market_id", pd.Series(dtype=str)).astype(str).tolist(),
             page_offset=page.page_offset,
         )
+        if abort_reason:
+            break
         if not page.has_more:
             break
         page_offset += page_limit
@@ -1369,10 +1393,19 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
             for key, value in sorted(submit_status_counts.items())
         },
     }
-    post_submit_started_at_bj = bj_now_iso()
-    monitor_summary, monitor_error = _run_post_submit_monitor(cfg)
-    post_submit_finished_at_bj = bj_now_iso() if cfg.submit_window_run_monitor_after else ""
+    post_submit_started_at_bj = ""
+    post_submit_finished_at_bj = ""
+    monitor_summary = _monitor_summary_defaults(enabled=False if abort_reason else cfg.submit_window_run_monitor_after)
+    monitor_error = None
     final_status = "completed"
+    if abort_reason == "REGION_RESTRICTED":
+        final_status = "aborted_region_restricted"
+        monitor_summary["post_submit_monitor_status"] = "skipped"
+        monitor_summary["post_submit_monitor_error"] = "submit_aborted_region_restricted"
+    else:
+        post_submit_started_at_bj = bj_now_iso()
+        monitor_summary, monitor_error = _run_post_submit_monitor(cfg)
+        post_submit_finished_at_bj = bj_now_iso() if cfg.submit_window_run_monitor_after else ""
     if str(monitor_summary["post_submit_monitor_status"]) == "failed":
         final_status = "completed_with_post_submit_failure"
     audit_result = build_candidate_audit(cfg, funnel_payload=funnel_payload)
@@ -1409,6 +1442,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         "underfilled_batch_count": int(underfilled_batch_count),
         "underfilled_batch_avg_size": float(underfilled_batch_avg_size),
         "final_status": final_status,
+        "abort_reason": abort_reason,
         "metrics": metrics_payload,
         **monitor_summary,
         "pages": [
@@ -1494,6 +1528,7 @@ def _run_submit_window_sync_impl(cfg: PegConfig, *, max_pages: int | None = None
         submit_phase_finished_at_bj="",
         post_submit_started_at_bj=post_submit_started_at_bj if cfg.submit_window_run_monitor_after else "",
         post_submit_finished_at_bj=post_submit_finished_at_bj,
+        abort_reason=abort_reason,
         pages=page_results,
     )
 
@@ -1597,17 +1632,23 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             submit_phase_finished_at_bj=submit_phase_started_at_bj,
             post_submit_started_at_bj="",
             post_submit_finished_at_bj="",
+            abort_reason="",
             pages=[],
         )
 
     run_cfg = cfg
-    want_async_post_submit = cfg.submit_window_run_monitor_after and cfg.submit_window_async_post_submit
-    if want_async_post_submit:
+    if cfg.submit_window_run_monitor_after and cfg.submit_window_async_post_submit:
         run_cfg = replace(cfg, submit_window_run_monitor_after=False)
 
     with acquire_submit_phase(cfg.submit_phase_lock_path, run_id=cfg.run_id, run_mode=cfg.run_mode):
         result = _run_submit_window_sync_impl(run_cfg, max_pages=max_pages)
     submit_phase_finished_at_bj = bj_now_iso()
+
+    want_async_post_submit = (
+        cfg.submit_window_run_monitor_after
+        and cfg.submit_window_async_post_submit
+        and result.final_status != "aborted_region_restricted"
+    )
 
     if want_async_post_submit and _spawn_async_post_submit(cfg):
         _rewrite_submit_window_manifest(
@@ -1644,6 +1685,7 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
             submit_phase_finished_at_bj=submit_phase_finished_at_bj,
             post_submit_started_at_bj=bj_now_iso(),
             post_submit_finished_at_bj="",
+            abort_reason=result.abort_reason,
             pages=result.pages,
         )
 
@@ -1681,5 +1723,6 @@ def run_submit_window(cfg: PegConfig, *, max_pages: int | None = None) -> Submit
         submit_phase_finished_at_bj=submit_phase_finished_at_bj,
         post_submit_started_at_bj=result.post_submit_started_at_bj,
         post_submit_finished_at_bj=result.post_submit_finished_at_bj,
+        abort_reason=result.abort_reason,
         pages=result.pages,
     )

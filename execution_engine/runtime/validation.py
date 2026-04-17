@@ -106,8 +106,9 @@ def check_basic_risk(
             if exposure + amount_usdc > cfg.max_exposure_per_category_usdc:
                 return False, "CATEGORY_EXPOSURE_LIMIT"
 
-    if state.net_exposure_usdc + amount_usdc > cfg.max_net_exposure_usdc:
-        return False, "NET_EXPOSURE_LIMIT"
+    if cfg.max_net_exposure_usdc > 0:
+        if state.net_exposure_usdc + amount_usdc > cfg.max_net_exposure_usdc:
+            return False, "NET_EXPOSURE_LIMIT"
 
     if balance_provider is not None:
         # Assuming duck typing for balance provider

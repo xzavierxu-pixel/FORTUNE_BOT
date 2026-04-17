@@ -9,6 +9,9 @@ import sys
 ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+RULE_ENGINE_DIR = ROOT_DIR / "polymarket_rule_engine"
+if str(RULE_ENGINE_DIR) not in sys.path:
+    sys.path.insert(0, str(RULE_ENGINE_DIR))
 
 from execution_engine.online.pipeline import submit_window
 from execution_engine.shared.logger import log_structured
@@ -98,6 +101,7 @@ class SubmitWindowRuntimeTest(unittest.TestCase):
                     submit_phase_finished_at_bj="",
                     post_submit_started_at_bj="",
                     post_submit_finished_at_bj="",
+                    abort_reason="",
                     pages=[],
                 )
 
@@ -116,6 +120,80 @@ class SubmitWindowRuntimeTest(unittest.TestCase):
             self.assertEqual(manifest["post_submit_monitor_status"], "scheduled")
             self.assertIn("submit_phase_started_at_bj", manifest)
             self.assertIn("submit_phase_finished_at_bj", manifest)
+
+    def test_run_submit_window_does_not_schedule_async_post_submit_after_region_abort(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            cfg = _base_cfg(root)
+
+            def fake_replace(ns: SimpleNamespace, **changes: object) -> SimpleNamespace:
+                data = dict(ns.__dict__)
+                data.update(changes)
+                return SimpleNamespace(**data)
+
+            def fake_sync_impl(run_cfg: SimpleNamespace, *, max_pages: int | None = None) -> submit_window.SubmitWindowResult:
+                manifest = {
+                    "run_id": run_cfg.run_id,
+                    "run_mode": run_cfg.run_mode,
+                    "final_status": "aborted_region_restricted",
+                    "abort_reason": "REGION_RESTRICTED",
+                    "post_submit_monitor_enabled": False,
+                    "post_submit_monitor_status": "skipped",
+                    "post_submit_monitor_manifest_path": "",
+                    "post_submit_latest_order_count": 0,
+                    "post_submit_open_order_count": 0,
+                    "post_submit_fill_count": 0,
+                    "post_submit_open_position_count": 0,
+                    "post_submit_exit_candidate_count": 0,
+                    "post_submit_exit_submitted_count": 0,
+                    "post_submit_settlement_close_count": 0,
+                    "post_submit_canceled_exit_order_count": 0,
+                    "metrics": {},
+                    "pages": [],
+                }
+                run_cfg.run_submit_window_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                run_cfg.run_submit_window_manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                return submit_window.SubmitWindowResult(
+                    run_manifest_path=str(run_cfg.run_submit_window_manifest_path),
+                    final_status="aborted_region_restricted",
+                    submit_phase_status="completed",
+                    page_count=1,
+                    expanded_market_count=2,
+                    direct_candidate_count=3,
+                    submitted_order_count=0,
+                    submit_rejection_count=1,
+                    underfilled_batch_count=0,
+                    underfilled_batch_avg_size=0.0,
+                    metrics={},
+                    post_submit_monitor_status="skipped",
+                    post_submit_monitor_manifest_path="",
+                    post_submit_latest_order_count=0,
+                    post_submit_open_order_count=0,
+                    post_submit_fill_count=0,
+                    post_submit_open_position_count=0,
+                    post_submit_exit_candidate_count=0,
+                    post_submit_exit_submitted_count=0,
+                    post_submit_settlement_close_count=0,
+                    post_submit_canceled_exit_order_count=0,
+                    submit_phase_started_at_bj="",
+                    submit_phase_finished_at_bj="",
+                    post_submit_started_at_bj="",
+                    post_submit_finished_at_bj="",
+                    abort_reason="REGION_RESTRICTED",
+                    pages=[],
+                )
+
+            with (
+                patch.object(submit_window, "replace", side_effect=fake_replace),
+                patch.object(submit_window, "_run_submit_window_sync_impl", side_effect=fake_sync_impl),
+                patch.object(submit_window, "_spawn_async_post_submit") as spawn_async,
+                patch.object(submit_window, "_publish_submit_window_summary", return_value=None),
+            ):
+                result = submit_window.run_submit_window(cfg, max_pages=1)
+
+            spawn_async.assert_not_called()
+            self.assertEqual(result.final_status, "aborted_region_restricted")
+            self.assertEqual(result.abort_reason, "REGION_RESTRICTED")
 
     def test_log_structured_adds_beijing_timestamp_fields(self) -> None:
         with TemporaryDirectory() as tmpdir:

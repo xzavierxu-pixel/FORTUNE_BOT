@@ -3,8 +3,16 @@ from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import sys
 
 import pandas as pd
+
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+RULE_ENGINE_DIR = ROOT_DIR / "polymarket_rule_engine"
+if str(RULE_ENGINE_DIR) not in sys.path:
+    sys.path.insert(0, str(RULE_ENGINE_DIR))
 
 from execution_engine.online.execution.live_quote import quote_from_clob
 from execution_engine.online.execution.pricing import build_submission_signal
@@ -149,6 +157,39 @@ class SubmitPricingGuardsTest(unittest.TestCase):
         self.assertIsNotNone(signal)
         assert signal is not None
         self.assertEqual(signal["price_limit"], 0.31)
+
+    def test_build_submission_signal_uses_one_tick_from_best_bid(self) -> None:
+        cfg = SimpleNamespace(
+            run_id="test-run",
+            online_limit_ticks_from_best_bid=1,
+            online_limit_ticks_below_best_bid=1,
+            online_price_cap_safety_buffer=0.01,
+            max_trade_amount_usdc=5.0,
+            order_ttl_sec=300,
+            rule_engine_min_price=0.2,
+            rule_engine_max_price=0.8,
+        )
+        row = {
+            "selected_token_id": "token-1",
+            "market_id": "market-1",
+            "stake_usdc": 2.0,
+            "q_pred": 0.95,
+            "price": 0.4,
+        }
+        quote = {
+            "best_bid": 0.29,
+            "best_ask": 0.51,
+            "tick_size": 0.01,
+            "min_order_size": 5.0,
+            "mid": 0.4,
+        }
+
+        signal, reason = build_submission_signal(row, quote, cfg, fee_rate=0.001)
+
+        self.assertEqual(reason, "OK")
+        self.assertIsNotNone(signal)
+        assert signal is not None
+        self.assertEqual(signal["price_limit"], 0.3)
 
     def test_build_submission_signal_allows_exact_half_point_spread(self) -> None:
         cfg = SimpleNamespace(

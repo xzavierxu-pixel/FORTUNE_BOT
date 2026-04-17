@@ -72,6 +72,7 @@ class SubmitSelectionResult:
     gamma_to_submit_latency_ms: float
     selection_to_submit_latency_ms: float
     status_counts: Dict[str, int]
+    abort_reason: str
 
 
 def _empty_result(cfg: PegConfig) -> SubmitSelectionResult:
@@ -98,6 +99,7 @@ def _empty_result(cfg: PegConfig) -> SubmitSelectionResult:
         gamma_to_submit_latency_ms=0.0,
         selection_to_submit_latency_ms=0.0,
         status_counts={"empty_selection": 1},
+        abort_reason="",
     )
 
 
@@ -116,6 +118,7 @@ def _empty_result_noop(cfg: PegConfig, *, status: str = "empty_selection") -> Su
         gamma_to_submit_latency_ms=0.0,
         selection_to_submit_latency_ms=0.0,
         status_counts={status: 1},
+        abort_reason="",
     )
 
 
@@ -194,7 +197,7 @@ def _capacity_reason(
             exposure = state.get_category_exposure(category)
             if exposure + amount_usdc > cfg.max_exposure_per_category_usdc:
                 return "CATEGORY_EXPOSURE_LIMIT"
-    if state.net_exposure_usdc + amount_usdc > cfg.max_net_exposure_usdc:
+    if cfg.max_net_exposure_usdc > 0 and state.net_exposure_usdc + amount_usdc > cfg.max_net_exposure_usdc:
         return "NET_EXPOSURE_LIMIT"
     available = balance_provider.get_available_usdc()
     if available is not None and amount_usdc > available:
@@ -255,6 +258,7 @@ def submit_selected_orders(
     gamma_to_submit_latencies_ms: List[float] = []
     selection_to_submit_latencies_ms: List[float] = []
     spread_gate_reject_count = 0
+    abort_reason = ""
 
     clob_client = build_clob_client(cfg)
     sweep_expired_orders(cfg, clob_client)
@@ -490,6 +494,8 @@ def submit_selected_orders(
                         "quote_source": quote.get("quote_source"),
                     },
                 )
+                if status == "REGION_RESTRICTED":
+                    abort_reason = status
                 break
             status = str(order.get("status") or "UNKNOWN").upper()
             record_order_submitted(cfg, state, decision, order)
@@ -519,6 +525,8 @@ def submit_selected_orders(
                 if order_record.get("selection_to_submit_latency_ms") is not None:
                     selection_to_submit_latencies_ms.append(float(order_record["selection_to_submit_latency_ms"]))
                 submitted_orders.append(order_record)
+            break
+        if abort_reason:
             break
 
     state_snapshot = refresh_state_snapshot(cfg)
@@ -570,6 +578,7 @@ def submit_selected_orders(
             "gamma_to_submit_latency_ms": float(gamma_to_submit_latency_ms),
             "selection_to_submit_latency_ms": float(selection_to_submit_latency_ms),
             "status_counts": status_counts,
+            "abort_reason": abort_reason,
             "orders_submitted_path": str(cfg.run_submit_orders_submitted_path),
             "market_state_cache_path": str(cfg.market_state_cache_path),
             "state_snapshot_path": str(cfg.state_snapshot_path),
@@ -593,4 +602,5 @@ def submit_selected_orders(
         gamma_to_submit_latency_ms=gamma_to_submit_latency_ms,
         selection_to_submit_latency_ms=selection_to_submit_latency_ms,
         status_counts=status_counts,
+        abort_reason=abort_reason,
     )
