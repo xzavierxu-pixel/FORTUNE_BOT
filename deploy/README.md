@@ -120,8 +120,8 @@ Update an existing checkout:
 
 ```bash
 cd /opt/fortune_bot
-git checkout version3
-git pull --ff-only origin version3
+git checkout version4
+git pull --ff-only origin version4
 ```
 
 ## Environment File
@@ -278,7 +278,7 @@ set -a
 source /etc/fortune-bot/fortune_bot.env
 set +a
 
-bash execution_engine/app/scripts/linux/run_submit_window.sh --run-id MANUAL_SUBMIT_001 --max-pages 10
+bash execution_engine/app/scripts/linux/run_submit_window.sh --run-id MANUAL_SUBMIT_001 --max-pages 20
 ```
 
 Run daily label analysis:

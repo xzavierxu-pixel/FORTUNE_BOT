@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+RULE_ENGINE_ROOT="$REPO_ROOT/polymarket_rule_engine"
 VENV_DIR="${FORTUNE_BOT_VENV:-$REPO_ROOT/.venv-execution}"
 VENV_PYTHON="$VENV_DIR/bin/python"
 STATUS_SCRIPT="$REPO_ROOT/deploy/monitor/job_status.py"
@@ -58,6 +59,7 @@ run_online_job() {
     if ! (
         cd "$REPO_ROOT"
         export PEG_RUN_ID="$run_id"
+        export PYTHONPATH="$RULE_ENGINE_ROOT:$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
         exec "$VENV_PYTHON" -m execution_engine.app.cli.online.main "$subcommand" "$@"
     ); then
         exit_code=$?
